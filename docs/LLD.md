@@ -63,95 +63,51 @@ export interface Placement {
 
 The following data flow chart illustrates how client actions and staff console updates propagate through the state lifecycle context reactively, mutating data states cleanly:
 
-<svg viewBox="0 0 800 500" width="100%" height="auto" xmlns="http://www.w3.org/2000/svg">
-  <style>
-    .node { fill: #1e293b; stroke: #38bdf8; stroke-width: 2; rx: 6px; }
-    .node-db { fill: #0f172a; stroke: #10b981; stroke-width: 2; rx: 6px; }
-    .node-engine { fill: #1e293b; stroke: #ec4899; stroke-width: 2; rx: 6px; }
-    .node-portal { fill: #1e293b; stroke: #f59e0b; stroke-width: 2; rx: 6px; }
-    .text { fill: #f8fafc; font-family: system-ui, -apple-system, sans-serif; font-size: 12px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
-    .label { fill: #64748b; font-family: system-ui, -apple-system, sans-serif; font-size: 11px; font-weight: bold; text-anchor: middle; }
-    .title { fill: #f8fafc; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; font-weight: bold; text-anchor: middle; dominant-baseline: middle; }
-    .edge { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#arrow-lld); }
-    .edge-flow { stroke: #10b981; stroke-width: 1.5; stroke-dasharray: 4; fill: none; marker-end: url(#arrow-lld-green); }
-  </style>
-  <defs>
-    <marker id="arrow-lld" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 2 L 10 5 L 0 8 z" fill="#64748b" />
-    </marker>
-    <marker id="arrow-lld-green" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M 0 2 L 10 5 L 0 8 z" fill="#10b981" />
-    </marker>
-  </defs>
-  
-  <!-- Connections -->
-  <!-- Client to Context -->
-  <path class="edge" d="M 200 77.5 C 200 110, 320 100, 320 132.5" />
-  <text class="label" x="220" y="105">1. Submit Bid</text>
-  
-  <!-- Staff to Context -->
-  <path class="edge" d="M 600 77.5 C 600 110, 480 100, 480 132.5" />
-  <text class="label" x="580" y="105">2. Scale / Commit</text>
-  
-  <!-- Context to Mutators -->
-  <path class="edge" d="M 350 167.5 C 300 185, 220 190, 220 222.5" />
-  <text class="label" x="240" y="195">mutatePlaceBid</text>
-  
-  <path class="edge" d="M 450 167.5 C 500 185, 580 190, 580 222.5" />
-  <text class="label" x="560" y="195">mutateUpdatePlacementStage</text>
-  
-  <!-- Mutators to DBState -->
-  <path class="edge" d="M 220 257.5 C 220 280, 300 280, 320 292.5" />
-  <path class="edge" d="M 580 257.5 C 580 280, 500 280, 480 292.5" />
+```mermaid
+flowchart TD
+    subgraph ClientPortal ["Client Portal (/portal/client)"]
+        Workspace["Bidding Workspace"]
+    end
 
-  <!-- DBState reactive update to Context -->
-  <path class="edge-flow" d="M 400 292.5 L 400 167.5" />
-  <text class="label" x="400" y="225" style="fill:#10b981;">3. Reactively Re-renders</text>
-  
-  <!-- Settlement engine to Schema tables -->
-  <path class="edge" d="M 580 257.5 C 580 340, 200 330, 200 392.5" />
-  <text class="label" x="250" y="355">Generate Positions</text>
+    subgraph StaffConsole ["Staff Console (/portal/staff)"]
+        Book["Placement Book Manager"]
+    end
 
-  <path class="edge" d="M 580 257.5 C 580 340, 400 330, 400 392.5" />
-  <text class="label" x="440" y="355">Attach Options</text>
+    subgraph Context ["State & Context Layer (DatabaseProvider)"]
+        DBState["Stateful DB State (React state)"]
+        MutateBid["mutatePlaceBid / mutateWithdrawBid"]
+        Settle["mutateUpdatePlacementStage (Settlement Engine)"]
+    end
 
-  <path class="edge" d="M 580 257.5 C 580 340, 600 330, 600 392.5" />
-  <text class="label" x="620" y="355">Append Logs</text>
+    subgraph Schema ["Data Schema (lib/db.ts)"]
+        Clients["Client Registry"]
+        Positions["Positions Table"]
+        Options["Options Holdings"]
+        Audits["Audit Logs"]
+    end
 
-  <!-- Nodes -->
-  <!-- Client Portal Box -->
-  <rect class="node-portal" x="110" y="42.5" width="180" height="35" />
-  <text class="title" x="200" y="60">Client Workspace</text>
-  
-  <!-- Staff Console Box -->
-  <rect class="node-portal" x="510" y="42.5" width="180" height="35" />
-  <text class="title" x="600" y="60">Staff Deal Manager</text>
-  
-  <!-- DatabaseProvider Context -->
-  <rect class="node" x="250" y="132.5" width="300" height="35" />
-  <text class="title" x="400" y="150">DatabaseProvider Context State</text>
-  
-  <!-- Mutation functions -->
-  <rect class="node-engine" x="120" y="222.5" width="200" height="35" />
-  <text class="text" x="220" y="240">Place &amp; Withdraw Bids</text>
+    %% Client Actions
+    Workspace -->|"1. Submit Bid (amount)"| MutateBid
+    MutateBid -->|"Update bids array"| DBState
 
-  <rect class="node-engine" x="480" y="222.5" width="200" height="35" />
-  <text class="text" x="580" y="240">Settlement Engine</text>
+    %% Staff Actions
+    Book -->|"2. Adjust scaling slider (scalePct)"| Context
+    Book -->|"3. Commit Allocations (scale & commit)"| MutateBid
+    Book -->|"4. Transition Stage to 'settled'"| Settle
 
-  <!-- Stateful DB State -->
-  <rect class="node-db" x="300" y="292.5" width="200" height="35" />
-  <text class="title" x="400" y="310">In-Memory DB State</text>
+    %% Database mutations
+    DBState --> MutateBid
+    DBState --> Settle
 
-  <!-- Schema tables -->
-  <rect class="node" x="110" y="392.5" width="180" height="35" />
-  <text class="text" x="200" y="410">db.positions Table</text>
+    %% Settlement updates
+    Settle -->|"5. Generate Equity Positions"| Positions
+    Settle -->|"6. Generate Option Sweeteners"| Options
+    Settle -->|"7. Append Logs"| Audits
 
-  <rect class="node" x="310" y="392.5" width="180" height="35" />
-  <text class="text" x="400" y="410">db.options Table</text>
-
-  <rect class="node" x="510" y="392.5" width="180" height="35" />
-  <text class="text" x="600" y="410">db.logs (Audits)</text>
-</svg>
+    %% State propagation
+    DBState -->|"8. Reactively push updates"| Workspace
+    DBState -->|"8. Reactively push updates"| Book
+```
 
 ---
 
