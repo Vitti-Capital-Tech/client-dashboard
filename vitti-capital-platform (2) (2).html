@@ -1,0 +1,1941 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vitti Capital — Portfolio & Placements Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --navy:#1d202f; --navy-2:#262a3d; --navy-3:#2f3447; --navy-line:#383d52;
+  --green:#36bb91; --green-d:#1f8e6b; --green-bg:#e4f5ee; --green-soft:#d5efe5;
+  --paper:#f7f6f3; --paper-2:#efece5; --card:#ffffff;
+  --ink:#1d202f; --mut:#6e7180; --mut-d:#9aa0b4; --line:#e7e4dc; --line-2:#dedacf;
+  --gain:#1f9d6b; --gain-bg:#e4f5ee; --loss:#d6573a; --loss-bg:#fae8e2; --loss-d:#b8442b;
+  --amber:#c98a2b; --amber-bg:#f7ecd6; --amber-d:#9a6a1c;
+  --disp:'Fraunces',Georgia,serif; --body:'Hanken Grotesk',system-ui,sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --shadow:0 1px 2px rgba(29,32,47,.04),0 8px 24px -16px rgba(29,32,47,.18);
+  --shadow-lg:0 30px 70px -32px rgba(29,32,47,.45);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation:none!important;transition:none!important}}
+body{font-family:var(--body);background:var(--paper);color:var(--ink);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select{font-family:inherit}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+a{color:inherit}
+:focus-visible{outline:2px solid var(--green-d);outline-offset:2px;border-radius:4px}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* ---------- brand mark ---------- */
+.mark{display:inline-flex;gap:2.5px;align-items:flex-end;height:1em}
+.mark i{display:block;width:3px;border-radius:2px;background:var(--green)}
+.mark i:nth-child(1){height:.5em}.mark i:nth-child(2){height:.72em}.mark i:nth-child(3){height:.95em}
+.logo{display:inline-flex;align-items:center;gap:9px;font-family:var(--disp);font-weight:600;font-size:20px;letter-spacing:.005em;text-decoration:none}
+.logo .mark{font-size:20px}
+.logo small{font-family:var(--body);font-size:10.5px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;opacity:.6}
+
+/* ---------- buttons ---------- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;font-weight:600;font-size:13.5px;border-radius:10px;padding:11px 18px;transition:transform .12s,box-shadow .12s,background .12s;white-space:nowrap}
+.btn:hover{transform:translateY(-1px)}.btn:active{transform:translateY(0)}
+.btn.green{background:var(--green);color:#08130e}
+.btn.green:hover{box-shadow:0 8px 20px -8px rgba(54,187,145,.6)}
+.btn.navy{background:var(--navy);color:#fff}
+.btn.ghost{border:1px solid var(--line-2);color:var(--ink);background:#fff}
+.btn.ghost-d{border:1px solid var(--navy-line);color:#fff;background:transparent}
+.btn.sm{padding:7px 13px;font-size:12.5px;border-radius:8px}
+.btn.block{width:100%}
+.btn[disabled]{opacity:.4;cursor:not-allowed;transform:none;box-shadow:none}
+.linkish{color:var(--green-d);font-weight:600;font-size:12.5px;text-decoration:underline;text-underline-offset:2px}
+
+/* ---------- pills ---------- */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap;letter-spacing:.01em}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.live{background:var(--green-bg);color:var(--green-d)}
+.pill.gain{background:var(--gain-bg);color:var(--gain)}
+.pill.loss{background:var(--loss-bg);color:var(--loss-d)}
+.pill.amber{background:var(--amber-bg);color:var(--amber-d)}
+.pill.itm{background:var(--green-bg);color:var(--green-d)}
+.pill.otm{background:var(--paper-2);color:var(--mut)}
+.pill.unl{background:#ece9f3;color:#5c5775}
+.pill.neutral{background:var(--paper-2);color:var(--mut)}
+.pill.dark{background:var(--navy-3);color:#cfd4e6}
+.up{color:var(--gain)}.dn{color:var(--loss)}
+
+/* ============================================================ LANDING */
+#screen-landing{min-height:100vh;background:var(--navy);color:#fff;position:relative;overflow:hidden}
+.land-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px);background-size:54px 54px;mask-image:radial-gradient(ellipse 80% 70% at 70% 0%,#000,transparent)}
+.land-top{position:relative;display:flex;align-items:center;justify-content:space-between;padding:26px 40px}
+.land-top .logo{color:#fff}
+.land-wrap{position:relative;max-width:1120px;margin:0 auto;padding:40px 40px 80px}
+.land-hero{padding:46px 0 54px;max-width:760px}
+.land-hero .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--green);margin-bottom:22px}
+.land-hero h1{font-family:var(--disp);font-weight:500;font-size:clamp(36px,5.2vw,60px);line-height:1.05;letter-spacing:-.015em}
+.land-hero h1 em{font-style:italic;color:var(--green)}
+.land-hero p{margin-top:22px;font-size:17px;color:#b9bdcd;max-width:36em}
+.enter-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:820px}
+.enter{display:block;text-align:left;background:var(--navy-2);border:1px solid var(--navy-line);border-radius:18px;padding:26px;transition:transform .15s,border-color .15s,box-shadow .15s;cursor:pointer;width:100%}
+.enter:hover{transform:translateY(-3px);border-color:var(--green);box-shadow:var(--shadow-lg)}
+.enter .role-ico{width:46px;height:46px;border-radius:12px;background:var(--navy-3);display:flex;align-items:center;justify-content:center;margin-bottom:16px}
+.enter .role-ico svg{width:23px;height:23px;stroke:var(--green);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.enter h3{font-family:var(--disp);font-weight:500;font-size:23px}
+.enter p{font-size:13.5px;color:#aab0c2;margin-top:6px;margin-bottom:16px}
+.enter .go{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--green)}
+.land-foot{position:relative;border-top:1px solid var(--navy-line);margin-top:18px;padding:22px 40px;font-size:11.5px;color:#7e8298;max-width:1120px;margin-left:auto;margin-right:auto;line-height:1.7}
+
+/* device toggle */
+.devtoggle{display:inline-flex;background:var(--navy-2);border:1px solid var(--navy-line);border-radius:10px;padding:3px}
+.devtoggle button{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:#9aa0b4;padding:7px 13px;border-radius:7px}
+.devtoggle button.on{background:var(--green);color:#08130e}
+.devtoggle svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.8}
+
+/* ============================================================ LOGIN */
+#screen-login{display:none;min-height:100vh;grid-template-columns:1.05fr .95fr}
+#screen-login.show{display:grid}
+.login-aside{background:var(--navy);color:#fff;padding:40px 52px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.login-aside .logo{color:#fff}
+.login-aside .quote{font-family:var(--disp);font-weight:500;font-size:clamp(24px,2.7vw,33px);line-height:1.25;max-width:13em}
+.login-aside .quote em{font-style:italic;color:var(--green)}
+.login-aside .who{font-size:12.5px;color:#9aa0b4;line-height:1.7}
+.login-main{display:flex;align-items:center;justify-content:center;padding:40px 26px}
+.login-card{width:100%;max-width:392px}
+.login-card .role-tag{margin-bottom:14px}
+.login-card h2{font-family:var(--disp);font-weight:500;font-size:29px;margin-bottom:5px}
+.login-card .sub{font-size:13.5px;color:var(--mut)}
+.field{margin-top:16px}
+.field label{display:block;font-size:12.5px;font-weight:600;margin-bottom:6px}
+.field input{width:100%;border:1px solid var(--line-2);background:#fff;border-radius:10px;padding:12px 14px;font-size:15px}
+.field input:focus{border-color:var(--green);outline:none}
+.otp{display:flex;gap:9px;justify-content:space-between}
+.otp input{width:100%;text-align:center;font-family:var(--mono);font-size:20px;padding:13px 0}
+.login-hint{margin-top:16px;font-size:12px;color:var(--mut);background:var(--paper-2);border-radius:9px;padding:11px 13px;line-height:1.6}
+.login-hint b{color:var(--ink)}
+.twofa-badge{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--green-d);background:var(--green-bg);padding:5px 11px;border-radius:999px}
+
+/* ============================================================ APP SHELL */
+#app{display:none}
+#app.show{display:block}
+.stage{min-height:100vh}
+.app-shell{display:flex;min-height:100vh;background:var(--paper)}
+.sidebar{width:236px;flex:none;background:var(--navy);color:#c2c7d8;display:flex;flex-direction:column;padding:20px 14px;position:sticky;top:0;height:100vh}
+.sidebar .logo{color:#fff;padding:4px 8px;margin-bottom:8px}
+.side-role{margin:6px 8px 16px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;color:var(--green)}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;text-align:left;font-weight:500;font-size:13.5px;color:#9aa0b4;padding:10px 11px;border-radius:9px;margin-bottom:2px}
+.nav-item:hover{color:#fff;background:rgba(255,255,255,.05)}
+.nav-item.on{background:var(--navy-3);color:#fff}
+.nav-item svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.nav-item .badge{margin-left:auto;background:var(--loss);color:#fff;font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;min-width:18px;text-align:center}
+.nav-item .badge.green{background:var(--green);color:#08130e}
+.side-foot{margin-top:auto;border-top:1px solid var(--navy-line);padding-top:14px}
+.side-acct{display:flex;align-items:center;gap:10px;padding:6px 8px}
+.side-acct .av{width:32px;height:32px;border-radius:50%;background:var(--green);color:#08130e;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.side-acct .nm{font-size:12.5px;font-weight:600;color:#fff;line-height:1.2}
+.side-acct .rl{font-size:10.5px;color:#9aa0b4}
+.side-foot button.out{display:flex;align-items:center;gap:8px;font-size:12px;color:#9aa0b4;padding:8px;width:100%;border-radius:8px;margin-top:4px}
+.side-foot button.out:hover{color:#fff;background:rgba(255,255,255,.05)}
+.side-foot button.out svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7}
+
+.main{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{display:flex;align-items:center;gap:16px;background:rgba(247,246,243,.85);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:0 24px;height:58px;position:sticky;top:0;z-index:30}
+.feedstat{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;font-weight:600;color:var(--green-d);background:var(--green-bg);padding:5px 11px;border-radius:999px}
+.feedstat .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(54,187,145,.18)}
+.topsearch{flex:none;width:230px;background:#fff;border:1px solid var(--line);border-radius:9px;font-size:12.5px;color:var(--mut);padding:8px 13px}
+.topspacer{flex:1}
+.iconbtn{position:relative;display:flex;padding:7px;border-radius:9px}
+.iconbtn:hover{background:#fff}
+.iconbtn svg{width:19px;height:19px;stroke:var(--ink);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.iconbtn .nd{position:absolute;top:4px;right:3px;min-width:15px;height:15px;padding:0 3px;border-radius:999px;background:var(--loss);color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--paper)}
+.av-top{width:31px;height:31px;border-radius:50%;background:var(--navy);color:#fff;font-weight:600;font-size:11px;display:flex;align-items:center;justify-content:center;flex:none}
+.content{padding:24px;flex:1}
+.bottomnav{display:none}
+
+/* ---------- page chrome ---------- */
+.phead{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;margin-bottom:20px;flex-wrap:wrap}
+.phead h1{font-family:var(--disp);font-weight:500;font-size:26px;letter-spacing:-.01em}
+.phead .sub{font-size:13px;color:var(--mut);margin-top:2px}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin-bottom:8px}
+
+/* ---------- cards & grids ---------- */
+.grid{display:grid;gap:16px}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.split{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:16px}
+.split-even{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.col{display:flex;flex-direction:column;gap:16px;min-width:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:17px;box-shadow:var(--shadow)}
+.card.flush{padding:0;overflow:hidden}
+.card.green{border-color:var(--green);background:linear-gradient(180deg,var(--green-bg),#fff 70%)}
+.card.navy{background:var(--navy);border-color:var(--navy);color:#fff}
+.card .ch{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.card .ch b{font-size:14px;font-weight:600}
+.card .ch .meta{font-size:11.5px;color:var(--mut)}
+.navy .ch .meta{color:var(--mut-d)}
+.stat .l{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600}
+.stat .v{font-family:var(--disp);font-weight:500;font-size:25px;margin-top:4px;letter-spacing:-.01em}
+.stat .d{font-size:12px;margin-top:3px;color:var(--mut)}
+.navy .stat .l{color:var(--mut-d)}
+.kpi-mini{font-family:var(--mono);font-size:13px}
+
+/* ---------- tables ---------- */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{text-align:left;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--mut);font-weight:600;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:11px 10px;border-bottom:1px solid #f0ede5;vertical-align:middle}
+.tbl tr:last-child td{border-bottom:none}
+.tbl .r{text-align:right}
+.tbl .c{text-align:center}
+.tbl tbody tr.clickable{cursor:pointer}
+.tbl tbody tr.clickable:hover td{background:#faf9f5}
+.tbl .sub2{font-size:10.5px;color:var(--mut);margin-top:1px}
+.code{font-family:var(--mono);font-weight:600}
+.tbl-wrap{overflow-x:auto}
+
+/* ---------- expiry urgency rail (SIGNATURE) ---------- */
+.rail{display:flex;flex-direction:column;gap:4px;min-width:118px}
+.rail .ticks{display:flex;align-items:center;gap:0;height:16px;position:relative}
+.rail .seg{flex:1;height:4px;background:var(--line-2);position:relative}
+.rail .seg:first-child{border-radius:3px 0 0 3px}.rail .seg:last-child{border-radius:0 3px 3px 0}
+.rail .seg.lit-amber{background:var(--amber)}
+.rail .seg.lit-red{background:var(--loss)}
+.rail .seg .tk{position:absolute;top:-3px;right:-1px;width:2px;height:10px;background:#fff;border-radius:1px}
+.rail .labs{display:flex;justify-content:space-between;font-family:var(--mono);font-size:8.5px;color:var(--mut)}
+.rail .dleft{font-family:var(--mono);font-size:11px;font-weight:600}
+.rail.danger .dleft{color:var(--loss)}
+.rail.warn .dleft{color:var(--amber-d)}
+
+/* moneyness bar */
+.mbar{display:inline-block;width:54px;height:6px;border-radius:3px;background:var(--paper-2);position:relative;vertical-align:middle}
+.mbar i{position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--mut)}
+.mbar b{position:absolute;top:0;bottom:0;border-radius:3px}
+
+/* sparkline area */
+.spark{width:100%;height:60px;display:block}
+.alloc-bar{display:flex;height:11px;border-radius:6px;overflow:hidden}
+.alloc-bar span{display:block}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--mut);margin-top:9px}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+/* timeline */
+.tl-row{display:flex;gap:12px}
+.tl-row .rail2{display:flex;flex-direction:column;align-items:center}
+.tl-row .node{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700}
+.node.done{background:var(--green)}.node.now{background:var(--amber)}.node.todo{background:#fff;border:2px solid var(--line-2)}
+.tl-row .bar{width:2px;flex:1;background:var(--line-2);min-height:12px}
+.tl-row .bar.done{background:var(--green)}
+.tl-row .body{padding-bottom:16px;flex:1}
+.tl-row .t{font-weight:600;font-size:13px}.tl-row .s{font-size:11.5px;color:var(--mut)}
+
+/* alert item */
+.alert-item{display:flex;gap:12px;padding:13px;border:1px solid var(--line);border-radius:12px;background:#fff;margin-bottom:10px;align-items:flex-start}
+.alert-item.unack{border-left:3px solid var(--amber)}
+.alert-item.sev-red{border-left:3px solid var(--loss)}
+.alert-item.sev-green{border-left:3px solid var(--green)}
+.alert-ico{width:34px;height:34px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center}
+.alert-ico svg{width:17px;height:17px;stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.alert-ico.amber{background:var(--amber-bg)}.alert-ico.amber svg{stroke:var(--amber-d)}
+.alert-ico.red{background:var(--loss-bg)}.alert-ico.red svg{stroke:var(--loss-d)}
+.alert-ico.green{background:var(--green-bg)}.alert-ico.green svg{stroke:var(--green-d)}
+.alert-body{flex:1;min-width:0}
+.alert-body .at{font-size:13px;font-weight:600}
+.alert-body .as{font-size:12px;color:var(--mut);margin-top:2px}
+.alert-body .meta{font-size:10.5px;color:var(--mut-d);margin-top:5px;font-family:var(--mono)}
+
+/* filters */
+.filters{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+.filters select,.filters input{border:1px solid var(--line-2);background:#fff;border-radius:9px;padding:8px 11px;font-size:12.5px;color:var(--ink)}
+.filters label{font-size:11px;font-weight:600;color:var(--mut);margin-right:-4px}
+.seg-ctl{display:inline-flex;background:var(--paper-2);border-radius:9px;padding:3px}
+.seg-ctl button{font-size:12px;font-weight:600;color:var(--mut);padding:7px 13px;border-radius:7px}
+.seg-ctl button.on{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
+
+/* forms inside cards */
+.frow{margin-top:12px}
+.frow label{display:block;font-size:12px;font-weight:600;margin-bottom:6px}
+.frow input,.frow select{width:100%;border:1px solid var(--line-2);border-radius:9px;padding:10px 12px;font-size:14px;background:#fff}
+.help{font-size:11.5px;color:var(--mut);margin-top:6px}
+
+/* ---------- overlay / modal / toast / drawer ---------- */
+.overlay{position:fixed;inset:0;background:rgba(29,32,47,.55);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:100;padding:18px}
+.overlay.on{display:flex}
+.modal{background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:var(--shadow-lg);max-height:90vh;overflow:auto}
+.modal h3{font-family:var(--disp);font-weight:500;font-size:22px;margin-bottom:3px}
+.modal .ms{font-size:13px;color:var(--mut);margin-bottom:6px}
+.sumrow{display:flex;justify-content:space-between;padding:9px 0;font-size:13px;border-bottom:1px solid var(--line)}
+.sumrow span:first-child{color:var(--mut)}
+.sumrow b{font-family:var(--mono)}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--navy);color:#fff;font-size:13px;font-weight:500;padding:12px 20px;border-radius:11px;box-shadow:var(--shadow-lg);opacity:0;pointer-events:none;transition:.28s;z-index:130;max-width:90vw;text-align:center;display:flex;gap:9px;align-items:center}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast .tc{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none}
+.drawer{position:fixed;top:0;right:-420px;width:392px;max-width:94vw;height:100vh;background:var(--paper);border-left:1px solid var(--line);z-index:110;transition:right .26s;overflow-y:auto;box-shadow:var(--shadow-lg)}
+.drawer.on{right:0}
+.drawer-h{display:flex;justify-content:space-between;align-items:center;padding:18px 18px 12px;position:sticky;top:0;background:var(--paper);border-bottom:1px solid var(--line)}
+.drawer-h h3{font-family:var(--disp);font-size:20px;font-weight:500}
+.drawer-body{padding:16px 18px}
+
+/* ============================================================ MOBILE MODE */
+.devframe{display:contents}
+body.is-mobile{background:var(--navy);background-image:radial-gradient(ellipse 70% 60% at 50% 0%,#2a2f44,var(--navy))}
+body.is-mobile #app.show{display:flex;align-items:flex-start;justify-content:center;padding:26px 14px;min-height:100vh}
+body.is-mobile .stage{min-height:auto;width:100%;max-width:402px}
+body.is-mobile .devframe{display:block;background:#0c0e17;border-radius:42px;padding:11px;box-shadow:0 50px 90px -30px rgba(0,0,0,.7);border:1px solid #2c3147}
+body.is-mobile .app-shell{display:block;min-height:760px;max-height:80vh;overflow-y:auto;background:var(--paper);border-radius:32px;position:relative;scrollbar-width:none}
+body.is-mobile .app-shell::-webkit-scrollbar{display:none}
+body.is-mobile .sidebar{display:none}
+body.is-mobile .main{min-height:760px}
+body.is-mobile .topbar{border-radius:32px 32px 0 0;padding:0 16px;height:56px;gap:11px}
+body.is-mobile .topsearch{display:none}
+body.is-mobile .feedstat span.fl{display:none}
+body.is-mobile .content{padding:16px 15px 88px}
+body.is-mobile .g4,body.is-mobile .g3,body.is-mobile .g2,body.is-mobile .split,body.is-mobile .split-even{grid-template-columns:1fr}
+body.is-mobile .phead h1{font-size:22px}
+body.is-mobile .bottomnav{display:flex;position:absolute;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);border-radius:0 0 32px 32px;padding:8px 6px 14px;z-index:20}
+body.is-mobile .bottomnav button{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:9.5px;font-weight:600;color:var(--mut);position:relative}
+body.is-mobile .bottomnav button.on{color:var(--green-d)}
+body.is-mobile .bottomnav svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+body.is-mobile .bottomnav .badge{position:absolute;top:-3px;right:50%;margin-right:-16px;background:var(--loss);color:#fff;font-size:8.5px;font-weight:700;border-radius:999px;padding:0 4px;min-width:14px;text-align:center}
+body.is-mobile .drawer{position:absolute;height:100%;border-radius:0 32px 32px 0}
+body.is-mobile .tbl{font-size:12px}
+body.is-mobile .hide-m{display:none!important}
+body.is-mobile .topbar .av-top{display:none}
+.show-m{display:none}
+body.is-mobile .show-m{display:block}
+
+/* ---------- invest / ideas ---------- */
+.chip2{border:1px solid var(--line-2);background:#fff;border-radius:999px;padding:7px 14px;font-size:12.5px;font-weight:600;color:var(--mut)}
+.chip2.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.chip2:hover{border-color:var(--green)}
+.conv{display:inline-flex;gap:3px;align-items:center}
+.conv .cd{width:6px;height:6px;border-radius:50%;background:var(--line-2)}
+.conv .cd.on{background:var(--green)}
+.idea.zone{border-color:var(--green)}
+.ibox{background:var(--paper-2);border-radius:10px;padding:11px 13px}
+.ibox-row{display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:var(--mut)}
+.ibox-row b{color:var(--ink)}
+.ez{margin:2px 0}
+.ez-lab{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--mut);margin-bottom:5px;font-weight:600}
+.ez-bar{position:relative;height:7px;background:var(--paper-2);border-radius:4px}
+.ez-zone{position:absolute;top:0;bottom:0;background:var(--green-soft);border-radius:4px}
+.ez-now{position:absolute;top:-3px;width:3px;height:13px;background:var(--navy);border-radius:2px;transform:translateX(-1px)}
+.goal-opt{display:flex;align-items:center;gap:13px;width:100%;text-align:left;border:1px solid var(--line-2);background:#fff;border-radius:12px;padding:14px;transition:.12s}
+.goal-opt:hover{border-color:var(--green);transform:translateY(-1px);box-shadow:var(--shadow)}
+.goal-ic{width:40px;height:40px;border-radius:11px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;flex:none}
+.goal-ic svg{width:20px;height:20px;stroke:var(--green-d);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.prog{height:9px;background:var(--paper-2);border-radius:6px;overflow:hidden}
+.prog-fill{height:100%;background:var(--green);border-radius:6px;transition:width .3s}
+.lesson{cursor:pointer;transition:.12s}
+.lesson:hover{transform:translateY(-2px);border-color:var(--green);box-shadow:var(--shadow)}
+
+/* ---------- insights: sector momentum ---------- */
+.mom{display:flex;align-items:center;gap:8px;min-width:120px}
+.mom-bar{flex:1;height:6px;background:var(--paper-2);border-radius:4px;overflow:hidden;min-width:50px}
+.mom-fill{height:100%;background:var(--green);border-radius:4px}
+.mom-fill.dn{background:var(--loss)}
+
+/* ---------- plan recommendations ---------- */
+.plan-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:11px}
+.plan-rec{border:1px solid var(--line-2);border-radius:12px;padding:13px}
+.plan-rec:hover{border-color:var(--green)}
+.tfchip{font-size:10.5px;font-weight:700;letter-spacing:.02em;padding:3px 8px;border-radius:6px;text-transform:uppercase}
+.tf-Tactical{background:#fdeede;color:#a9651a}
+.tf-Core{background:var(--green-bg);color:var(--green-d)}
+.tf-Strategic{background:#e9e7f2;color:#5c5775}
+
+/* ---------- targets checklist ---------- */
+.tgt{display:flex;align-items:center;gap:10px;padding:5px 0}
+.tgt-box{width:18px;height:18px;border-radius:6px;border:1.5px solid var(--line-2);flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:700}
+.tgt-box.on{background:var(--green);border-color:var(--green)}
+
+/* ---------- home suggestions ---------- */
+.sugg{display:flex;align-items:center;gap:12px;cursor:pointer;transition:.12s;padding:14px}
+.sugg:hover{transform:translateY(-2px);border-color:var(--green);box-shadow:var(--shadow)}
+.sugg-ic{width:38px;height:38px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center}
+.sugg-ic svg{width:19px;height:19px;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.sugg-ic.green{background:var(--green-bg)}.sugg-ic.green svg{stroke:var(--green-d)}
+.sugg-ic.amber{background:#fdeede}.sugg-ic.amber svg{stroke:#a9651a}
+.sugg-ic.red{background:#fbe7e1}.sugg-ic.red svg{stroke:var(--loss)}
+
+/* ---------- ticker ---------- */
+.tickwrap{overflow:hidden;white-space:nowrap;background:var(--navy);border-radius:11px;padding:10px 0;margin-bottom:16px;font-family:var(--mono);font-size:12.5px;color:#c2c7d8}
+.tickrun{display:inline-block;animation:tickmove 40s linear infinite;padding-left:24px}
+@keyframes tickmove{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.tick-up{color:#5cc79a}.tick-dn{color:#e0795b}
+@media (prefers-reduced-motion:reduce){.tickrun{animation:none;padding-left:16px}}
+
+/* ---------- markets index strip ---------- */
+.idx-strip{display:flex;overflow-x:auto;scrollbar-width:none}
+.idx-strip::-webkit-scrollbar{display:none}
+.idx{flex:1;min-width:104px;padding:13px 15px;border-right:1px solid var(--line)}
+.idx:last-child{border-right:none}
+.idx-n{font-family:var(--mono);font-size:11px;color:var(--mut);font-weight:600}
+.idx-v{font-size:16px;font-weight:600;margin-top:3px}
+.idx-c{font-size:11.5px;margin-top:1px}
+
+/* ---------- Ask Vitti (AI) ---------- */
+.nav-item.ai{color:#9fe9cf}
+.nav-item.ai:hover{background:rgba(54,187,145,.12)}
+.ai-dot{font-size:8.5px;font-weight:700;letter-spacing:.06em;background:var(--green);color:#08130e;border-radius:5px;padding:2px 5px;margin-left:7px;vertical-align:middle}
+.nav-item .ai-dot{margin-left:auto}
+.ai-teaser{background:linear-gradient(180deg,var(--green-bg),#fff 80%);border-color:var(--green)}
+.ai-wrap{max-width:760px}
+.ai-thread{display:flex;flex-direction:column;gap:14px;max-height:52vh;overflow-y:auto;padding:6px 2px 4px}
+.ai-row{display:flex;gap:10px;align-items:flex-start}
+.ai-row.user{justify-content:flex-end}
+.ai-av{width:30px;height:30px;border-radius:9px;background:var(--navy);color:var(--green);font-family:var(--disp);font-weight:600;font-size:15px;display:flex;align-items:center;justify-content:center;flex:none}
+.ai-msg{background:#fff;border:1px solid var(--line);border-radius:13px;padding:12px 15px;font-size:14px;line-height:1.55;max-width:75%;box-shadow:var(--shadow)}
+.ai-msg.brief{background:var(--navy);color:#fff;border-color:var(--navy)}
+.ai-msg.user{background:var(--green);color:#08130e;border-color:var(--green);font-weight:500}
+.ai-suggest{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.ai-chip{border:1px solid var(--line-2);background:#fff;border-radius:999px;padding:8px 14px;font-size:12.5px;font-weight:500;color:var(--ink);transition:.12s}
+.ai-chip:hover{border-color:var(--green);color:var(--green-d);transform:translateY(-1px)}
+.ai-input{display:flex;gap:9px;margin-top:14px}
+.ai-input input{flex:1;border:1px solid var(--line-2);border-radius:11px;padding:12px 15px;font-size:14px;background:#fff}
+.ai-input input:focus{border-color:var(--green);outline:none}
+
+/* ---------- more sheet ---------- */
+.sheet-item{display:flex;align-items:center;gap:12px;width:100%;text-align:left;padding:13px 12px;border-radius:10px;font-size:14px;font-weight:500}
+.sheet-item:hover{background:var(--paper-2)}
+.sheet-item svg{width:19px;height:19px;stroke:var(--ink);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.bottomnav button.ai{color:var(--green-d)}
+
+/* ---------- donut legend ---------- */
+.dl{display:flex;flex-direction:column;gap:8px}
+.dl-row{display:flex;align-items:center;gap:9px;font-size:12.5px}
+.dl-row i{width:10px;height:10px;border-radius:3px;flex:none}
+.dl-row b{margin-left:auto;font-family:var(--mono);font-weight:600}
+.seg-ctl.right{margin-left:auto}
+
+
+.devfab{position:fixed;bottom:20px;left:20px;z-index:90;display:inline-flex;background:var(--navy);border:1px solid var(--navy-line);border-radius:11px;padding:4px;box-shadow:var(--shadow-lg)}
+.devfab button{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#9aa0b4;padding:7px 12px;border-radius:8px}
+.devfab button.on{background:var(--green);color:#08130e}
+.devfab svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.9}
+body.is-mobile .devfab{bottom:24px;left:50%;transform:translateX(-50%)}
+
+@media (max-width:1080px){
+  .g4{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr}
+  .split,.split-even{grid-template-columns:1fr}
+  .sidebar{width:68px;padding:20px 9px}
+  .sidebar .logo small,.side-role,.nav-item span.lbl,.side-acct .meta-acct,.side-foot button.out span{display:none}
+  .nav-item .badge{position:absolute;top:5px;right:5px}
+  .nav-item{position:relative;justify-content:center}
+  .topsearch{display:none}
+}
+@media (max-width:560px){
+  .g4,.g3,.g2{grid-template-columns:1fr}
+  .land-top,.land-wrap,.land-foot{padding-left:20px;padding-right:20px}
+  .enter-grid{grid-template-columns:1fr}
+  #screen-login{grid-template-columns:1fr}.login-aside{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ===================== LANDING ===================== -->
+<div id="screen-landing">
+  <div class="land-grid"></div>
+  <div class="land-top">
+    <a class="logo" href="javascript:void(0)"><span class="mark"><i></i><i></i><i></i></span> Vitti<small>Capital</small></a>
+    <div class="devtoggle" id="land-dev">
+      <button class="on" data-dev="web" onclick="setDevice('web')"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Web</button>
+      <button data-dev="mobile" onclick="setDevice('mobile')"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Mobile</button>
+    </div>
+  </div>
+  <div class="land-wrap">
+    <div class="land-hero">
+      <p class="eyebrow">Client portal &amp; placement desk</p>
+      <h1>Your capital,<br><em>in perfect order.</em></h1>
+      <p>One platform for portfolios, placements, and the options whose exercise windows you cannot afford to miss — for Vitti Capital's wholesale clients and the team who looks after them.</p>
+    </div>
+    <div class="enter-grid">
+      <button class="enter" onclick="startLogin('client')">
+        <div class="role-ico"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6"/></svg></div>
+        <h3>Client sign in</h3>
+        <p>See your portfolio, options, placements and alerts — your data only.</p>
+        <span class="go">Continue as client →</span>
+      </button>
+      <button class="enter" onclick="startLogin('admin')">
+        <div class="role-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6"/><path d="M19 4.5l1.4 1.4M4.6 4.5 3.2 5.9"/></svg></div>
+        <h3>Vitti staff sign in</h3>
+        <p>Consolidated book across all clients, bidding on their behalf, allocations, alerts and audit.</p>
+        <span class="go">Continue as staff →</span>
+      </button>
+    </div>
+  </div>
+  <div class="land-foot">
+    Vitti Capital Pty Ltd (ABN 13 670 030 145) is a Corporate Authorised Representative (001306367) of Point Capital Group Pty Ltd (ABN 41 625 931 900), holder of AFSL 518031. For wholesale clients (s761G / s761GA, Corporations Act 2001). Figures shown are illustrative prototype data. © Vitti Capital 2026.
+  </div>
+</div>
+
+<!-- ===================== LOGIN ===================== -->
+<div id="screen-login">
+  <div class="login-aside">
+    <a class="logo" href="javascript:goLanding()"><span class="mark"><i></i><i></i><i></i></span> Vitti<small>Capital</small></a>
+    <div class="quote">"Finance should <em>empower,</em> not intimidate."</div>
+    <div class="who">Level 49, 8 Parramatta Square, NSW 2150<br>Wholesale clients only · AFSL 518031</div>
+  </div>
+  <div class="login-main">
+    <div class="login-card">
+      <!-- step 1: credentials -->
+      <div id="login-step-1">
+        <div class="role-tag"><span class="pill live" id="login-role-pill">Client portal</span></div>
+        <h2 id="login-title">Welcome back</h2>
+        <p class="sub">Sign in to your Vitti Capital account.</p>
+        <div class="field"><label>Email</label><input id="li-email" type="email" placeholder="you@example.com" autocomplete="off"></div>
+        <div class="field"><label>Password</label><input id="li-pass" type="password" placeholder="••••••••••" onkeydown="if(event.key==='Enter')toTwoFA()"></div>
+        <button class="btn navy block" style="margin-top:18px" onclick="toTwoFA()">Continue</button>
+        <button class="linkish" style="margin-top:14px;display:block" onclick="toast('A reset link would be emailed to you.')">Forgot password?</button>
+        <div class="login-hint" id="login-hint"></div>
+      </div>
+      <!-- step 2: 2FA -->
+      <div id="login-step-2" style="display:none">
+        <span class="twofa-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg> Two-factor authentication</span>
+        <h2 style="margin-top:14px">Enter your code</h2>
+        <p class="sub">We sent a 6-digit code to your registered device. Enter any digits to continue.</p>
+        <div class="otp" style="margin-top:18px">
+          <input maxlength="1" inputmode="numeric" id="o1" oninput="otpHop(this,'o2')">
+          <input maxlength="1" inputmode="numeric" id="o2" oninput="otpHop(this,'o3')">
+          <input maxlength="1" inputmode="numeric" id="o3" oninput="otpHop(this,'o4')">
+          <input maxlength="1" inputmode="numeric" id="o4" oninput="otpHop(this,'o5')">
+          <input maxlength="1" inputmode="numeric" id="o5" oninput="otpHop(this,'o6')">
+          <input maxlength="1" inputmode="numeric" id="o6" onkeydown="if(event.key==='Enter')finishLogin()">
+        </div>
+        <button class="btn green block" style="margin-top:20px" onclick="finishLogin()">Verify &amp; sign in</button>
+        <button class="linkish" style="margin-top:14px;display:block" onclick="backToCreds()">← Back</button>
+        <div class="login-hint">Every sign-in is recorded in the audit log with time, user and device.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== APP ===================== -->
+<div id="app">
+  <div class="stage">
+    <div class="devframe">
+      <div class="app-shell">
+        <aside class="sidebar">
+          <a class="logo" href="javascript:void(0)"><span class="mark"><i></i><i></i><i></i></span> Vitti<small>Capital</small></a>
+          <div class="side-role" id="side-role">Client portal</div>
+          <nav id="side-nav"></nav>
+          <div class="side-foot">
+            <div class="side-acct"><div class="av" id="side-av">JH</div><div class="meta-acct"><div class="nm" id="side-nm">James Halloran</div><div class="rl" id="side-rl">Wholesale client</div></div></div>
+            <button class="out" onclick="goLanding()"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg><span>Sign out</span></button>
+          </div>
+        </aside>
+        <div class="main">
+          <header class="topbar">
+            <div class="feedstat" id="feedstat" title="Broker front-office feed"><span class="dot"></span><span class="fl">Broker feed · live</span></div>
+            <input class="topsearch" placeholder="Search securities, clients, deals…" onkeydown="if(event.key==='Enter'){toast('Search is illustrative here.');this.value=''}">
+            <div class="topspacer"></div>
+            <button class="iconbtn" aria-label="Alerts" onclick="openAlertsDrawer()"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="nd" id="top-nd" style="display:none">0</span></button>
+            <div class="av-top" id="top-av">JH</div>
+          </header>
+          <div class="content" id="page-root"></div>
+          <nav class="bottomnav" id="bottom-nav"></nav>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- device fab (web mode) -->
+<div class="devfab" id="devfab" style="display:none">
+  <button class="on" data-dev="web" onclick="setDevice('web')"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Web</button>
+  <button data-dev="mobile" onclick="setDevice('mobile')"><svg viewBox="0 0 24 24"><rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18.5h2"/></svg>Mobile</button>
+</div>
+
+<!-- overlay / toast / drawer -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()"><div class="modal" id="modal"></div></div>
+<div class="toast" id="toast"><span class="tc"></span><span id="toast-msg"></span></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-h"><h3>Alerts</h3><button class="iconbtn" onclick="closeAlertsDrawer()"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
+<script>
+/* =====================================================================
+   VITTI PLATFORM — prototype engine
+   "Today" in this prototype world = Fri 12 Jun 2026.
+   ===================================================================== */
+var TODAY = new Date(2026,5,12);
+function addDays(n){var d=new Date(TODAY);d.setDate(d.getDate()+n);return d;}
+function fmtDate(d){return d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'2-digit'});}
+function money(n){var s=Math.abs(Math.round(n)).toLocaleString('en-AU');return (n<0?'-$':'$')+s;}
+function money2(n){return '$'+Math.abs(n).toLocaleString('en-AU',{minimumFractionDigits:2,maximumFractionDigits:2});}
+function num(n){return Math.round(n).toLocaleString('en-AU');}
+function pct(n){return (n>=0?'+':'')+n.toFixed(1)+'%';}
+function signClass(n){return n>=0?'up':'dn';}
+
+/* ---------------- DATA ---------------- */
+var DB = {
+  clients:{
+    C1:{name:'James Halloran',av:'JH',type:'Individual · wholesale',s708:'Mar 2027'},
+    C2:{name:'Margaret Chen',av:'MC',type:'Individual · wholesale',s708:'Aug 2026'},
+    C3:{name:'Endeavour Family Office',av:'EF',type:'Family office',s708:'Jan 2028'},
+    C4:{name:'David Okafor',av:'DO',type:'SMSF · wholesale',s708:'Nov 2026'}
+  },
+  /* listed equity positions */
+  positions:[
+    {c:'C1',code:'BHP',name:'BHP Group',qty:2100,cost:38.40,last:44.18,sector:'Materials'},
+    {c:'C1',code:'CSL',name:'CSL Limited',qty:240,cost:285.00,last:299.30,sector:'Health care'},
+    {c:'C1',code:'PLS',name:'Pilbara Minerals',qty:21400,cost:3.10,last:3.84,sector:'Materials'},
+    {c:'C1',code:'WES',name:'Wesfarmers',qty:1050,cost:64.20,last:78.92,sector:'Consumer'},
+    {c:'C2',code:'CBA',name:'Commonwealth Bank',qty:600,cost:104.10,last:132.40,sector:'Financials'},
+    {c:'C2',code:'BHP',name:'BHP Group',qty:1400,cost:41.10,last:44.18,sector:'Materials'},
+    {c:'C2',code:'WDS',name:'Woodside Energy',qty:2200,cost:29.60,last:26.40,sector:'Energy'},
+    {c:'C3',code:'BHP',name:'BHP Group',qty:8200,cost:36.90,last:44.18,sector:'Materials'},
+    {c:'C3',code:'CSL',name:'CSL Limited',qty:1100,cost:270.40,last:299.30,sector:'Health care'},
+    {c:'C3',code:'MQG',name:'Macquarie Group',qty:900,cost:178.20,last:214.50,sector:'Financials'},
+    {c:'C3',code:'PLS',name:'Pilbara Minerals',qty:60000,cost:3.55,last:3.84,sector:'Materials'},
+    {c:'C4',code:'FMG',name:'Fortescue',qty:3400,cost:24.80,last:22.41,sector:'Materials'},
+    {c:'C4',code:'CBA',name:'Commonwealth Bank',qty:300,cost:98.00,last:132.40,sector:'Financials'}
+  ],
+  /* options — listed (feed) + unlisted (manual). dte = days to expiry from TODAY */
+  options:[
+    {id:'O1',c:'C1',code:'VEXO',name:'Vertex Gold options',listed:true,type:'Call',qty:15000,strike:0.45,under:0.52,dte:202,source:'SPP Apr 26',status:'open'},
+    {id:'O2',c:'C1',code:'MRDO',name:'Meridian Resources options',listed:false,type:'Call',qty:0,strike:0.75,under:0.59,dte:735,source:'Placement attaching',status:'pending'},
+    {id:'O3',c:'C1',code:'HLXO',name:'Helios Energy options',listed:false,type:'Call',qty:30000,strike:2.50,under:2.00,dte:657,source:'Series B sweetener',status:'open'},
+    {id:'O4',c:'C2',code:'NVXO',name:'Novonix options',listed:true,type:'Call',qty:40000,strike:0.80,under:0.91,dte:5,source:'Rights issue',status:'open'},
+    {id:'O5',c:'C2',code:'ZPCO',name:'Zip Co options',listed:true,type:'Call',qty:12000,strike:1.40,under:1.28,dte:27,source:'Listed market',status:'open'},
+    {id:'O6',c:'C3',code:'AURO',name:'Aurora Biotech options',listed:false,type:'Call',qty:50000,strike:1.00,under:1.20,dte:3,source:'Pre-IPO note',status:'open'},
+    {id:'O7',c:'C3',code:'LTRO',name:'Liontown options',listed:true,type:'Call',qty:25000,strike:1.20,under:1.06,dte:88,source:'Listed market',status:'open'},
+    {id:'O8',c:'C4',code:'CXOO',name:'Core Lithium options',listed:false,type:'Call',qty:80000,strike:0.15,under:0.18,dte:1,source:'Placement attaching',status:'open'},
+    {id:'O9',c:'C4',code:'BRNO',name:'Brainchip options',listed:true,type:'Call',qty:30000,strike:0.30,under:0.24,dte:14,source:'Listed market',status:'open'},
+    {id:'O10',c:'C1',code:'TLXO',name:'Telix options (expired)',listed:true,type:'Call',qty:10000,strike:18.00,under:14.20,dte:-9,source:'Listed market',status:'expired'}
+  ],
+  /* placements with per-client bids; alloc null until posted by admin */
+  placements:[
+    {id:'P1',code:'MRD',name:'Meridian Resources',type:'Placement',price:0.50,last:0.59,disc:15.3,raise:12.0,min:10000,opts:'1 free option (1:2)',
+      stage:'open', closeDate:addDays(0), allocDate:addDays(3), settleDate:addDays(6), allotDate:addDays(7),
+      bids:[{c:'C2',amount:60000,alloc:null},{c:'C3',amount:150000,alloc:null}]},
+    {id:'P2',code:'TTM',name:'Tectonic Metals',type:'Placement',price:0.50,last:0.51,disc:12.0,raise:8.0,min:10000,opts:'None',
+      stage:'closed', closeDate:addDays(-1), allocDate:addDays(0), settleDate:addDays(4), allotDate:addDays(5),
+      bids:[{c:'C1',amount:40000,alloc:null},{c:'C2',amount:25000,alloc:null},{c:'C3',amount:80000,alloc:null},{c:'C4',amount:30000,alloc:null}]},
+    {id:'P3',code:'AUR',name:'Aurora Biotech',type:'Pre-IPO',price:1.20,last:null,disc:null,raise:25.0,min:25000,opts:'1 free option (1:1)',
+      stage:'upcoming', closeDate:addDays(5), allocDate:addDays(8), settleDate:addDays(11), allotDate:addDays(12),
+      bids:[]},
+    {id:'P4',code:'VEX',name:'Vertex Gold',type:'SPP',price:0.42,last:0.51,disc:17.6,raise:3.0,min:5000,opts:'1 free option (1:3)',
+      stage:'settled', closeDate:addDays(-40), allocDate:addDays(-38), settleDate:addDays(-35), allotDate:addDays(-34),
+      bids:[{c:'C1',amount:15000,alloc:15000},{c:'C3',amount:20000,alloc:20000}]}
+  ],
+  /* market snapshot (ASX) */
+  indices:[
+    {code:'XJO',name:'S&P/ASX 200',last:8412.3,chg:0.61},
+    {code:'XKO',name:'ASX 300',last:8327.1,chg:0.58},
+    {code:'XSO',name:'Small Ords',last:3261.8,chg:0.92},
+    {code:'AUDUSD',name:'AUD / USD',last:0.6712,chg:-0.12,dp:4},
+    {code:'XAU',name:'Gold (USD/oz)',last:2418.0,chg:0.40,dp:0},
+    {code:'BRENT',name:'Brent crude',last:81.22,chg:-1.10}
+  ],
+  /* daily research note + recommendations + reports */
+  note:{title:'RBA holds at 3.85%; miners firm on China stimulus',time:'7:42am',
+    body:'Futures point the XJO up 0.4% at the open after the RBA left rates on hold and Chinese stimulus lifted iron ore. Lithium names are in focus ahead of the MRD book close at 4:00pm. We stay constructive on quality materials and selectively on pre-IPO resources exposure.'},
+  recos:[
+    {code:'MRD',name:'Meridian Resources',rating:'Spec buy',tp:0.78,move:'+3.5%',sect:'Materials'},
+    {code:'BHP',name:'BHP Group',rating:'Buy',tp:49.50,move:'+0.8%',sect:'Materials'},
+    {code:'CSL',name:'CSL Limited',rating:'Hold',tp:305.00,move:'-0.4%',sect:'Health care'},
+    {code:'AUR',name:'Aurora Biotech',rating:'Spec buy',tp:null,move:'pre-IPO',sect:'Health care'},
+    {code:'MQG',name:'Macquarie Group',rating:'Buy',tp:228.00,move:'+1.1%',sect:'Financials'}
+  ],
+  reports:[
+    {title:'Lithium — supply deficit widens into 2027',kind:'Sector note',date:addDays(-1),pp:12},
+    {title:'MRD initiation — drilling the Pilbara’s quiet corner',kind:'Company note',date:addDays(-3),pp:18},
+    {title:'Mid-year strategy — positioning for a lower-rate world',kind:'Strategy',date:addDays(-6),pp:24}
+  ],
+  /* ---- per-holding intelligence (the "look at every position" engine) ---- */
+  signals:{
+    BHP:{action:'Add',headline:'Iron ore firm on China stimulus; copper optionality building',detail:'Trading inside our entry band with near-term support from Chinese stimulus and a structural copper bid from electrification. We’d add on any weakness toward $42.',target:49.50},
+    CSL:{action:'Add',headline:'Plasma margins recovering into an undemanding valuation',detail:'Collection costs are normalising and immunoglobulin demand is durable. The de-rating has gone too far for the quality; we see re-rating room toward $330.',target:330.00},
+    PLS:{action:'Hold',headline:'Lithium leverage — wait for confirmation above $3.90',detail:'Low-cost spodumene leaves PLS well placed for the next up-cycle, but the price is volatile. Hold existing exposure; add only on a confirmed break of the entry ceiling.',target:4.80},
+    WES:{action:'Hold',headline:'Quality compounder — let it run toward target',detail:'Bunnings keeps taking share and capital allocation is disciplined. Core income holding; no action needed below $88.',target:88.00},
+    WDS:{action:'Trim',headline:'Energy soft — rotate into higher-conviction names',detail:'Oil is under pressure on demand worries and a gas glut. We’d lighten energy here and redeploy toward materials or financials.',target:null},
+    CBA:{action:'Take profit',headline:'Above our fair value — consider trimming',detail:'CBA trades richly versus the sector on most metrics. Banking the gain and rotating to MQG offers better risk/reward.',target:null},
+    MQG:{action:'Add',headline:'Fee momentum rebuilding; sits below our target',detail:'Annuity-style asset management plus a recovery in deal activity and green infrastructure should rebuild performance fees. Attractive below $218.',target:228.00},
+    FMG:{action:'Watch',headline:'Pure iron-ore leverage — wait for entry near $21',detail:'High-beta to the iron ore price with a generous but cyclical yield. We’d wait for a better entry rather than chase here.',target:null}
+  },
+  /* ---- hot sectors ---- */
+  sectors:[
+    {name:'Resources & materials',mom:4.2,drivers:'China stimulus + structural lithium and copper deficits',benef:['BHP','PLS','FMG']},
+    {name:'Technology & AI',mom:3.4,drivers:'AI data-centre capex cycle lifting compute and power demand',benef:[]},
+    {name:'Financials',mom:1.1,drivers:'Rate plateau, buybacks and rebuilding deal flow',benef:['CBA','MQG']},
+    {name:'Health care',mom:0.6,drivers:'Defensive bid and plasma-margin recovery',benef:['CSL']},
+    {name:'Energy',mom:-1.8,drivers:'Soft oil demand and ample gas supply',benef:['WDS']}
+  ],
+  /* ---- global news with impact + how to use ---- */
+  news:[
+    {time:'6:40am',src:'Beijing',head:'China unveils fresh stimulus targeting property and infrastructure',impact:'Materials ↑',dir:'up',use:'Direct tailwind for iron ore and base metals — supports BHP and PLS. Consider adding materials on dips rather than chasing strength.'},
+    {time:'5:10am',src:'Washington',head:'US CPI comes in cooler than expected; rate-cut odds rise',impact:'Rates ↓ · Growth ↑',dir:'up',use:'A lower-for-longer path supports growth equities and gold. Constructive for MQG and resources; a reason to deploy idle cash steadily.'},
+    {time:'Yesterday',src:'Global',head:'Brent slides below $82 on demand concerns',impact:'Energy ↓',dir:'dn',use:'Headwind for energy names — we’d trim WDS and rotate the proceeds into higher-conviction materials or financials.'},
+    {time:'Yesterday',src:'US',head:'Hyperscalers lift AI data-centre capex guidance again',impact:'Tech / Copper ↑',dir:'up',use:'Reinforces the copper demand story (BHP) and a structural AI theme that most Australian portfolios under-own — worth a strategic position.'}
+  ],
+  /* ---- curated investment IDEAS (the discovery engine) ---- */
+  themes:['Blue chips','Resources','Pre-IPO & deals','Income'],
+  goals:[
+    {k:'grow',label:'Grow my money',icon:'M4 19V5M4 19h16M8 15l3-4 3 2 4-6',themes:['Resources','Blue chips'],blurb:'Growth-focused ideas with more upside (and more movement).'},
+    {k:'income',label:'Earn income',icon:'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',themes:['Income'],blurb:'Established companies that pay regular dividends.'},
+    {k:'early',label:'Get in early',icon:'M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z',themes:['Pre-IPO & deals'],blurb:'Placements and pre-IPO deals — Vitti’s edge, higher risk.'},
+    {k:'steady',label:'Keep it steady',icon:'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',themes:['Blue chips','Income'],blurb:'Larger, lower-volatility names to build a base.'}
+  ],
+  ideas:[
+    {code:'BHP',name:'BHP Group',theme:'Blue chips',risk:'Low',horizon:'12 months',conv:3,last:44.18,entryLo:42.00,entryHi:45.50,target:49.50,
+     hook:'The world’s biggest miner, at a fair price',
+     thesis:'BHP pairs low-cost iron ore with growing copper exposure as electrification demand builds. A strong balance sheet funds a reliable dividend while the company invests through the cycle. Recent China stimulus supports near-term prices. We see a steady re-rate toward our target with limited downside for a portfolio anchor.'},
+    {code:'WES',name:'Wesfarmers',theme:'Income',risk:'Low',horizon:'12–18 months',conv:3,last:78.92,entryLo:70.00,entryHi:80.00,target:88.00,
+     hook:'Bunnings-led quality compounder with a steady yield',
+     thesis:'Wesfarmers owns category-leading retail (Bunnings, Kmart) that keeps taking share, plus optionality in lithium and healthcare. Defensive earnings and disciplined capital allocation support a dependable, growing dividend. We like it as a core income holding that still offers capital growth over time.'},
+    {code:'MQG',name:'Macquarie Group',theme:'Income',risk:'Medium',horizon:'12 months',conv:2,last:214.50,entryLo:205.00,entryHi:218.00,target:228.00,
+     hook:'Global franchise with rising asset-management fees',
+     thesis:'Macquarie blends annuity-style asset management with leverage to a recovery in deal activity and green infrastructure. The dividend is solid and partially franked. As markets normalise, performance fees and advisory income should rebuild, supporting both the payout and the share price.'},
+    {code:'PLS',name:'Pilbara Minerals',theme:'Resources',risk:'High',horizon:'18–24 months',conv:2,last:3.84,entryLo:3.50,entryHi:3.90,target:4.80,
+     hook:'Lowest-cost lithium leverage to the next up-cycle',
+     thesis:'Pilbara is a low-cost, tier-one spodumene producer expanding capacity into a structural lithium deficit forming from 2027. The price is volatile and tied to the lithium cycle, so size it as a satellite. For investors who want direct exposure to the energy-transition theme, this is our preferred name.'},
+    {code:'MRD',name:'Meridian Resources',theme:'Pre-IPO & deals',risk:'High',horizon:'2–3 years',conv:2,last:0.59,entryLo:0.50,entryHi:0.60,target:0.78,deal:'P1',
+     hook:'Live placement — buy in at a 15% discount today',
+     thesis:'Meridian is drilling a promising, under-explored corner of the Pilbara. A live placement lets you buy at $0.50, a 15% discount to market, with a free attaching option for extra upside. Speculative and pre-revenue, so size small, but the risk/reward on a discovery is compelling.'},
+    {code:'AUR',name:'Aurora Biotech',theme:'Pre-IPO & deals',risk:'High',horizon:'3+ years',conv:2,last:null,entryLo:null,entryHi:null,target:null,deal:'P3',
+     hook:'Pre-IPO access before it lists',
+     thesis:'Aurora is a clinical-stage biotech approaching a planned ASX listing. Our pre-IPO allocation lets wholesale clients invest at $1.20 before public markets. Binary on trial outcomes and illiquid until listing, so this is for risk-tolerant capital seeking asymmetric, early-stage upside.'},
+    {code:'CSL',name:'CSL Limited',theme:'Blue chips',risk:'Low',horizon:'18 months',conv:3,last:299.30,entryLo:285.00,entryHi:305.00,target:330.00,
+     hook:'World-class healthcare compounder on sale',
+     thesis:'CSL is a global leader in blood plasma therapies and vaccines with durable demand and widening margins as collection costs normalise. After a period of underperformance the valuation is undemanding for the quality. A high-conviction defensive growth holding for patient capital.'}
+  ],
+  /* per-client watchlists */
+  watch:{
+    C1:[
+      {code:'MRD',name:'Meridian Resources',last:0.590,chg:3.5,alert:0.60,dir:'above'},
+      {code:'PLS',name:'Pilbara Minerals',last:3.84,chg:2.1,alert:null},
+      {code:'NVX',name:'Novonix',last:0.910,chg:1.1,alert:0.85,dir:'below'},
+      {code:'FMG',name:'Fortescue',last:22.41,chg:-0.6,alert:null},
+      {code:'LTR',name:'Liontown',last:1.06,chg:-1.9,alert:null},
+      {code:'AUR',name:'Aurora Biotech',last:null,chg:0,alert:null,unl:true}
+    ],
+    C2:[{code:'CBA',name:'Commonwealth Bank',last:132.40,chg:-0.3,alert:135,dir:'above'},{code:'WDS',name:'Woodside',last:26.40,chg:-0.4,alert:null}],
+    C3:[{code:'MQG',name:'Macquarie',last:214.50,chg:1.1,alert:null},{code:'BHP',name:'BHP Group',last:44.18,chg:0.8,alert:46,dir:'above'}],
+    C4:[{code:'FMG',name:'Fortescue',last:22.41,chg:-0.6,alert:22.5,dir:'below'}]
+  },
+  /* Vitti Intelligence — AI assistant briefings + canned answers (prototype) */
+  ai:{
+    suggested:['How is my portfolio doing today?','What should I watch this week?','Tell me about the MRD placement','Which of my options need attention?'],
+    answers:[
+      {q:/portfolio|how am i|doing today/i,a:function(c){return 'Your portfolio is '+money(portfolioValue(c))+', up '+money(dailyPL(c))+' ('+pct(dailyPL(c)/portfolioValue(c)*100)+') today. The lift is led by your materials names — PLS '+ '+2.1% and BHP +0.8%. Year to date you are tracking +6.4%, ahead of the ASX 200 at +5.4%. Nothing in your book needs action right now beyond the MRD book closing at 4:00pm.';}},
+      {q:/watch|this week|what.*look/i,a:function(c){return 'Three things this week: (1) the MRD placement closes today at 4:00pm — you have a live opportunity at a 15.3% discount. (2) Two of your options are inside their expiry window — Aurora (AURO) is in the money with 3 days to exercise, which is the one I would action first. (3) Aurora Biotech’s pre-IPO opens Monday; you flagged interest, so I will alert you when the book opens.';}},
+      {q:/mrd|meridian|placement/i,a:function(c){return 'Meridian Resources (MRD) is raising $12.0m at $0.50, a 15.3% discount to the last close of $0.59, with one free attaching option per two shares. Our desk rates it a spec buy with a $0.78 target. Minimum bid is '+money(10000)+' and the book closes at 4:00pm today. Want me to open the bid screen?';}},
+      {q:/option|expiry|exercise|itm/i,a:function(c){var os=clientOptions(c).filter(function(o){return o.status==='open'&&isITM(o)&&o.dte<=14;});return os.length?('You have '+os.length+' option'+(os.length>1?'s':'')+' in the money and close to expiry: '+os.map(function(o){return o.code+' ('+o.dte+'d, strike $'+o.strike.toFixed(2)+')';}).join(', ')+'. Unlisted options are not auto-exercised, so these are the ones to act on. Head to Options to lodge an instruction.'):'None of your options are both in the money and near expiry right now — your nearest is comfortably out of the window. I will alert you the moment that changes.';}}
+    ]
+  },
+  alerts:[],   /* generated */
+  audit:[]     /* generated */
+};
+
+/* ---------------- derived helpers ---------------- */
+function clientPositions(c){return DB.positions.filter(function(p){return p.c===c;});}
+function clientOptions(c){return DB.options.filter(function(o){return o.c===c;});}
+function posValue(p){return p.qty*p.last;}
+function posCost(p){return p.qty*p.cost;}
+function posPL(p){return posValue(p)-posCost(p);}
+function portfolioValue(c){var v=0;clientPositions(c).forEach(function(p){v+=posValue(p);});return v+cashOf(c);}
+function cashOf(c){return {C1:128450,C2:64200,C3:540000,C4:38900}[c]||0;}
+function unlistedValue(c){ /* options + notes rough carry */ var v=0; clientOptions(c).forEach(function(o){ if(!o.listed && o.status==='open') v+=o.qty*Math.max(0,o.under-o.strike);}); return v; }
+function dailyPL(c){var v=0;clientPositions(c).forEach(function(p){v+=posValue(p)*(p.code==='PLS'?0.021:p.code==='BHP'?0.008:p.code==='FMG'?-0.006:p.code==='WDS'?-0.004:0.003);});return v;}
+function totalPL(c){var v=0;clientPositions(c).forEach(function(p){v+=posPL(p);});return v;}
+
+/* moneyness */
+function moneyness(o){var d=o.under-o.strike; if(o.type==='Put')d=-d; return d;}
+function isITM(o){return moneyness(o)>0.0001;}
+function intrinsic(o){return Math.max(0,moneyness(o))*o.qty;}
+
+/* expiry urgency rail (SIGNATURE) — buckets at 30/14/7/3/1 */
+function railHTML(dte){
+  var thresholds=[30,14,7,3,1]; // segment i lit if dte<=threshold[i]
+  var cls = dte<=3?'danger':(dte<=14?'warn':'');
+  var segs='';
+  for(var i=0;i<5;i++){
+    var lit = dte<=thresholds[i];
+    var c = lit ? (dte<=3?'lit-red':'lit-amber') : '';
+    segs+='<div class="seg '+c+'"><span class="tk"></span></div>';
+  }
+  var lab = dte<0?'expired':(dte+'d');
+  return '<div class="rail '+cls+'"><div class="dleft">'+lab+'</div><div class="ticks">'+segs+'</div><div class="labs"><span>30</span><span>14</span><span>7</span><span>3</span><span>1</span></div></div>';
+}
+function moneyBarHTML(o){
+  var m=moneyness(o); var span=o.strike*0.5||0.5; var frac=Math.max(-1,Math.min(1,m/span));
+  var w=Math.abs(frac)*27;
+  var col=m>0?'var(--green)':'var(--loss)';
+  var left=m>0?'50%':(50-Math.abs(frac)*50)+'%';
+  return '<span class="mbar"><i></i><b style="background:'+col+';width:'+w+'px;'+(m>0?'left:50%':'right:50%')+'"></b></span>';
+}
+</script>
+
+<script>
+/* ---------------- STATE / ROUTER ---------------- */
+var STATE={device:'web',role:'client',clientId:'C1',viewClient:'C1',page:'dashboard',
+  filters:{client:'all',type:'all',expiry:'all',money:'all'}, pendingRole:'client'};
+
+var NAV={
+  client:[
+    {k:'dashboard',label:'Home',icon:'M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5',tab:1},
+    {k:'invest',label:'Invest',icon:'M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z',tab:1},
+    {k:'positions',label:'Portfolio',icon:'M4 19V5M4 19h16M8 15l3-4 3 2 4-6',tab:1},
+    {k:'insights',label:'Insights',icon:'M3 3v18h18M7 13l3 3 4-6 4 4',tab:1},
+    {k:'askvitti',label:'Ask Vitti',icon:'M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01',tab:1,ai:true},
+    {k:'markets',label:'Markets',icon:'M3 3v18h18M7 14l3-4 3 3 5-7'},
+    {k:'placements',label:'All deals',icon:'M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z'},
+    {k:'options',label:'Options',icon:'M3 5h18v14H3zM7 12h4M7 15h7M15 9h3'},
+    {k:'watchlist',label:'Watchlist',icon:'m12 3 2.7 5.8 6.3.7-4.7 4.3 1.3 6.2L12 16.8 6.4 20l1.3-6.2L3 9.5l6.3-.7z'},
+    {k:'alerts',label:'Alerts',icon:'M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',badge:'alerts'}
+  ],
+  admin:[
+    {k:'overview',label:'Overview',icon:'M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5',tab:1},
+    {k:'clients',label:'Clients',icon:'M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM3 21c0-3.9 4-7 9-7s9 3.1 9 7',tab:1},
+    {k:'placements',label:'Placements',icon:'M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z',badge:'pendingAlloc',tab:1},
+    {k:'options',label:'Options',icon:'M3 5h18v14H3zM7 12h4M7 15h7M15 9h3',tab:1},
+    {k:'research',label:'Research desk',icon:'M3 3v18h18M7 14l3-4 3 3 5-7',tab:1,short:'Research'},
+    {k:'alerts',label:'Alerts',icon:'M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0',badge:'alerts'},
+    {k:'audit',label:'Audit log',icon:'M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'}
+  ]
+};
+
+/* ---------------- AUDIT ---------------- */
+var auditClock = new Date(2026,5,12,9,41,0);
+function audit(action,detail){
+  auditClock=new Date(auditClock.getTime()+ Math.round(20+Math.random()*90)*1000);
+  DB.audit.unshift({ts:new Date(auditClock),user:currentUserName(),role:STATE.role,action:action,detail:detail||''});
+}
+function currentUserName(){return STATE.role==='admin'?'S. Goyal (staff)':DB.clients[STATE.clientId].name;}
+function fmtTime(d){return d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})+' · '+d.toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});}
+
+/* ---------------- ALERT ENGINE ---------------- */
+var alertSeq=1;
+function mkAlert(o,kind,sev,title,sub){
+  return {id:'A'+(alertSeq++),client:o?o.c:null,optId:o?o.id:null,kind:kind,sev:sev,title:title,sub:sub,
+    ts:new Date(auditClock.getTime()-Math.round(Math.random()*7200)*1000),ack:false};
+}
+function scanAlerts(){
+  DB.alerts=[]; alertSeq=1;
+  DB.options.forEach(function(o){
+    if(o.status!=='open')return;
+    var cname=DB.clients[o.c].name;
+    // escalating expiry
+    if(o.dte<=30 && o.dte>=0){
+      var sev=o.dte<=3?'red':'amber';
+      var win=[30,14,7,3,1].filter(function(t){return o.dte<=t;}).slice(-1)[0];
+      DB.alerts.push(mkAlert(o,'expiry',sev,o.code+' expires in '+o.dte+' day'+(o.dte===1?'':'s'),
+        (o.listed?'Listed':'Unlisted')+' · '+cname+' · '+num(o.qty)+' @ $'+o.strike.toFixed(2)+' · '+win+'-day window'));
+    }
+    // in the money
+    if(isITM(o)){
+      DB.alerts.push(mkAlert(o,'itm','green',o.code+' is in the money',
+        cname+' · underlying $'+o.under.toFixed(2)+' vs strike $'+o.strike.toFixed(2)+' · intrinsic '+money(intrinsic(o))));
+    }
+    // unlisted + ITM + within exercise window (dte<=14) — the critical one
+    if(!o.listed && isITM(o) && o.dte<=14 && o.dte>=0){
+      DB.alerts.push(mkAlert(o,'window','red','Act: '+o.code+' unlisted, in-the-money, window closing',
+        cname+' · '+o.dte+' days to exercise · unlisted options are not auto-exercised'));
+    }
+  });
+  // custom price alerts (seeded)
+  DB.alerts.push({id:'A'+(alertSeq++),client:'C1',optId:null,kind:'price',sev:'green',title:'MRD reached $0.59',
+    sub:'Custom price alert · target $0.58 · Meridian Resources',ts:new Date(auditClock.getTime()-3600*1000),ack:false});
+  DB.alerts.push({id:'A'+(alertSeq++),client:'C4',optId:null,kind:'price',sev:'amber',title:'FMG fell below $22.50',
+    sub:'Custom price alert · David Okafor',ts:new Date(auditClock.getTime()-5400*1000),ack:false});
+  sortAlerts();
+}
+function sortAlerts(){var rank={red:0,amber:1,green:2};DB.alerts.sort(function(a,b){if(a.ack!==b.ack)return a.ack?1:-1;if(rank[a.sev]!==rank[b.sev])return rank[a.sev]-rank[b.sev];return b.ts-a.ts;});}
+function visibleAlerts(){return STATE.role==='admin'?DB.alerts:DB.alerts.filter(function(a){return a.client===STATE.clientId;});}
+function unackCount(){return visibleAlerts().filter(function(a){return !a.ack;}).length;}
+function pendingAllocCount(){var n=0;DB.placements.forEach(function(p){if(p.stage==='closed')p.bids.forEach(function(b){if(b.alloc===null)n++;});});return n;}
+
+/* ---------------- DEVICE ---------------- */
+function setDevice(d){
+  STATE.device=d;
+  document.body.classList.toggle('is-mobile',d==='mobile');
+  document.querySelectorAll('#land-dev button,#devfab button').forEach(function(b){b.classList.toggle('on',b.dataset.dev===d);});
+}
+
+/* ---------------- LOGIN FLOW ---------------- */
+function goLanding(){document.getElementById('app').classList.remove('show');document.getElementById('screen-login').classList.remove('show');document.getElementById('screen-landing').style.display='block';document.getElementById('devfab').style.display='none';window.scrollTo(0,0);}
+function startLogin(role){
+  STATE.pendingRole=role;
+  document.getElementById('screen-landing').style.display='none';
+  document.getElementById('screen-login').classList.add('show');
+  document.getElementById('login-step-1').style.display='block';
+  document.getElementById('login-step-2').style.display='none';
+  document.getElementById('login-role-pill').textContent = role==='admin'?'Vitti staff':'Client portal';
+  document.getElementById('login-role-pill').className = role==='admin'?'pill dark':'pill live';
+  document.getElementById('login-title').textContent = role==='admin'?'Staff sign in':'Welcome back';
+  document.getElementById('li-email').value = role==='admin'?'goyal.s@vitti.capital':'james@halloran.com.au';
+  document.getElementById('li-pass').value='';
+  document.getElementById('login-hint').innerHTML = role==='admin'
+    ? '<b>Prototype:</b> continue to explore the Vitti staff console — the consolidated book across all clients.'
+    : '<b>Prototype:</b> continue to explore James Halloran’s client account.';
+  window.scrollTo(0,0);
+}
+function toTwoFA(){document.getElementById('login-step-1').style.display='none';document.getElementById('login-step-2').style.display='block';setTimeout(function(){var f=document.getElementById('o1');if(f)f.focus();},60);}
+function backToCreds(){document.getElementById('login-step-2').style.display='none';document.getElementById('login-step-1').style.display='block';}
+function otpHop(el,next){if(el.value.length>=1){var n=document.getElementById(next);if(n)n.focus();}}
+function finishLogin(){
+  STATE.role=STATE.pendingRole;
+  if(STATE.role==='client')STATE.clientId='C1';
+  scanAlerts();
+  audit('Signed in', STATE.role==='admin'?'Vitti staff console · 2FA verified':'Client portal · 2FA verified');
+  document.getElementById('screen-login').classList.remove('show');
+  document.getElementById('app').classList.add('show');
+  document.getElementById('devfab').style.display='inline-flex';
+  STATE.page = STATE.role==='admin'?'overview':'dashboard';
+  buildNav(); render();
+  window.scrollTo(0,0);
+}
+
+/* ---------------- NAV ---------------- */
+function buildNav(){
+  document.getElementById('side-role').textContent = STATE.role==='admin'?'Vitti staff console':'Client portal';
+  var acct = STATE.role==='admin'?{nm:'S. Goyal',av:'SG',rl:'Director · full access'}:{nm:DB.clients[STATE.clientId].name,av:DB.clients[STATE.clientId].av,rl:'Wholesale client'};
+  document.getElementById('side-av').textContent=acct.av;
+  document.getElementById('side-nm').textContent=acct.nm;
+  document.getElementById('side-rl').textContent=acct.rl;
+  document.getElementById('top-av').textContent=acct.av;
+  var items=NAV[STATE.role];
+  var sn=document.getElementById('side-nav'); sn.innerHTML='';
+  var bn=document.getElementById('bottom-nav'); bn.innerHTML='';
+  items.forEach(function(it){
+    sn.insertAdjacentHTML('beforeend',
+      '<button class="nav-item'+(it.ai?' ai':'')+'" data-k="'+it.k+'" onclick="navTo(\''+it.k+'\')"><svg viewBox="0 0 24 24"><path d="'+it.icon+'"/></svg><span class="lbl">'+it.label+'</span>'+(it.ai?'<span class="ai-dot">AI</span>':'')+'<span class="badge'+(it.badge==='pendingAlloc'?' green':'')+'" data-badge="'+(it.badge||'')+'" style="display:none">0</span></button>');
+  });
+  // bottom nav: items flagged tab, then a More button for the rest
+  var tabs=items.filter(function(it){return it.tab;});
+  var rest=items.filter(function(it){return !it.tab;});
+  tabs.forEach(function(it){
+    bn.insertAdjacentHTML('beforeend',
+      '<button data-k="'+it.k+'" class="'+(it.ai?'ai':'')+'" onclick="navTo(\''+it.k+'\')"><svg viewBox="0 0 24 24"><path d="'+it.icon+'"/></svg>'+(it.short||it.label)+'<span class="badge" data-badge="'+(it.badge||'')+'" style="display:none">0</span></button>');
+  });
+  if(rest.length) bn.insertAdjacentHTML('beforeend',
+    '<button onclick="openMoreSheet()"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>More<span class="badge" data-badge="alerts" style="display:none">0</span></button>');
+  updateBadges();
+}
+function openMoreSheet(){
+  var rest=NAV[STATE.role].filter(function(it){return !it.tab;});
+  var h='';
+  rest.forEach(function(it){
+    var bdg = it.badge==='alerts'&&unackCount()?'<span class="pill loss" style="margin-left:auto">'+unackCount()+'</span>':'';
+    h+='<button class="sheet-item" onclick="closeModal();navTo(\''+it.k+'\')"><svg viewBox="0 0 24 24"><path d="'+it.icon+'"/></svg><span>'+it.label+'</span>'+bdg+'</button>';
+  });
+  openModal('<h3>More</h3><div style="margin-top:12px">'+h+'</div>');
+}
+function updateBadges(){
+  var ua=unackCount(), pa=pendingAllocCount();
+  document.querySelectorAll('[data-badge="alerts"]').forEach(function(b){b.style.display=ua?'flex':'none';b.textContent=ua;});
+  document.querySelectorAll('[data-badge="pendingAlloc"]').forEach(function(b){b.style.display=pa?'flex':'none';b.textContent=pa;});
+  var nd=document.getElementById('top-nd'); nd.style.display=ua?'flex':'none'; nd.textContent=ua;
+}
+function navTo(k){STATE.page=k;render();var sh=document.querySelector('.app-shell');if(sh)sh.scrollTop=0;window.scrollTo(0,0);}
+function setActiveNav(){document.querySelectorAll('.nav-item,#bottom-nav button').forEach(function(b){b.classList.toggle('on',b.dataset.k===STATE.page||(STATE.page==='clientDetail'&&b.dataset.k==='clients')||(STATE.page==='placementDetail'&&b.dataset.k==='placements')||(STATE.page==='dealBid'&&b.dataset.k==='placements')||(STATE.page==='bidTrack'&&b.dataset.k==='placements'));});}
+</script>
+
+<script>
+/* ==================== RENDER ROUTER ==================== */
+function render(){
+  setActiveNav(); updateBadges();
+  var R=document.getElementById('page-root'); var p=STATE.page;
+  var html='';
+  if(STATE.role==='client'){
+    if(p==='dashboard')html=viewClientDashboard();
+    else if(p==='positions')html=viewPositions(STATE.clientId,false);
+    else if(p==='options')html=viewOptions(STATE.clientId);
+    else if(p==='placements')html=viewPlacementsClient();
+    else if(p==='dealBid')html=viewDealBid(STATE._dealId);
+    else if(p==='bidTrack')html=viewBidTrack(STATE._dealId);
+    else if(p==='markets')html=viewMarkets();
+    else if(p==='invest')html=viewInvest();
+    else if(p==='insights')html=viewInsights();
+    else if(p==='watchlist')html=viewWatchlist();
+    else if(p==='askvitti')html=viewAskVitti();
+    else if(p==='alerts')html=viewAlerts();
+  }else{
+    if(p==='overview')html=viewAdminOverview();
+    else if(p==='clients')html=viewAdminClients();
+    else if(p==='clientDetail')html=viewAdminClientDetail(STATE.viewClient);
+    else if(p==='placements')html=viewAdminPlacements();
+    else if(p==='placementDetail')html=viewAdminPlacementDetail(STATE._dealId);
+    else if(p==='options')html=viewOptionsAdmin();
+    else if(p==='research')html=viewAdminResearch();
+    else if(p==='alerts')html=viewAlerts();
+    else if(p==='audit')html=viewAudit();
+  }
+  R.innerHTML=html;
+  if(p==='askvitti')setTimeout(scrollAIBottom,30);
+}
+
+/* helper bits */
+function sparkPath(seed,w,h){var pts=[];var v=h*0.7;for(var i=0;i<=12;i++){v+= (Math.sin(i*1.7+seed)*0.5+ (Math.random()-0.45))* (h*0.12); v=Math.max(h*0.12,Math.min(h*0.92,v)); pts.push([i/12*w, h-v]);}return pts.map(function(p,i){return (i?'L':'M')+p[0].toFixed(0)+' '+p[1].toFixed(0);}).join(' ');}
+function statCard(l,v,d,dcls){return '<div class="card stat"><div class="l">'+l+'</div><div class="v">'+v+'</div><div class="d '+(dcls||'')+'">'+d+'</div></div>';}
+
+/* ==================== CLIENT: DASHBOARD ==================== */
+function viewClientDashboard(){
+  var c=STATE.clientId, cl=DB.clients[c];
+  var pv=portfolioValue(c), dpl=dailyPL(c), tpl=totalPL(c);
+  var mtd=pv*0.018, ytd=pv*0.064;
+  var liveDeal=DB.placements.find(function(p){return p.stage==='open';});
+  var myAlerts=visibleAlerts().filter(function(a){return !a.ack;}).slice(0,3);
+  var h='<div class="phead"><div><div class="eyebrow">'+fmtDate(TODAY)+' · ASX open</div><h1>Good morning, '+cl.name.split(' ')[0]+'</h1></div></div>';
+  h+='<div class="tickwrap"><div class="tickrun">'+tickerHTML()+'</div></div>';
+  h+=homeBriefing(c);
+  h+='<div class="grid g4">'+
+    statCard('Total portfolio',money(pv),pct(dpl/pv*100)+' · '+money(dpl)+' today',signClass(dpl))+
+    statCard('Daily P&amp;L',money(dpl),'unrealised',signClass(dpl))+
+    statCard('Month to date','+'+money(mtd),pct(1.8),'up')+
+    statCard('Year to date','+'+money(ytd),pct(6.4),'up')+'</div>';
+  h+='<div class="split" style="margin-top:16px"><div class="col">';
+  // performance
+  h+='<div class="card"><div class="ch"><b>Portfolio performance</b><span class="meta">1Y · time-weighted</span></div>'+
+     '<svg class="spark" viewBox="0 0 600 120" preserveAspectRatio="none" style="height:130px"><defs><linearGradient id="gd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#36bb91" stop-opacity=".18"/><stop offset="1" stop-color="#36bb91" stop-opacity="0"/></linearGradient></defs>'+
+     '<path d="M0 96 L50 90 L100 93 L150 78 L200 82 L250 64 L300 70 L350 50 L400 56 L450 35 L500 41 L550 22 L600 16" fill="none" stroke="#36bb91" stroke-width="2.5"/>'+
+     '<path d="M0 96 L50 90 L100 93 L150 78 L200 82 L250 64 L300 70 L350 50 L400 56 L450 35 L500 41 L550 22 L600 16 V120 H0Z" fill="url(#gd)"/>'+
+     '<path d="M0 100 L100 95 L200 90 L300 82 L400 74 L500 66 L600 60" fill="none" stroke="#c7c2b5" stroke-width="1.4" stroke-dasharray="4 5"/></svg></div>';
+  // positions preview
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Open positions</b><button class="linkish" onclick="navTo(\'positions\')">View all</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Code</th><th class="hide-m">Holding</th><th class="r">Value</th><th class="r">Unreal. P&amp;L</th><th class="r hide-m">Day</th></tr></thead><tbody>';
+  clientPositions(c).slice(0,5).forEach(function(p){var pl=posPL(p),plp=pl/posCost(p)*100;
+    h+='<tr><td><span class="code">'+p.code+'</span></td><td class="hide-m">'+p.name+'<div class="sub2">'+num(p.qty)+' @ $'+p.cost.toFixed(2)+'</div></td><td class="r mono">'+money(posValue(p))+'</td><td class="r mono '+signClass(pl)+'">'+money(pl)+'<div class="sub2 '+signClass(pl)+'">'+pct(plp)+'</div></td><td class="r mono hide-m '+signClass(pl)+'">'+pct(p.code==='PLS'?2.1:0.4)+'</td></tr>';});
+  h+='</tbody></table></div></div></div>';
+  // right column
+  h+='<div class="col">';
+  if(liveDeal){var myBid=liveDeal.bids.find(function(b){return b.c===c;});
+    h+='<div class="card green"><div class="ch"><b style="color:var(--green-d)">● Live placement</b><span class="meta mono" id="cd-1">closes 4:00pm</span></div>'+
+      '<div style="font-family:var(--disp);font-size:19px;font-weight:500">'+liveDeal.name+'</div>'+
+      '<div class="mono" style="font-size:12px;color:var(--mut);margin-top:2px">ASX: '+liveDeal.code+' · $'+liveDeal.price.toFixed(2)+' · '+liveDeal.disc+'% disc</div>'+
+      '<div style="font-size:12px;color:var(--mut);margin-top:4px">Raise $'+liveDeal.raise+'m · min '+money(liveDeal.min)+' · '+liveDeal.opts+'</div>'+
+      (myBid?'<div style="margin-top:10px"><span class="pill live">Your bid: '+money(myBid.amount)+'</span></div>':'')+
+      '<button class="btn green block" style="margin-top:13px" onclick="openDeal(\''+liveDeal.id+'\')">'+(myBid?'View your bid':'Review &amp; bid')+'</button></div>';
+  }
+  // Ask Vitti
+  h+='<div class="card ai-teaser"><div class="ch"><b>Ask Vitti</b><span class="ai-dot">AI</span></div>'+
+     '<div style="font-size:13px;color:var(--mut)">“'+(c==='C1'?'You’re up '+money(dailyPL(c))+' today; the MRD book closes at 4:00pm and one option needs attention.':'Here’s your daily read on the market and your holdings.')+'”</div>'+
+     '<button class="btn navy block sm" style="margin-top:11px" onclick="navTo(\'askvitti\')">Open Vitti Intelligence →</button></div>';
+  // market snapshot
+  h+='<div class="card"><div class="ch"><b>Markets</b><button class="linkish" onclick="navTo(\'markets\')">Briefing</button></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">';
+  DB.indices.slice(0,4).forEach(function(x){var cls=x.chg>=0?'up':'dn';h+='<div><div class="idx-n">'+x.code+'</div><div class="mono" style="font-weight:600;font-size:13px">'+x.last.toLocaleString('en-AU',{minimumFractionDigits:x.dp!=null?x.dp:1,maximumFractionDigits:x.dp!=null?x.dp:1})+'</div><div class="'+cls+'" style="font-size:11px">'+(x.chg>=0?'+':'')+x.chg.toFixed(2)+'%</div></div>';});
+  h+='</div></div>';
+  // alerts preview
+  h+='<div class="card"><div class="ch"><b>Alerts</b><button class="linkish" onclick="navTo(\'alerts\')">'+unackCount()+' unread</button></div>';
+  if(myAlerts.length){myAlerts.forEach(function(a){h+=alertItemHTML(a,true);});}else{h+='<div style="font-size:12.5px;color:var(--mut)">No unread alerts.</div>';}
+  h+='</div>';
+  // upcoming dates
+  h+='<div class="card"><div class="ch"><b>Upcoming dates</b></div><table class="tbl">'+
+     '<tr><td>TTM allocation<div class="sub2">if your bid is filled</div></td><td class="r mono">'+fmtDate(addDays(0))+'</td></tr>'+
+     '<tr><td>NVX options expiry<div class="sub2">listed · in the money</div></td><td class="r mono up">'+fmtDate(addDays(5))+'</td></tr>'+
+     '<tr><td>BHP dividend</td><td class="r mono">'+fmtDate(addDays(13))+'</td></tr></table></div>';
+  h+='</div></div>';
+  return h;
+}
+
+/* ==================== POSITIONS ==================== */
+function viewPositions(c,isAdmin){
+  var rows=clientPositions(c);
+  var tv=0,tc=0;rows.forEach(function(p){tv+=posValue(p);tc+=posCost(p);});
+  var tpl=tv-tc;
+  if(!STATE.posView)STATE.posView='holdings';
+  var h='';
+  if(!isAdmin)h+='<div class="phead"><div><div class="eyebrow">Listed equities · broker feed</div><h1>Portfolio</h1></div><div class="seg-ctl hide-m"><button class="'+(STATE.posView==='holdings'?'on':'')+'" onclick="setPosView(\'holdings\')">Holdings</button><button class="'+(STATE.posView==='analytics'?'on':'')+'" onclick="setPosView(\'analytics\')">Analytics</button></div></div>';
+  h+='<div class="grid g3" style="margin-bottom:16px">'+
+    statCard('Market value',money(tv+cashOf(c)),num(rows.length)+' positions + cash','')+
+    statCard('Cost base',money(tc),'invested','')+
+    statCard('Unrealised P&amp;L',money(tpl),pct(tpl/tc*100),signClass(tpl))+'</div>';
+  if(!isAdmin && STATE.posView==='analytics'){ h+=positionsAnalytics(c,tv); return h; }
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Holdings</b><span class="meta">Tap a holding for Vitti’s view</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Code</th><th class="hide-m">Holding</th><th class="r">Qty</th><th class="r hide-m">Last</th><th class="r">Value</th><th class="r">Unreal. P&amp;L</th><th class="c">Vitti view</th></tr></thead><tbody>';
+  rows.forEach(function(p){var pl=posPL(p),plp=pl/posCost(p)*100;var sg=DB.signals[p.code];
+    h+='<tr class="clickable" onclick="openHolding(\''+p.code+'\')"><td><span class="code">'+p.code+'</span></td><td class="hide-m">'+p.name+'<div class="sub2">'+p.sector+'</div></td><td class="r mono">'+num(p.qty)+'</td><td class="r mono hide-m">$'+p.last.toFixed(2)+'</td><td class="r mono">'+money(posValue(p))+'</td><td class="r mono '+signClass(pl)+'">'+money(pl)+'<div class="sub2 '+signClass(pl)+'">'+pct(plp)+'</div></td><td class="c">'+actionPill(sg?sg.action:'Hold')+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+function actionPill(a){var m={'Add':'gain','Hold':'neutral','Trim':'amber','Take profit':'amber','Watch':'unl'};return '<span class="pill '+(m[a]||'neutral')+'">'+a+'</span>';}
+function signalFor(code){return DB.signals[code]||{action:'Hold',headline:'No active view — hold and monitor',detail:'We don’t have a high-conviction view on this name right now. We’ll flag it here if that changes.',target:null};}
+function openHolding(code){var c=STATE.role==='admin'?STATE.viewClient:STATE.clientId;var p=clientPositions(c).find(function(x){return x.code===code;});if(!p)return;var sg=signalFor(code);var pl=posPL(p),plp=pl/posCost(p)*100;var up=sg.target&&p.last?Math.round((sg.target/p.last-1)*100):null;
+  openModal('<div style="display:flex;align-items:center;gap:9px;margin-bottom:4px"><span class="code" style="font-size:18px">'+code+'</span>'+actionPill(sg.action)+'</div>'+
+    '<h3 style="font-size:18px">'+p.name+'</h3>'+
+    '<div style="margin:12px 0">'+
+      '<div class="sumrow"><span>Your holding</span><b class="mono">'+num(p.qty)+' · '+money(posValue(p))+'</b></div>'+
+      '<div class="sumrow"><span>Unrealised P&amp;L</span><b class="mono '+signClass(pl)+'">'+money(pl)+' ('+pct(plp)+')</b></div>'+
+      '<div class="sumrow"><span>Vitti target</span><b class="mono">'+(sg.target?'$'+sg.target.toFixed(2)+(up!=null?' · +'+up+'%':''):'—')+'</b></div></div>'+
+    '<div style="font-weight:600;font-size:14px;margin-bottom:4px">'+sg.headline+'</div>'+
+    '<div style="font-size:13px;color:var(--mut);line-height:1.6;margin-bottom:14px">'+sg.detail+'</div>'+
+    '<div style="display:flex;gap:10px">'+
+      (STATE.role==='client'&&sg.action==='Add'?'<button class="btn green" style="flex:1.5" onclick="closeModal();investAct(\''+code+'\')">Add to position →</button>':'')+
+      (STATE.role==='client'&&(sg.action==='Trim'||sg.action==='Take profit')?'<button class="btn navy" style="flex:1.5" onclick="closeModal();toast(\'Sell instruction would route to the desk.\')">'+sg.action+' →</button>':'')+
+      '<button class="btn ghost" style="flex:1" onclick="closeModal()">Close</button></div>');
+}
+function setPosView(v){STATE.posView=v;render();}
+function positionsAnalytics(c,tv){
+  var rows=clientPositions(c), cash=cashOf(c), unl=unlistedValue(c);
+  // asset allocation: listed vs cash vs unlisted(options intrinsic)
+  var total=tv+cash+unl;
+  var alloc=[{lab:'Listed equities',v:tv,col:'#1d202f'},{lab:'Unlisted / options',v:unl||total*0.04,col:'#36bb91'},{lab:'Cash',v:cash,col:'#cfc9bb'}];
+  // sector breakdown
+  var sect={};rows.forEach(function(p){sect[p.sector]=(sect[p.sector]||0)+posValue(p);});
+  var sectArr=Object.keys(sect).map(function(k){return {lab:k,v:sect[k]};}).sort(function(a,b){return b.v-a.v;});
+  var palette=['#1d202f','#36bb91','#c98a2b','#5c5775','#1f8e6b','#9aa0b4'];
+  sectArr.forEach(function(s,i){s.col=palette[i%palette.length];});
+  // top movers
+  var movers=rows.map(function(p){return {code:p.code,pl:posPL(p),plp:posPL(p)/posCost(p)*100};}).sort(function(a,b){return b.plp-a.plp;});
+  var h='<div class="split-even"><div class="card"><div class="ch"><b>Asset allocation</b><span class="meta">'+money(total)+'</span></div>'+
+    '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap"><div style="position:relative">'+donutHTML(alloc,128,18)+'<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center"><div class="mono" style="font-weight:600;font-size:15px">'+Math.round(tv/total*100)+'%</div><div style="font-size:9.5px;color:var(--mut)">equities</div></div></div>'+
+    '<div class="dl" style="flex:1;min-width:150px">'+alloc.map(function(a){return '<div class="dl-row"><i style="background:'+a.col+'"></i>'+a.lab+'<b>'+Math.round(a.v/total*100)+'%</b></div>';}).join('')+'</div></div></div>';
+  h+='<div class="card"><div class="ch"><b>Sector exposure</b><span class="meta">listed equities</span></div>'+barsHTML(sectArr.map(function(s){return {lab:s.lab.split(' ')[0],v:s.v,col:s.col};}),140)+'</div></div>';
+  h+='<div class="split-even" style="margin-top:16px"><div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Top movers</b><span class="meta">unrealised</span></div><table class="tbl">';
+  movers.slice(0,5).forEach(function(m){h+='<tr><td><span class="code">'+m.code+'</span></td><td class="r mono '+signClass(m.pl)+'">'+money(m.pl)+'</td><td class="r mono '+signClass(m.plp)+'">'+pct(m.plp)+'</td></tr>';});
+  h+='</table></div><div class="card"><div class="ch"><b>Portfolio growth</b><span class="meta">1Y</span></div>'+
+    '<svg class="spark" viewBox="0 0 600 120" preserveAspectRatio="none" style="height:120px"><defs><linearGradient id="ga" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#36bb91" stop-opacity=".18"/><stop offset="1" stop-color="#36bb91" stop-opacity="0"/></linearGradient></defs><path d="M0 96 L100 90 L200 78 L300 64 L400 48 L500 34 L600 18" fill="none" stroke="#36bb91" stroke-width="2.5"/><path d="M0 96 L100 90 L200 78 L300 64 L400 48 L500 34 L600 18 V120 H0Z" fill="url(#ga)"/></svg>'+
+    '<div class="legend"><span><i style="background:#36bb91"></i>Up '+pct(6.4)+' over 12 months</span></div></div></div>';
+  return h;
+}
+
+/* ==================== OPTIONS (client) ==================== */
+function viewOptions(c){
+  var rows=clientOptions(c).filter(function(o){return o.status!=='expired';});
+  var listed=rows.filter(function(o){return o.listed;}), unl=rows.filter(function(o){return !o.listed;});
+  var itm=rows.filter(isITM).length, soon=rows.filter(function(o){return o.dte<=7&&o.dte>=0;}).length;
+  if(!STATE.optView)STATE.optView='table';
+  var h='<div class="phead"><div><div class="eyebrow">Listed &amp; unlisted</div><h1>Options</h1><div class="sub">Strike, expiry and moneyness across your option holdings. Unlisted options are not auto-exercised — watch the window.</div></div><div class="seg-ctl hide-m"><button class="'+(STATE.optView==='table'?'on':'')+'" onclick="setOptView(\'table\')">Table</button><button class="'+(STATE.optView==='cards'?'on':'')+'" onclick="setOptView(\'cards\')">Cards</button></div></div>';
+  h+='<div class="grid g4" style="margin-bottom:16px">'+
+    statCard('Option series',num(rows.length),listed.length+' listed · '+unl.length+' unlisted','')+
+    statCard('In the money',itm+' series','',itm?'up':'')+
+    statCard('Expiring ≤7 days',soon+' series',soon?'attention needed':'none',soon?'dn':'')+
+    statCard('Listed intrinsic',money(rows.filter(function(o){return o.listed&&isITM(o);}).reduce(function(s,o){return s+intrinsic(o);},0)),'at current prices','')+'</div>';
+  if(STATE.optView==='cards'){ h+=optionCards(rows); return h; }
+  h+=optionTable(listed,'Listed options','Quoted on ASX · priced from broker feed',false);
+  h+='<div style="height:16px"></div>';
+  h+=optionTable(unl,'Unlisted options','Held on issuer register · entered manually',false);
+  return h;
+}
+function setOptView(v){STATE.optView=v;render();}
+function optionCards(rows){
+  if(!rows.length)return '<div class="card" style="text-align:center;color:var(--mut);padding:24px">No active options.</div>';
+  var h='<div class="grid g2">';
+  rows.forEach(function(o){var act=!o.listed&&isITM(o)&&o.dte<=14&&o.dte>=0;
+    h+='<div class="card'+(act?' green':'')+'"><div class="ch"><div><span class="code" style="font-size:15px">'+o.code+'</span> <span class="pill '+(o.listed?'neutral':'unl')+'" style="margin-left:4px">'+(o.listed?'Listed':'Unlisted')+'</span></div><span class="pill '+(isITM(o)?'itm':'otm')+'">'+(isITM(o)?'In the money':'Out of money')+'</span></div>'+
+      '<div class="sub2" style="margin-bottom:10px">'+o.name+' · '+o.source+'</div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'+
+        '<div><div class="idx-n">Qty</div><div class="mono" style="font-weight:600">'+(o.qty?num(o.qty):'—')+'</div></div>'+
+        '<div><div class="idx-n">Strike</div><div class="mono" style="font-weight:600">$'+o.strike.toFixed(2)+'</div></div>'+
+        '<div><div class="idx-n">Underlying</div><div class="mono" style="font-weight:600">$'+o.under.toFixed(2)+'</div></div></div>'+
+      railHTML(o.dte)+
+      '<div style="margin-top:12px">'+(o.listed?'<button class="btn ghost block sm" onclick="toast(\'Exercise/sell instruction would route to the desk.\')">Exercise / sell</button>':(act?'<button class="btn green block sm" onclick="toast(\'Exercise instruction would route to the desk.\')">Act now · exercise window open</button>':'<span class="pill neutral">Hold · not in window</span>'))+'</div></div>';});
+  h+='</div>';
+  return h;
+}
+function optionTable(rows,title,meta,showClient){
+  var h='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>'+title+'</b><span class="meta">'+meta+'</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr>'+
+    (showClient?'<th>Client</th>':'')+'<th>Series</th><th class="r">Qty</th><th class="r">Strike</th><th class="r hide-m">Underlying</th><th class="c">Moneyness</th><th class="hide-m">Expiry</th><th>Window</th><th></th></tr></thead><tbody>';
+  if(!rows.length)h+='<tr><td colspan="9" style="color:var(--mut);text-align:center;padding:20px">No options in this category.</td></tr>';
+  rows.forEach(function(o){var m=moneyness(o);
+    h+='<tr>'+(showClient?'<td><span class="pill neutral">'+DB.clients[o.c].av+'</span></td>':'')+
+      '<td><span class="code">'+o.code+'</span><div class="sub2">'+o.source+(o.status==='pending'?' · quotation pending':'')+'</div></td>'+
+      '<td class="r mono">'+(o.qty?num(o.qty):'—')+'</td>'+
+      '<td class="r mono">$'+o.strike.toFixed(2)+'</td>'+
+      '<td class="r mono hide-m">$'+o.under.toFixed(2)+'</td>'+
+      '<td class="c">'+moneyBarHTML(o)+' <span class="pill '+(isITM(o)?'itm':'otm')+'" style="margin-left:4px">'+(isITM(o)?'ITM':'OTM')+'</span></td>'+
+      '<td class="hide-m mono" style="font-size:11.5px">'+fmtDate(addDays(o.dte))+'</td>'+
+      '<td>'+railHTML(o.dte)+'</td>'+
+      '<td class="r">'+(o.listed?'<button class="btn ghost sm" onclick="toast(\'Exercise/sell instruction would route to the desk.\')">Exercise</button>':(isITM(o)&&o.dte<=14&&o.dte>=0?'<span class="pill loss">Act now</span>':'<span class="pill neutral">Hold</span>'))+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+</script>
+
+<script>
+/* ==================== PLACEMENTS (client) ==================== */
+function viewPlacementsClient(){
+  var c=STATE.clientId;
+  var h='<div class="phead"><div><div class="eyebrow">Capital raises</div><h1>Placements</h1></div></div>';
+  var open=DB.placements.filter(function(p){return p.stage==='open'||p.stage==='upcoming';});
+  var mine=DB.placements.filter(function(p){return p.bids.some(function(b){return b.c===c;});});
+  h+='<div class="eyebrow">Open &amp; upcoming</div><div class="grid g2" style="margin-bottom:20px">';
+  open.forEach(function(p){h+=dealCardClient(p,c);});
+  h+='</div>';
+  h+='<div class="eyebrow">Your bids &amp; allocations</div><div class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deal</th><th class="r">Your bid</th><th class="r">Allotted</th><th class="hide-m">Settlement</th><th class="r">Status</th></tr></thead><tbody>';
+  if(!mine.length)h+='<tr><td colspan="5" style="text-align:center;color:var(--mut);padding:20px">No bids yet.</td></tr>';
+  mine.forEach(function(p){var b=p.bids.find(function(x){return x.c===c;});
+    var st = b.alloc===null?(p.stage==='closed'?'<span class="pill amber">Awaiting allocation</span>':'<span class="pill live">Bid placed</span>'):(b.alloc===0?'<span class="pill loss">Nil allocation</span>':(p.stage==='settled'?'<span class="pill gain">Settled</span>':'<span class="pill amber">Payment due</span>'));
+    h+='<tr class="clickable" onclick="openDeal(\''+p.id+'\')"><td><span class="code">'+p.code+'</span> · '+p.name+'<div class="sub2">'+p.type+'</div></td><td class="r mono">'+money(b.amount)+'</td><td class="r mono">'+(b.alloc===null?'—':(b.alloc===0?'Nil':money(b.alloc)+(b.alloc<b.amount?' · '+Math.round(b.alloc/b.amount*100)+'%':''))) +'</td><td class="hide-m mono">'+fmtDate(p.settleDate)+'</td><td class="r">'+st+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+function dealCardClient(p,c){
+  var myBid=p.bids.find(function(b){return b.c===c;});
+  var badge=p.stage==='open'?'<span class="pill live"><span class="dot"></span>Live</span>':'<span class="pill unl">Upcoming</span>';
+  var h='<div class="card'+(p.stage==='open'?' green':'')+'"><div class="ch"><b>'+p.name+'</b>'+badge+'</div>'+
+    '<div class="mono" style="font-size:12px;color:var(--mut)">ASX: '+p.code+' · '+p.type+(p.price?' · $'+p.price.toFixed(2):'')+(p.disc?' · '+p.disc+'% disc':'')+'</div>'+
+    '<div style="font-size:12.5px;color:var(--mut);margin-top:6px">Raise $'+p.raise+'m · min '+money(p.min)+(p.opts!=='None'?' · '+p.opts:'')+'</div>'+
+    '<div class="mono" style="font-size:11.5px;color:var(--mut);margin-top:6px">'+(p.stage==='open'?'Closes '+fmtDate(p.closeDate):'Opens '+fmtDate(p.closeDate))+'</div>'+
+    (myBid?'<div style="margin-top:9px"><span class="pill live">Your bid: '+money(myBid.amount)+'</span></div>':'')+
+    '<button class="btn '+(p.stage==='open'?'green':'ghost')+' block sm" style="margin-top:13px" onclick="'+(p.stage==='open'?'openDeal(\''+p.id+'\')':'toast(\'You\\\'ll be notified when '+p.code+' opens.\')')+'">'+(p.stage==='open'?(myBid?'View your bid':'Review & bid'):'Register interest')+'</button></div>';
+  return h;
+}
+
+/* deal + bid (client) */
+function openDeal(id){STATE._dealId=id;var p=DB.placements.find(function(x){return x.id===id;});var b=p.bids.find(function(x){return x.c===STATE.clientId;});STATE.page=(b&&p.stage!=='open')?'bidTrack':(b?'bidTrack':'dealBid');render();window.scrollTo(0,0);var sh=document.querySelector('.app-shell');if(sh)sh.scrollTop=0;}
+function viewDealBid(id){
+  var p=DB.placements.find(function(x){return x.id===id;}),c=STATE.clientId;
+  var h='<div class="phead"><div><button class="linkish" onclick="navTo(\'placements\')">‹ Placements</button><h1 style="margin-top:6px">'+p.name+' <span class="mono" style="font-size:14px;color:var(--mut);font-weight:400">ASX: '+p.code+'</span></h1></div><span class="pill live"><span class="dot"></span><span id="cd-2">Closes 4:00pm</span></span></div>';
+  h+='<div class="split"><div class="col">';
+  h+='<div class="grid g4">'+statCard('Offer price','$'+p.price.toFixed(2),'','')+statCard('Discount',p.disc+'%','to last close','up')+statCard('Raise size','$'+p.raise+'m','','')+statCard('Minimum',money(p.min),'','')+'</div>';
+  h+='<div class="card"><div class="ch"><b>Terms</b><span class="pill unl">Wholesale s708</span></div><div style="font-size:13px;color:var(--mut);line-height:1.7">New fully paid ordinary shares at $'+p.price.toFixed(2)+', a '+p.disc+'% discount to last close of $'+p.last.toFixed(2)+'. '+(p.opts!=='None'?'Includes '+p.opts.toLowerCase()+'. ':'')+'Lead manager: Vitti Capital.</div><table class="tbl" style="margin-top:8px">'+
+    '<tr><td style="color:var(--mut)">Bids close</td><td class="r mono">'+fmtDate(p.closeDate)+' · 4:00pm</td></tr>'+
+    '<tr><td style="color:var(--mut)">Allocations</td><td class="r mono">'+fmtDate(p.allocDate)+'</td></tr>'+
+    '<tr><td style="color:var(--mut)">Settlement</td><td class="r mono">'+fmtDate(p.settleDate)+'</td></tr>'+
+    '<tr><td style="color:var(--mut)">Allotment</td><td class="r mono">'+fmtDate(p.allotDate)+'</td></tr></table></div>';
+  h+='<div class="card"><div class="ch"><b>Vitti research</b><span class="meta mono">Spec buy · TP $0.78</span></div><div style="font-size:13px">'+p.code+' initiation — drilling the Pilbara\'s quiet corner</div><button class="btn ghost sm" style="margin-top:10px" onclick="toast(\'Research PDF would open here.\')">Read the note</button></div>';
+  h+='</div><div class="col"><div class="card"><div class="ch"><b>Place your bid</b></div>'+
+    '<div class="frow"><label>Bid amount (AUD)</label><input id="bidAmt" class="mono" inputmode="numeric" value="25,000" oninput="bidCalc()"></div>'+
+    '<div class="help" id="bidCalc"></div><div class="help" id="bidErr" style="color:var(--loss-d);display:none">Minimum bid is '+money(p.min)+'.</div>'+
+    '<button class="btn green block" style="margin-top:14px" id="bidBtn" onclick="confirmBidModal()">Review bid</button>'+
+    '<div class="help" style="margin-top:11px"><span style="color:var(--green-d)">✓</span> s708 verified · expires '+DB.clients[c].s708+'</div>'+
+    '<div class="help">Amend or withdraw any time before the book closes.</div></div></div></div>';
+  setTimeout(bidCalc,0);
+  return h;
+}
+function bidCalc(){var p=DB.placements.find(function(x){return x.id===STATE._dealId;});var raw=(document.getElementById('bidAmt').value||'').replace(/[^0-9]/g,'');var a=raw?parseInt(raw,10):0;var sh=a/p.price;var ok=a>=p.min;
+  document.getElementById('bidCalc').textContent = a?('= '+num(sh)+' shares'+(p.opts!=='None'?' + free attaching options':'')):'= — shares';
+  document.getElementById('bidErr').style.display=(a&&!ok)?'block':'none';document.getElementById('bidBtn').disabled=!ok;return {a:a,sh:sh,ok:ok};}
+function confirmBidModal(){var c=bidCalc();if(!c.ok)return;var p=DB.placements.find(function(x){return x.id===STATE._dealId;});
+  openModal('<h3>Confirm your bid</h3><p class="ms">'+p.name+' · '+p.type+' at $'+p.price.toFixed(2)+'</p>'+
+    '<div style="margin:14px 0">'+
+    '<div class="sumrow"><span>Bid amount</span><b>'+money(c.a)+'</b></div>'+
+    '<div class="sumrow"><span>Shares at $'+p.price.toFixed(2)+'</span><b>'+num(c.sh)+'</b></div>'+
+    '<div class="sumrow"><span>Payment if fully allocated</span><b>'+money2(c.a)+'</b></div></div>'+
+    '<label style="display:flex;gap:9px;font-size:12.5px;color:var(--mut);align-items:flex-start;margin-bottom:16px;cursor:pointer"><input type="checkbox" id="cfTerms" style="margin-top:3px" onchange="document.getElementById(\'cfGo\').disabled=!this.checked"><span>I confirm I am a wholesale client (s708), I have read the term sheet, and I understand allocations may be scaled and are conditional on payment by settlement.</span></label>'+
+    '<div style="display:flex;gap:10px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Back</button><button class="btn green" style="flex:1.4" id="cfGo" disabled onclick="placeBid('+c.a+')">Place bid</button></div>');
+}
+function placeBid(amount){var p=DB.placements.find(function(x){return x.id===STATE._dealId;});var c=STATE.clientId;
+  var b=p.bids.find(function(x){return x.c===c;});if(b)b.amount=amount;else p.bids.push({c:c,amount:amount,alloc:null});
+  closeModal();audit('Placed bid',p.code+' · '+money(amount)+' (client portal)');toast('Bid placed: '+money(amount)+' in '+p.code+'.');
+  STATE.page='bidTrack';render();updateBadges();}
+
+function viewBidTrack(id){
+  var p=DB.placements.find(function(x){return x.id===id;}),c=STATE.clientId,b=p.bids.find(function(x){return x.c===c;});
+  var allocated=b.alloc!==null, paid=b._paid, settled=p.stage==='settled';
+  var h='<div class="phead"><div><button class="linkish" onclick="navTo(\'placements\')">‹ Placements</button><h1 style="margin-top:6px">'+p.name+' <span class="mono" style="font-size:14px;color:var(--mut);font-weight:400">'+p.code+'</span></h1></div></div>';
+  h+='<div class="split"><div class="col"><div class="card"><div class="tl">';
+  function row(state,t,s){return '<div class="tl-row"><div class="rail2"><div class="node '+state+'">'+(state==='done'?'✓':(state==='now'?'!':''))+'</div><div class="bar '+(state==='done'?'done':'')+'"></div></div><div class="body"><div class="t"'+(state==='todo'?' style="color:var(--mut)"':'')+'>'+t+'</div><div class="s">'+s+'</div></div></div>';}
+  h+=row('done','Bid placed',fmtDate(TODAY)+' · '+money(b.amount));
+  h+=row(p.stage==='open'?'now':'done','Bids close',fmtDate(p.closeDate)+' · 4:00pm'+(p.stage==='open'?' · you can amend until then':''));
+  h+=row(allocated?'done':(p.stage==='closed'?'now':'todo'),'Allocation '+(allocated?'confirmed':'pending'),allocated?(fmtDate(p.allocDate)+' · '+(b.alloc===0?'nil allocation':(b.alloc<b.amount?'scaled to '+Math.round(b.alloc/b.amount*100)+'%':'filled in full'))):'Expected '+fmtDate(p.allocDate));
+  if(b.alloc>0){
+    h+='<div class="tl-row"><div class="rail2"><div class="node '+(paid?'done':'now')+'">'+(paid?'✓':'$')+'</div><div class="bar '+(paid?'done':'')+'"></div></div><div class="body"><div class="t">'+(paid?'Payment received':'Payment due')+'</div><div class="s">'+(paid?'Confirmed by the Vitti desk':'By '+fmtDate(p.settleDate)+' · '+money(b.alloc))+'</div>'+
+      (!paid?'<div class="card" style="margin-top:8px;padding:12px 14px;box-shadow:none"><div class="sumrow" style="padding:4px 0;border:none"><span>Amount</span><b>'+money2(b.alloc)+'</b></div><div class="sumrow" style="padding:4px 0;border:none"><span>BPAY biller</span><b>254312</b></div><div class="sumrow" style="padding:4px 0;border:none"><span>Reference</span><b>9920 4471 02</b></div><button class="btn navy block sm" style="margin-top:9px" onclick="clientPaid(\''+p.id+'\')">I\'ve paid — notify Vitti</button></div>':'')+
+      '</div></div>';
+    h+=row(settled?'done':'todo','Settlement',fmtDate(p.settleDate));
+    h+=row(settled?'done':'todo','Allotment & quotation',fmtDate(p.allotDate)+(settled?' · holding now in your portfolio':' · holding appears in your portfolio'));
+  }else if(b.alloc===0){
+    h+=row('done','Nil allocation','This raise was oversubscribed. No payment is required.');
+  }
+  h+='</div></div></div><div class="col">';
+  h+='<div class="grid g2" style="gap:12px"><div class="card stat"><div class="l">You bid</div><div class="v mono" style="font-size:20px">'+money(b.amount)+'</div></div>'+
+     (allocated&&b.alloc>0?'<div class="card stat" style="background:var(--green-bg);border-color:var(--green)"><div class="l" style="color:var(--green-d)">Allotted</div><div class="v mono" style="font-size:20px;color:var(--green-d)">'+money(b.alloc)+'</div><div class="d" style="color:var(--green-d)">'+Math.round(b.alloc/b.amount*100)+'%</div></div>':'<div class="card stat"><div class="l">Allotted</div><div class="v" style="font-size:20px;color:var(--mut)">'+(b.alloc===0?'Nil':'Pending')+'</div></div>')+'</div>';
+  if(p.stage==='open')h+='<div class="card"><div class="ch"><b>Manage bid</b></div><div style="display:flex;gap:9px"><button class="btn ghost sm" style="flex:1" onclick="openDealEdit()">Amend</button><button class="btn ghost sm" style="flex:1" onclick="withdrawBid()">Withdraw</button></div></div>';
+  h+='<div class="card"><div class="ch"><b>Need help?</b></div><div style="font-size:12.5px;color:var(--mut)">Your adviser is S. Goyal. Message the desk for a reply within the trading day.</div><button class="btn ghost block sm" style="margin-top:10px" onclick="toast(\'Secure messaging would open here.\')">Message the desk</button></div>';
+  h+='</div></div>';
+  return h;
+}
+function openDealEdit(){STATE.page='dealBid';render();}
+function clientPaid(id){var p=DB.placements.find(function(x){return x.id===id;});var b=p.bids.find(function(x){return x.c===STATE.clientId;});b._paid=true;audit('Notified payment',p.code+' · '+money(b.alloc));toast('Thanks — the desk has been notified.');render();}
+function withdrawBid(){var p=DB.placements.find(function(x){return x.id===STATE._dealId;});p.bids=p.bids.filter(function(x){return x.c!==STATE.clientId;});audit('Withdrew bid',p.code);toast('Bid withdrawn.');navTo('placements');}
+</script>
+
+<script>
+/* ==================== ALERTS (client + admin) ==================== */
+function alertIco(a){var map={expiry:'amber',itm:'green',window:'red',price:a.sev==='amber'?'amber':'green'};var col=a.sev==='red'?'red':(a.sev==='amber'?'amber':map[a.kind]||'green');
+  var path={expiry:'M12 8v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',itm:'M4 18l6-6 4 4 6-8M14 8h4v4',window:'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',price:'M3 17l6-6 4 4 8-8M21 7v6h-6'}[a.kind]||'M12 8v5l3 2';
+  return '<div class="alert-ico '+col+'"><svg viewBox="0 0 24 24">'+ '<path d="'+path+'"/></svg></div>';}
+function alertItemHTML(a,compact){
+  var sevcls=a.sev==='red'?'sev-red':(a.sev==='green'&&a.kind==='itm'?'sev-green':'');
+  var who=(STATE.role==='admin'&&a.client)?'<span class="pill neutral" style="margin-right:6px">'+DB.clients[a.client].av+'</span>':'';
+  return '<div class="alert-item '+(a.ack?'':'unack')+' '+sevcls+'">'+alertIco(a)+
+    '<div class="alert-body"><div class="at">'+who+a.title+'</div><div class="as">'+a.sub+'</div>'+
+    (compact?'':'<div class="meta">'+fmtTime(a.ts)+(a.kind==='window'?' · unlisted exercise window':'')+(a.ack?' · acknowledged':'')+'</div>')+'</div>'+
+    (a.ack?'<span class="pill neutral">Acked</span>':'<button class="btn ghost sm" onclick="ackAlert(\''+a.id+'\')">Acknowledge</button>')+'</div>';
+}
+function viewAlerts(){
+  var list=visibleAlerts();
+  var critical=list.filter(function(a){return a.sev==='red'&&!a.ack;});
+  var others=list.filter(function(a){return !(a.sev==='red'&&!a.ack);});
+  var h='<div class="phead"><div><div class="eyebrow">In-platform &amp; email · manual acknowledgement</div><h1>Alerts</h1><div class="sub">'+(STATE.role==='admin'?'Across all clients. ':'')+'Escalating expiry alerts fire at 30, 14, 7, 3 and 1 days. Unlisted in-the-money options inside their window are flagged red.</div></div><button class="btn ghost sm" onclick="openCustomAlert()">+ Custom price alert</button></div>';
+  h+='<div class="grid g4" style="margin-bottom:18px">'+
+    statCard('Unacknowledged',unackCount()+'','need attention',unackCount()?'dn':'')+
+    statCard('Critical (≤3d / window)',critical.length+'','','')+
+    statCard('In the money',list.filter(function(a){return a.kind==='itm';}).length+'','','')+
+    statCard('Delivery','In-app + email','manual ack required','')+'</div>';
+  if(critical.length){h+='<div class="eyebrow" style="color:var(--loss-d)">Critical — act now</div>';critical.forEach(function(a){h+=alertItemHTML(a,false);});h+='<div style="height:12px"></div>';}
+  h+='<div class="eyebrow">All alerts</div>';
+  if(!others.length&&!critical.length)h+='<div class="card" style="text-align:center;color:var(--mut);padding:30px">No alerts. New triggers will appear here and by email.</div>';
+  others.forEach(function(a){h+=alertItemHTML(a,false);});
+  return h;
+}
+function ackAlert(id){var a=DB.alerts.find(function(x){return x.id===id;});if(a){a.ack=true;audit('Acknowledged alert',a.title);}sortAlerts();render();updateBadges();var sh=document.querySelector('.app-shell');var dr=document.getElementById('drawer');if(dr.classList.contains('on'))renderDrawer();}
+function openCustomAlert(){
+  var opts=Object.keys(DB.clients).map(function(k){return '<option value="'+k+'">'+DB.clients[k].name+'</option>';}).join('');
+  openModal('<h3>Custom price alert</h3><p class="ms">Notify when a security crosses your target. Sent in-app and by email.</p>'+
+    (STATE.role==='admin'?'<div class="frow"><label>Client</label><select id="caClient">'+opts+'</select></div>':'')+
+    '<div class="frow"><label>Security (code)</label><input id="caCode" placeholder="e.g. BHP" value="BHP"></div>'+
+    '<div class="frow"><label>Trigger</label><select id="caDir"><option value="above">Rises above</option><option value="below">Falls below</option></select></div>'+
+    '<div class="frow"><label>Price</label><input id="caPrice" class="mono" value="46.00"></div>'+
+    '<div style="display:flex;gap:10px;margin-top:18px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.3" onclick="saveCustomAlert()">Create alert</button></div>');
+}
+function saveCustomAlert(){var code=(document.getElementById('caCode').value||'?').toUpperCase();var dir=document.getElementById('caDir').value;var pr=document.getElementById('caPrice').value;var cl=STATE.role==='admin'?document.getElementById('caClient').value:STATE.clientId;
+  DB.alerts.unshift({id:'A'+(alertSeq++),client:cl,optId:null,kind:'price',sev:'green',title:code+' alert set ('+dir+' $'+pr+')',sub:'Custom price alert · '+DB.clients[cl].name+' · armed',ts:new Date(auditClock),ack:false});
+  audit('Created price alert',code+' '+dir+' $'+pr);closeModal();sortAlerts();toast('Alert armed for '+code+'.');render();updateBadges();}
+
+/* ==================== ADMIN: OVERVIEW ==================== */
+function viewAdminOverview(){
+  var clients=Object.keys(DB.clients);
+  var aum=0,pl=0;clients.forEach(function(c){aum+=portfolioValue(c);pl+=totalPL(c);});
+  var openDeals=DB.placements.filter(function(p){return p.stage==='open'||p.stage==='closed';}).length;
+  var crit=DB.alerts.filter(function(a){return a.sev==='red'&&!a.ack;}).length;
+  var h='<div class="phead"><div><div class="eyebrow">Consolidated · all clients</div><h1>Book overview</h1></div><div class="feedstat hide-m"><span class="dot"></span>Broker feed · synced 9:41am</div></div>';
+  h+='<div class="grid g4">'+
+    statCard('Total AUM',money(aum),num(clients.length)+' client accounts','')+
+    statCard('Unrealised P&amp;L',money(pl),pct(pl/(aum)*100),signClass(pl))+
+    statCard('Open placements',openDeals+'',pendingAllocCount()+' bids to allocate',pendingAllocCount()?'dn':'')+
+    statCard('Critical alerts',crit+'','expiry / windows',crit?'dn':'')+'</div>';
+  h+='<div class="split" style="margin-top:16px"><div class="col">';
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Clients</b><button class="linkish" onclick="navTo(\'clients\')">Manage</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th class="r">Portfolio</th><th class="r hide-m">Unreal. P&amp;L</th><th class="r">Options</th><th class="r">Alerts</th></tr></thead><tbody>';
+  clients.forEach(function(c){var al=DB.alerts.filter(function(a){return a.client===c&&!a.ack;}).length;var op=clientOptions(c).filter(function(o){return o.status==='open';}).length;var p=totalPL(c);
+    h+='<tr class="clickable" onclick="openClient(\''+c+'\')"><td><span class="pill neutral" style="margin-right:7px">'+DB.clients[c].av+'</span>'+DB.clients[c].name+'<div class="sub2">'+DB.clients[c].type+'</div></td><td class="r mono">'+money(portfolioValue(c))+'</td><td class="r mono hide-m '+signClass(p)+'">'+money(p)+'</td><td class="r mono">'+op+'</td><td class="r">'+(al?'<span class="pill amber">'+al+'</span>':'<span class="pill neutral">0</span>')+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Placements needing action</b><button class="linkish" onclick="navTo(\'placements\')">Open</button></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deal</th><th class="r">Bids</th><th class="r hide-m">Demand</th><th>Status</th><th></th></tr></thead><tbody>';
+  DB.placements.forEach(function(p){var dem=p.bids.reduce(function(s,b){return s+b.amount;},0);var pend=p.bids.some(function(b){return b.alloc===null;});
+    h+='<tr class="clickable" onclick="openAdminDeal(\''+p.id+'\')"><td><span class="code">'+p.code+'</span> · '+p.name+'</td><td class="r mono">'+p.bids.length+'</td><td class="r mono hide-m">'+money(dem)+'</td><td>'+stageBadge(p)+'</td><td class="r">'+(p.stage==='closed'&&pend?'<span class="pill amber">Allocate</span>':'')+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  h+='</div><div class="col">';
+  h+='<div class="card"><div class="ch"><b>Critical alerts</b><button class="linkish" onclick="navTo(\'alerts\')">All</button></div>';
+  var cr=DB.alerts.filter(function(a){return a.sev==='red'&&!a.ack;}).slice(0,4);
+  if(cr.length)cr.forEach(function(a){h+=alertItemHTML(a,true);});else h+='<div style="font-size:12.5px;color:var(--mut)">No critical alerts.</div>';
+  h+='</div>';
+  h+='<div class="card"><div class="ch"><b>Allocation by asset</b></div><div class="alloc-bar"><span style="flex:64;background:var(--navy)"></span><span style="flex:22;background:var(--green)"></span><span style="flex:14;background:#cfc9bb"></span></div><div class="legend"><span><i style="background:var(--navy)"></i>Listed 64%</span><span><i style="background:var(--green)"></i>Unlisted 22%</span><span><i style="background:#cfc9bb"></i>Cash 14%</span></div></div>';
+  h+='</div></div>';
+  return h;
+}
+function stageBadge(p){return {open:'<span class="pill live"><span class="dot"></span>Open</span>',closed:'<span class="pill amber">Closed · allocate</span>',upcoming:'<span class="pill unl">Upcoming</span>',settled:'<span class="pill gain">Settled</span>'}[p.stage];}
+
+/* ==================== ADMIN: CLIENTS ==================== */
+function viewAdminClients(){
+  var h='<div class="phead"><div><div class="eyebrow">Directory</div><h1>Clients</h1></div></div>';
+  h+='<div class="grid g2">';
+  Object.keys(DB.clients).forEach(function(c){var cl=DB.clients[c];var p=totalPL(c);var al=DB.alerts.filter(function(a){return a.client===c&&!a.ack;}).length;
+    h+='<div class="card clickable" onclick="openClient(\''+c+'\')" style="cursor:pointer"><div class="ch"><div style="display:flex;align-items:center;gap:11px"><div class="side-acct"><div class="av" style="background:var(--navy);color:#fff">'+cl.av+'</div></div><div><b>'+cl.name+'</b><div class="sub2">'+cl.type+'</div></div></div>'+(al?'<span class="pill amber">'+al+' alerts</span>':'<span class="pill neutral">OK</span>')+'</div>'+
+    '<div class="grid g3" style="gap:10px;margin-top:4px"><div><div class="stat"><div class="l">Portfolio</div><div class="mono" style="font-weight:600;margin-top:3px">'+money(portfolioValue(c))+'</div></div></div><div><div class="stat"><div class="l">P&amp;L</div><div class="mono '+signClass(p)+'" style="font-weight:600;margin-top:3px">'+money(p)+'</div></div></div><div><div class="stat"><div class="l">s708</div><div class="mono" style="font-weight:600;margin-top:3px;font-size:12px">'+cl.s708+'</div></div></div></div></div>';});
+  h+='</div>';
+  return h;
+}
+function openClient(c){STATE.viewClient=c;STATE.page='clientDetail';audit('Viewed client',DB.clients[c].name);render();window.scrollTo(0,0);}
+function viewAdminClientDetail(c){
+  var cl=DB.clients[c];
+  var h='<div class="phead"><div><button class="linkish" onclick="navTo(\'clients\')">‹ Clients</button><h1 style="margin-top:6px">'+cl.name+'</h1><div class="sub">'+cl.type+' · s708 to '+cl.s708+'</div></div><button class="btn ghost sm" onclick="actAsClient(\''+c+'\')">View as client ↗</button></div>';
+  h+='<div class="grid g4" style="margin-bottom:4px">'+
+    statCard('Portfolio',money(portfolioValue(c)),'','')+
+    statCard('Unrealised P&amp;L',money(totalPL(c)),pct(totalPL(c)/1000/100),signClass(totalPL(c)))+
+    statCard('Cash',money(cashOf(c)),'available','')+
+    statCard('Open options',clientOptions(c).filter(function(o){return o.status==='open';}).length+'','','')+'</div>';
+  h+='<div style="margin-top:16px">'+viewPositions(c,true)+'</div>';
+  h+='<div style="margin-top:16px"><div class="eyebrow">Options held</div>'+optionTable(clientOptions(c).filter(function(o){return o.status!=='expired';}),'Options','Listed + unlisted',false)+'</div>';
+  return h;
+}
+function actAsClient(c){STATE.role='client';STATE.clientId=c;STATE.page='dashboard';audit('Impersonated client (read-only)',DB.clients[c].name);buildNav();render();toast('Viewing as '+DB.clients[c].name+'. Sign out to return.');}
+</script>
+
+<script>
+/* ==================== ADMIN: PLACEMENTS ==================== */
+function viewAdminPlacements(){
+  var h='<div class="phead"><div><div class="eyebrow">Capital raises · all clients</div><h1>Placements</h1></div><button class="btn green sm" onclick="toast(\'New placement setup would open here.\')">+ New placement</button></div>';
+  h+='<div class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Deal</th><th class="hide-m">Type</th><th class="r">Price</th><th class="r">Bids</th><th class="r hide-m">Demand</th><th class="hide-m">Close</th><th>Status</th><th></th></tr></thead><tbody>';
+  DB.placements.forEach(function(p){var dem=p.bids.reduce(function(s,b){return s+b.amount;},0);var pend=p.bids.some(function(b){return b.alloc===null;});
+    h+='<tr class="clickable" onclick="openAdminDeal(\''+p.id+'\')"><td><span class="code">'+p.code+'</span> · '+p.name+'</td><td class="hide-m">'+p.type+'</td><td class="r mono">'+(p.price?'$'+p.price.toFixed(2):'—')+'</td><td class="r mono">'+p.bids.length+'</td><td class="r mono hide-m">'+money(dem)+'</td><td class="hide-m mono">'+fmtDate(p.closeDate)+'</td><td>'+stageBadge(p)+'</td><td class="r">'+(p.stage==='closed'&&pend?'<span class="pill amber">Allocate</span>':(p.stage==='open'?'<span class="pill live">Bidding</span>':''))+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  h+='<div class="help" style="margin-top:10px">Tip: open <b>TTM (Tectonic Metals)</b> — it has closed with four client bids waiting to be allocated. Posting allocations there pushes results straight to each client.</div>';
+  return h;
+}
+function openAdminDeal(id){STATE._dealId=id;STATE.page='placementDetail';render();window.scrollTo(0,0);var sh=document.querySelector('.app-shell');if(sh)sh.scrollTop=0;}
+function viewAdminPlacementDetail(id){
+  var p=DB.placements.find(function(x){return x.id===id;});
+  var dem=p.bids.reduce(function(s,b){return s+b.amount;},0);
+  var raiseCap=p.raise*1e6; var cover=dem/raiseCap;
+  var anyPending=p.bids.some(function(b){return b.alloc===null;});
+  var h='<div class="phead"><div><button class="linkish" onclick="navTo(\'placements\')">‹ Placements</button><h1 style="margin-top:6px">'+p.name+' <span class="mono" style="font-size:14px;color:var(--mut);font-weight:400">'+p.code+'</span></h1><div class="sub">'+p.type+' · '+stageBadge(p)+'</div></div>'+
+    (p.stage==='open'?'<button class="btn navy sm" onclick="adminAddBid(\''+p.id+'\')">+ Bid for a client</button>':'')+'</div>';
+  h+='<div class="grid g4" style="margin-bottom:16px">'+
+    statCard('Offer price',p.price?'$'+p.price.toFixed(2):'—','','')+
+    statCard('Raise size','$'+p.raise+'m','','')+
+    statCard('Total demand',money(dem),(cover>=1?cover.toFixed(1)+'× covered':Math.round(cover*100)+'% of book'),cover>1?'dn':'')+
+    statCard('Bids',p.bids.length+'',anyPending?'awaiting allocation':'allocated','')+'</div>';
+
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Bids by client</b><span class="meta">'+(p.stage==='closed'?'Closed · ready to allocate':p.stage)+'</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th class="r">Bid</th><th class="r">Allotted</th><th class="r hide-m">Fill</th><th>Status</th></tr></thead><tbody>';
+  if(!p.bids.length)h+='<tr><td colspan="5" style="text-align:center;color:var(--mut);padding:20px">No bids yet.</td></tr>';
+  p.bids.forEach(function(b){var st=b.alloc===null?'<span class="pill amber">Pending</span>':(b.alloc===0?'<span class="pill loss">Nil</span>':(b._paid?'<span class="pill gain">Paid</span>':'<span class="pill live">Allotted</span>'));
+    h+='<tr><td><span class="pill neutral" style="margin-right:7px">'+DB.clients[b.c].av+'</span>'+DB.clients[b.c].name+'</td><td class="r mono">'+money(b.amount)+'</td><td class="r mono">'+(b.alloc===null?'—':money(b.alloc))+'</td><td class="r mono hide-m">'+(b.alloc===null?'—':Math.round(b.alloc/b.amount*100)+'%')+'</td><td>'+st+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+
+  if(p.stage==='closed'&&anyPending){
+    h+='<div class="card green" style="margin-top:16px"><div class="ch"><b style="color:var(--green-d)">Post allocations</b><span class="meta">Book is '+cover.toFixed(1)+'× covered</span></div>'+
+      '<div style="font-size:13px;color:var(--mut);margin-bottom:8px">Choose a scaling method. Allocations publish instantly to each client, generate their allocation alert, and open the payment step on their side.</div>'+
+      '<div class="frow"><label>Scaling</label><select id="allocMethod"><option value="pro">Pro-rata scale to fit raise ('+Math.min(100,Math.round(100/cover))+'%)</option><option value="full">Fill all bids in full (100%)</option><option value="65">Fixed 65% scale-back</option></select></div>'+
+      '<button class="btn green block" style="margin-top:14px" onclick="openAllocReview(\''+p.id+'\')">Review &amp; publish allocations</button></div>';
+  } else if(p.stage==='closed'&&!anyPending){
+    if(p.sends&&p.sends.length){
+      h+='<div class="card flush" style="margin-top:16px"><div style="padding:15px 17px 0" class="ch"><b>Client notifications</b><span class="meta">'+p.sends.length+' sent</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th>Channel</th><th class="hide-m">Sent</th><th class="r">Status</th></tr></thead><tbody>';
+      p.sends.forEach(function(s){h+='<tr><td><span class="pill neutral" style="margin-right:6px">'+DB.clients[s.c].av+'</span>'+DB.clients[s.c].name+'</td><td>'+s.ch+'</td><td class="hide-m mono" style="font-size:11.5px">'+fmtTime(s.ts)+'</td><td class="r"><span class="pill '+(s.opened?'gain':'neutral')+'">'+(s.opened?'Opened':'Delivered')+'</span></td></tr>';});
+      h+='</tbody></table></div></div>';
+    }
+    h+='<div class="card" style="margin-top:16px"><div class="ch"><b>Settlement</b></div><div style="font-size:13px;color:var(--mut);margin-bottom:8px">Allocations published. Once payments are received, confirm settlement to issue holdings into client portfolios.</div><button class="btn navy block" onclick="settleDeal(\''+p.id+'\')">Confirm settlement &amp; allot</button></div>';
+  }
+  return h;
+}
+function adminAddBid(id){var p=DB.placements.find(function(x){return x.id===id;});
+  var opts=Object.keys(DB.clients).map(function(k){return '<option value="'+k+'">'+DB.clients[k].name+'</option>';}).join('');
+  openModal('<h3>Bid on behalf of a client</h3><p class="ms">'+p.name+' · '+p.type+' at $'+p.price.toFixed(2)+'</p>'+
+    '<div class="frow"><label>Client</label><select id="abClient">'+opts+'</select></div>'+
+    '<div class="frow"><label>Bid amount (AUD)</label><input id="abAmt" class="mono" value="50,000"></div>'+
+    '<div class="help">Recorded in the audit log as a staff-entered bid.</div>'+
+    '<div style="display:flex;gap:10px;margin-top:18px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.3" onclick="saveAdminBid(\''+p.id+'\')">Submit bid</button></div>');
+}
+function saveAdminBid(id){var p=DB.placements.find(function(x){return x.id===id;});var c=document.getElementById('abClient').value;var amt=parseInt((document.getElementById('abAmt').value||'0').replace(/[^0-9]/g,''),10)||0;
+  var b=p.bids.find(function(x){return x.c===c;});if(b)b.amount=amt;else p.bids.push({c:c,amount:amt,alloc:null});
+  audit('Placed bid for client',DB.clients[c].name+' · '+p.code+' · '+money(amt));closeModal();toast('Bid submitted for '+DB.clients[c].name+'.');render();}
+function allocFactor(p,method){var dem=p.bids.reduce(function(s,b){return s+b.amount;},0);var raiseCap=p.raise*1e6;return method==='full'?1:(method==='65'?0.65:Math.min(1,raiseCap/dem));}
+function openAllocReview(id){var p=DB.placements.find(function(x){return x.id===id;});var method=document.getElementById('allocMethod').value;var f=allocFactor(p,method);
+  var rows=p.bids.map(function(b){var a=Math.round(b.amount*f/1000)*1000;return '<div class="sumrow"><span><span class="pill neutral" style="margin-right:6px">'+DB.clients[b.c].av+'</span>'+DB.clients[b.c].name+'</span><b>'+money(a)+(a<b.amount?' · '+Math.round(a/b.amount*100)+'%':' · full')+'</b></div>';}).join('');
+  openModal('<h3>Publish allocations</h3><p class="ms">'+p.name+' · '+p.bids.length+' clients · '+method+' scaling</p>'+
+    '<div style="margin:12px 0;max-height:200px;overflow:auto">'+rows+'</div>'+
+    '<label style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--mut);cursor:pointer;margin-bottom:10px"><input type="checkbox" id="alEmail" checked style="margin-top:3px"><span>Notify each client by <b>email + in-app</b> with their allocation and payment details</span></label>'+
+    '<div class="frow"><label>Message to clients</label><textarea id="alMsg" style="width:100%;border:1px solid var(--line-2);border-radius:9px;padding:10px 12px;font-size:13px;min-height:64px;font-family:inherit">Your allocation in '+p.name+' ('+p.code+') is confirmed. Payment details are in your portal; settlement is '+fmtDate(p.settleDate)+'.</textarea></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Back</button><button class="btn green" style="flex:1.5" onclick="postAllocations(\''+id+'\',\''+method+'\')">Publish &amp; notify clients</button></div>');
+}
+function postAllocations(id,method){var p=DB.placements.find(function(x){return x.id===id;});
+  var email=document.getElementById('alEmail')?document.getElementById('alEmail').checked:true;
+  var msg=document.getElementById('alMsg')?document.getElementById('alMsg').value:'';
+  var f=allocFactor(p,method);
+  p.bids.forEach(function(b){b.alloc=Math.round(b.amount*f/1000)*1000;});
+  p.allocDate=TODAY; p.sends=p.sends||[];
+  p.bids.forEach(function(b){
+    DB.alerts.unshift({id:'A'+(alertSeq++),client:b.c,optId:null,kind:'price',sev:'green',title:p.code+' allocation: '+money(b.alloc)+(b.alloc<b.amount?' ('+Math.round(b.alloc/b.amount*100)+'%)':' (full)'),sub:'You were allotted '+money(b.alloc)+' of your '+money(b.amount)+' bid · payment by '+fmtDate(p.settleDate),ts:new Date(auditClock),ack:false});
+    if(email)p.sends.push({c:b.c,ch:'Email + in-app',ts:new Date(auditClock),opened:Math.random()>0.4});
+  });
+  audit('Published allocations',p.code+' · '+method+' scaling · '+p.bids.length+' clients'+(email?' · emailed':''));
+  sortAlerts();closeModal();toast('Allocations published'+(email?' and emailed':'')+' to '+p.bids.length+' clients.');render();updateBadges();
+}
+function settleDeal(id){var p=DB.placements.find(function(x){return x.id===id;});p.stage='settled';
+  // issue holdings to clients with alloc>0 (as listed positions)
+  p.bids.forEach(function(b){if(b.alloc>0){var sh=Math.round(b.alloc/p.price);
+    DB.positions.push({c:b.c,code:p.code,name:p.name,qty:sh,cost:p.price,last:p.last||p.price,sector:'Placement'});
+    if(p.opts!=='None'){var existing=DB.options.find(function(o){return o.c===b.c&&o.code===p.code+'O';});var oqty=Math.round(sh* (p.opts.indexOf('1:1')>-1?1:0.5));
+      if(existing)existing.qty+=oqty; else DB.options.push({id:'O'+(DB.options.length+20),c:b.c,code:p.code+'O',name:p.name+' options',listed:false,type:'Call',qty:oqty,strike:0.75,under:(p.last||p.price),dte:730,source:'Placement attaching',status:'open'});}
+    DB.alerts.unshift({id:'A'+(alertSeq++),client:b.c,optId:null,kind:'itm',sev:'green',title:p.code+' allotted to your portfolio',sub:num(sh)+' shares issued at $'+p.price.toFixed(2)+' · now visible in Positions',ts:new Date(auditClock),ack:false});
+  }});
+  audit('Confirmed settlement',p.code+' · holdings issued to clients');
+  scanAlertsKeepCustom();toast(p.code+' settled — holdings issued to clients.');render();updateBadges();
+}
+function scanAlertsKeepCustom(){var custom=DB.alerts.filter(function(a){return a.kind==='price'||(a.kind==='itm'&&a.sub.indexOf('issued')>-1)||a.sub.indexOf('allotted')>-1||a.sub.indexOf('allotment')>-1;});scanAlerts();DB.alerts=custom.concat(DB.alerts);sortAlerts();}
+
+/* ==================== ADMIN: OPTIONS (cross-client + filters) ==================== */
+function viewOptionsAdmin(){
+  var f=STATE.filters;
+  var rows=DB.options.filter(function(o){
+    if(f.client!=='all'&&o.c!==f.client)return false;
+    if(f.type==='listed'&&!o.listed)return false;
+    if(f.type==='unlisted'&&o.listed)return false;
+    if(f.expiry==='7'&&!(o.dte<=7&&o.dte>=0))return false;
+    if(f.expiry==='30'&&!(o.dte<=30&&o.dte>=0))return false;
+    if(f.money==='itm'&&!isITM(o))return false;
+    if(f.money==='otm'&&isITM(o))return false;
+    return true;
+  });
+  var live=rows.filter(function(o){return o.status==='open';});
+  var log=DB.options.filter(function(o){return o.status!=='open'&&(f.client==='all'||o.c===f.client);});
+  var clientOpts='<option value="all">All clients</option>'+Object.keys(DB.clients).map(function(k){return '<option value="'+k+'"'+(f.client===k?' selected':'')+'>'+DB.clients[k].name+'</option>';}).join('');
+  var h='<div class="phead"><div><div class="eyebrow">All clients · listed feed + manual unlisted</div><h1>Options tracker</h1></div><button class="btn navy sm" onclick="addUnlisted()">+ Add unlisted option</button></div>';
+  h+='<div class="filters">'+
+    '<label>Client</label><select onchange="setFilter(\'client\',this.value)">'+clientOpts+'</select>'+
+    '<label>Type</label><select onchange="setFilter(\'type\',this.value)"><option value="all"'+sel(f.type,'all')+'>All</option><option value="listed"'+sel(f.type,'listed')+'>Listed</option><option value="unlisted"'+sel(f.type,'unlisted')+'>Unlisted</option></select>'+
+    '<label>Expiry</label><select onchange="setFilter(\'expiry\',this.value)"><option value="all"'+sel(f.expiry,'all')+'>Any</option><option value="7"'+sel(f.expiry,'7')+'>≤ 7 days</option><option value="30"'+sel(f.expiry,'30')+'>≤ 30 days</option></select>'+
+    '<label>Moneyness</label><select onchange="setFilter(\'money\',this.value)"><option value="all"'+sel(f.money,'all')+'>All</option><option value="itm"'+sel(f.money,'itm')+'>In the money</option><option value="otm"'+sel(f.money,'otm')+'>Out of money</option></select>'+
+    (anyFilter()?'<button class="btn ghost sm" onclick="clearFilters()">Clear</button>':'')+'</div>';
+  h+=optionTable(live,'Live options ('+live.length+')','Filtered view · listed prices from broker feed, unlisted entered manually',true);
+  h+='<div style="height:16px"></div>';
+  h+='<div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Exercised / expired / lapsed log</b><span class="meta">Audit history</span></div><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Client</th><th>Series</th><th class="r">Qty</th><th class="r">Strike</th><th>Outcome</th><th class="hide-m">Date</th></tr></thead><tbody>';
+  var logRows=log.concat([{c:'C3',code:'PLSO',name:'Pilbara options',qty:18000,strike:4.00,_out:'Lapsed OTM',_date:addDays(-21)},{c:'C1',code:'BHPO',name:'BHP options',qty:5000,strike:40.00,_out:'Exercised',_date:addDays(-15)}]);
+  logRows.forEach(function(o){var out=o._out||(o.status==='expired'?'Expired OTM':'Closed');
+    h+='<tr><td><span class="pill neutral">'+DB.clients[o.c].av+'</span></td><td><span class="code">'+o.code+'</span></td><td class="r mono">'+num(o.qty)+'</td><td class="r mono">$'+o.strike.toFixed(2)+'</td><td><span class="pill '+(out.indexOf('Exercis')>-1?'gain':'neutral')+'">'+out+'</span></td><td class="hide-m mono">'+fmtDate(o._date||addDays(o.dte))+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+function sel(a,b){return a===b?' selected':'';}
+function anyFilter(){var f=STATE.filters;return f.client!=='all'||f.type!=='all'||f.expiry!=='all'||f.money!=='all';}
+function setFilter(k,v){STATE.filters[k]=v;render();}
+function clearFilters(){STATE.filters={client:'all',type:'all',expiry:'all',money:'all'};render();}
+function addUnlisted(){var opts=Object.keys(DB.clients).map(function(k){return '<option value="'+k+'">'+DB.clients[k].name+'</option>';}).join('');
+  openModal('<h3>Add unlisted option</h3><p class="ms">Unlisted options are not on the broker feed — enter them on the register manually.</p>'+
+    '<div class="frow"><label>Client</label><select id="uoClient">'+opts+'</select></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Code</label><input id="uoCode" value="XYZO"></div><div class="frow"><label>Quantity</label><input id="uoQty" class="mono" value="20,000"></div></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Strike ($)</label><input id="uoStrike" class="mono" value="1.00"></div><div class="frow"><label>Underlying ($)</label><input id="uoUnder" class="mono" value="1.10"></div></div>'+
+    '<div class="frow"><label>Days to expiry</label><input id="uoDte" class="mono" value="20"></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.3" onclick="saveUnlisted()">Add option</button></div>');
+}
+function saveUnlisted(){var c=document.getElementById('uoClient').value;
+  var o={id:'O'+(DB.options.length+30),c:c,code:document.getElementById('uoCode').value.toUpperCase(),name:document.getElementById('uoCode').value.toUpperCase()+' options',listed:false,type:'Call',
+    qty:parseInt((document.getElementById('uoQty').value||'0').replace(/[^0-9]/g,''),10)||0,
+    strike:parseFloat(document.getElementById('uoStrike').value)||0,under:parseFloat(document.getElementById('uoUnder').value)||0,
+    dte:parseInt(document.getElementById('uoDte').value,10)||0,source:'Manually entered',status:'open'};
+  DB.options.push(o);audit('Added unlisted option',o.code+' for '+DB.clients[c].name);scanAlertsKeepCustom();closeModal();toast('Unlisted option added and scanned for alerts.');render();updateBadges();}
+
+/* ==================== ADMIN: AUDIT ==================== */
+function viewAudit(){
+  var h='<div class="phead"><div><div class="eyebrow">Security · immutable record</div><h1>Audit log</h1><div class="sub">Every sign-in and action, with time, user and detail.</div></div><button class="btn ghost sm" onclick="toast(\'CSV export would download here.\')">Export CSV</button></div>';
+  h+='<div class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Time</th><th>User</th><th>Action</th><th class="hide-m">Detail</th></tr></thead><tbody>';
+  if(!DB.audit.length)h+='<tr><td colspan="4" style="text-align:center;color:var(--mut);padding:20px">No events yet.</td></tr>';
+  DB.audit.forEach(function(e){h+='<tr><td class="mono" style="font-size:11.5px;white-space:nowrap">'+fmtTime(e.ts)+'</td><td>'+e.user+'<div class="sub2">'+(e.role==='admin'?'staff':'client')+'</div></td><td>'+e.action+'</td><td class="hide-m" style="color:var(--mut)">'+e.detail+'</td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+
+/* ==================== MODAL / TOAST / DRAWER ==================== */
+function openModal(html){document.getElementById('modal').innerHTML=html;document.getElementById('overlay').classList.add('on');}
+function closeModal(){document.getElementById('overlay').classList.remove('on');}
+var toastTimer;
+function toast(msg){var t=document.getElementById('toast');document.getElementById('toast-msg').textContent=msg;t.classList.add('on');clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove('on');},3200);}
+function openAlertsDrawer(){renderDrawer();document.getElementById('drawer').classList.add('on');}
+function closeAlertsDrawer(){document.getElementById('drawer').classList.remove('on');}
+function renderDrawer(){var list=visibleAlerts();var b=document.getElementById('drawer-body');var h='';if(!list.length)h='<div style="color:var(--mut);font-size:13px">No alerts.</div>';list.slice(0,12).forEach(function(a){h+=alertItemHTML(a,false);});b.innerHTML=h;}
+
+/* live countdown for the open deal */
+setInterval(function(){var els=document.querySelectorAll('#cd-1,#cd-2');if(!els.length)return;var now=new Date();var close=new Date();close.setHours(16,0,0,0);var diff=Math.max(0,close-now);var h=Math.floor(diff/3.6e6),m=Math.floor(diff%3.6e6/6e4),s=Math.floor(diff%6e4/1e3);var t='closes '+h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');els.forEach(function(e){e.textContent=t;});},1000);
+
+/* boot */
+setDevice('web');
+</script>
+
+<script>
+/* ==================== CHART HELPERS ==================== */
+function donutHTML(segs,size,thick){
+  size=size||120;thick=thick||16;var r=(size-thick)/2,cx=size/2,cy=size/2,C=2*Math.PI*r,off=0,total=0;
+  segs.forEach(function(s){total+=s.v;});
+  var circ='';
+  segs.forEach(function(s){var frac=total?s.v/total:0;var len=frac*C;
+    circ+='<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.col+'" stroke-width="'+thick+'" stroke-dasharray="'+len+' '+(C-len)+'" stroke-dashoffset="'+(-off)+'" transform="rotate(-90 '+cx+' '+cy+')"/>';
+    off+=len;});
+  return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 '+size+' '+size+'">'+circ+'</svg>';
+}
+function barsHTML(items,h){h=h||120;var max=Math.max.apply(null,items.map(function(i){return Math.abs(i.v);}))||1;
+  var w=100/items.length;var bars='';
+  items.forEach(function(it,i){var bh=Math.abs(it.v)/max*(h-26);var col=it.col||(it.v<0?'var(--loss)':'var(--green)');
+    bars+='<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;min-width:0">'+
+      '<div style="font-family:var(--mono);font-size:9.5px;color:var(--mut)">'+(it.lab2||'')+'</div>'+
+      '<div style="width:60%;max-width:30px;height:'+bh+'px;background:'+col+';border-radius:3px 3px 0 0"></div>'+
+      '<div style="font-size:9.5px;color:var(--mut);text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%">'+it.lab+'</div></div>';});
+  return '<div style="display:flex;align-items:flex-end;gap:4px;height:'+h+'px">'+bars+'</div>';
+}
+function tickerHTML(){
+  var t=DB.indices.map(function(x){var cls=x.chg>=0?'tick-up':'tick-dn';var ar=x.chg>=0?'▲':'▼';
+    return '<span style="margin-right:22px">'+x.code+' '+x.last.toLocaleString('en-AU',{minimumFractionDigits:x.dp!=null?x.dp:1,maximumFractionDigits:x.dp!=null?x.dp:1})+' <span class="'+cls+'">'+ar+' '+Math.abs(x.chg).toFixed(2)+'%</span></span>';}).join('');
+  return t+t;
+}
+
+/* ==================== MARKETS & RESEARCH (client) ==================== */
+function viewMarkets(){
+  var n=DB.note;
+  var h='<div class="phead"><div><div class="eyebrow">Daily ASX briefing · '+fmtDate(TODAY)+'</div><h1>Markets &amp; research</h1></div><span class="feedstat hide-m"><span class="dot"></span>Live · '+n.time+'</span></div>';
+  // index strip
+  h+='<div class="card flush" style="margin-bottom:16px"><div class="idx-strip">';
+  DB.indices.forEach(function(x){var cls=x.chg>=0?'up':'dn';var ar=x.chg>=0?'▲':'▼';
+    h+='<div class="idx"><div class="idx-n">'+x.code+'</div><div class="idx-v mono">'+x.last.toLocaleString('en-AU',{minimumFractionDigits:x.dp!=null?x.dp:1,maximumFractionDigits:x.dp!=null?x.dp:1})+'</div><div class="idx-c '+cls+' mono">'+ar+' '+Math.abs(x.chg).toFixed(2)+'%</div></div>';});
+  h+='</div></div>';
+  h+='<div class="split"><div class="col">';
+  // morning note
+  h+='<div class="card navy"><div class="ch"><b style="color:#fff">Morning note</b><span class="meta">'+n.time+' · research desk</span></div>'+
+     '<div style="font-family:var(--disp);font-size:19px;font-weight:500;line-height:1.25;margin-bottom:8px">'+n.title+'</div>'+
+     '<div style="font-size:13.5px;color:#c8cdde;line-height:1.6">'+n.body+'</div>'+
+     '<button class="btn green sm" style="margin-top:13px" onclick="toast(\'Full note would open as a PDF.\')">Read the full note</button></div>';
+  // recommendations now live in Invest
+  h+='<div class="card ai-teaser"><div class="ch"><b>Investment ideas</b></div><div style="font-size:13px;color:var(--mut);margin-bottom:11px">Curated ideas with a clear entry range and price target live in the Invest tab — pick a goal and we’ll narrow it down for you.</div><button class="btn green block sm" onclick="navTo(\'invest\')">Browse ideas →</button></div></div>';
+  // right column
+  h+='<div class="col">';
+  h+='<div class="card"><div class="ch"><b>Latest reports</b></div>';
+  DB.reports.forEach(function(rp,i){h+='<div style="padding:10px 0;'+(i?'border-top:1px solid var(--line)':'')+'"><div style="font-size:13px;font-weight:600">'+rp.title+'</div><div class="sub2">'+rp.kind+' · '+fmtDate(rp.date)+' · '+rp.pp+' pp</div></div>';});
+  h+='<button class="btn ghost block sm" style="margin-top:8px" onclick="toast(\'Research library would open here.\')">All research</button></div>';
+  // Ask Vitti teaser
+  h+='<div class="card ai-teaser"><div class="ch"><b>Ask Vitti</b><span class="ai-dot">AI</span></div><div style="font-size:13px;color:var(--mut);margin-bottom:11px">Get a plain-English read on today’s market and your holdings.</div><button class="btn navy block sm" onclick="navTo(\'askvitti\')">Open Vitti Intelligence →</button></div>';
+  h+='</div></div>';
+  return h;
+}
+
+/* ==================== WATCHLIST (client) ==================== */
+function viewWatchlist(){
+  var c=STATE.clientId; var list=DB.watch[c]||[];
+  var h='<div class="phead"><div><div class="eyebrow">Tracked securities &amp; price alerts</div><h1>Watchlist</h1></div><button class="btn green sm" onclick="openAddWatch()">+ Add security</button></div>';
+  // any watched stock with a live deal?
+  var liveCodes=DB.placements.filter(function(p){return p.stage==='open';}).map(function(p){return p.code;});
+  var bridge=list.find(function(w){return liveCodes.indexOf(w.code)>-1;});
+  if(bridge){var dl=DB.placements.find(function(p){return p.code===bridge.code;});
+    h+='<div class="card green" style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><span class="pill live"><span class="dot"></span>From your watchlist</span><div style="font-weight:600;margin-top:6px">'+bridge.name+' has a live placement at a '+dl.disc+'% discount.</div><div class="sub2">Closes today · ASX: '+dl.code+'</div></div><button class="btn green sm" onclick="openDeal(\''+dl.id+'\')">Review deal</button></div></div>';}
+  h+='<div class="card flush"><div class="tbl-wrap"><table class="tbl"><thead><tr><th>Code</th><th class="hide-m">Name</th><th class="r">Last</th><th class="r">Today</th><th>Alert</th><th></th></tr></thead><tbody>';
+  if(!list.length)h+='<tr><td colspan="6" style="text-align:center;color:var(--mut);padding:24px">Your watchlist is empty. Add a security to track its price and set alerts.</td></tr>';
+  list.forEach(function(w,i){var cls=w.chg>=0?'up':'dn';
+    h+='<tr><td><span class="code">'+w.code+'</span></td><td class="hide-m">'+w.name+(w.unl?' <span class="pill unl" style="margin-left:4px">Unlisted</span>':'')+'</td>'+
+      '<td class="r mono">'+(w.last!=null?'$'+w.last.toFixed(w.last<10?3:2):'—')+'</td>'+
+      '<td class="r mono '+(w.last!=null?cls:'')+'">'+(w.last!=null?(w.chg>=0?'+':'')+w.chg.toFixed(1)+'%':'—')+'</td>'+
+      '<td>'+(w.alert?'<span class="pill amber">'+(w.dir==='below'?'≤':'≥')+' $'+w.alert.toFixed(2)+'</span>':'<button class="linkish" onclick="setWatchAlert('+i+')">Set alert</button>')+'</td>'+
+      '<td class="r"><button class="iconbtn" style="padding:5px" onclick="removeWatch('+i+')"><svg viewBox="0 0 24 24" width="15" height="15"><path d="M6 6l12 12M18 6 6 18"/></svg></button></td></tr>';});
+  h+='</tbody></table></div></div>';
+  return h;
+}
+function addToWatch(code,name){var c=STATE.clientId;DB.watch[c]=DB.watch[c]||[];if(DB.watch[c].some(function(w){return w.code===code;})){toast(code+' is already on your watchlist.');return;}
+  var reco=DB.recos.find(function(r){return r.code===code;});DB.watch[c].unshift({code:code,name:name,last:reco&&reco.tp?reco.tp*0.9:1.00,chg:1.0,alert:null});audit('Added to watchlist',code);toast(code+' added to your watchlist.');if(STATE.page==='watchlist')render();}
+function removeWatch(i){var c=STATE.clientId;var w=DB.watch[c][i];DB.watch[c].splice(i,1);audit('Removed from watchlist',w.code);render();}
+function setWatchAlert(i){var c=STATE.clientId;var w=DB.watch[c][i];
+  openModal('<h3>Price alert · '+w.code+'</h3><p class="ms">'+w.name+' · last $'+(w.last!=null?w.last.toFixed(2):'—')+'</p><div class="frow"><label>Notify when price</label><select id="waDir"><option value="above">rises above</option><option value="below">falls below</option></select></div><div class="frow"><label>Target price</label><input id="waPrice" class="mono" value="'+(w.last!=null?(w.last*1.05).toFixed(2):'1.00')+'"></div><div style="display:flex;gap:10px;margin-top:18px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.3" onclick="saveWatchAlert('+i+')">Set alert</button></div>');}
+function saveWatchAlert(i){var c=STATE.clientId;var w=DB.watch[c][i];w.alert=parseFloat(document.getElementById('waPrice').value)||w.last;w.dir=document.getElementById('waDir').value;
+  DB.alerts.unshift({id:'A'+(alertSeq++),client:c,optId:null,kind:'price',sev:'green',title:w.code+' alert armed ('+(w.dir==='below'?'≤':'≥')+' $'+w.alert.toFixed(2)+')',sub:'Custom price alert · '+w.name,ts:new Date(auditClock),ack:false});
+  audit('Set price alert',w.code+' '+w.dir+' $'+w.alert);sortAlerts();closeModal();toast('Alert armed for '+w.code+'.');render();updateBadges();}
+function openAddWatch(){openModal('<h3>Add to watchlist</h3><p class="ms">Track any ASX security for live prices and alerts.</p><div class="frow"><label>Code</label><input id="nwCode" placeholder="e.g. WBC"></div><div class="frow"><label>Name</label><input id="nwName" placeholder="Westpac Banking"></div><div style="display:flex;gap:10px;margin-top:18px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.3" onclick="var cd=document.getElementById(\'nwCode\').value.toUpperCase();addToWatch(cd,document.getElementById(\'nwName\').value||cd);closeModal()">Add</button></div>');}
+
+/* ==================== ASK VITTI (AI assistant) ==================== */
+var AICONV={};
+function aiSeed(c){
+  if(AICONV[c])return;
+  AICONV[c]=[{role:'ai',text:'Good morning, '+DB.clients[c].name.split(' ')[0]+'. I’m Vitti Intelligence. Here’s your briefing for '+fmtDate(TODAY)+':',brief:true},
+    {role:'ai',text:'Your portfolio is '+money(portfolioValue(c))+' ('+pct(dailyPL(c)/portfolioValue(c)*100)+' today). The MRD placement closes at 4:00pm, and one of your unlisted options is in the money inside its exercise window. Ask me anything below.'}];
+}
+function viewAskVitti(){
+  var c=STATE.clientId; aiSeed(c);
+  var h='<div class="phead"><div><div class="eyebrow">Vitti Intelligence · prototype</div><h1>Ask Vitti <span class="ai-dot" style="vertical-align:middle">AI</span></h1><div class="sub">Daily market and stock updates in plain English. In production this connects to live market data and your portfolio.</div></div></div>';
+  h+='<div class="ai-wrap"><div class="ai-thread" id="ai-thread">';
+  AICONV[c].forEach(function(m){h+=aiBubble(m);});
+  h+='</div>';
+  h+='<div class="ai-suggest" id="ai-suggest">'+DB.ai.suggested.map(function(q){return '<button class="ai-chip" onclick="askVitti(this.dataset.q)" data-q="'+q.replace(/"/g,'&quot;')+'">'+q+'</button>';}).join('')+'</div>';
+  h+='<div class="ai-input"><input id="ai-box" placeholder="Ask about your portfolio, a stock, or the market…" onkeydown="if(event.key===\'Enter\'){askVitti(this.value);this.value=\'\'}"><button class="btn navy" onclick="var b=document.getElementById(\'ai-box\');askVitti(b.value);b.value=\'\'">Send</button></div>';
+  h+='<div class="help" style="text-align:center;margin-top:8px">Prototype responses. Vitti Intelligence does not provide personal financial advice.</div></div>';
+  return h;
+}
+function aiBubble(m){
+  if(m.role==='user')return '<div class="ai-row user"><div class="ai-msg user">'+m.text+'</div></div>';
+  return '<div class="ai-row"><div class="ai-av">V</div><div class="ai-msg'+(m.brief?' brief':'')+'">'+m.text+'</div></div>';
+}
+function askVitti(q){
+  q=(q||'').trim(); if(!q)return; var c=STATE.clientId; aiSeed(c);
+  AICONV[c].push({role:'user',text:q});
+  var ans='I can help with your portfolio, your options and placements, watchlist names, and the daily market read. Try one of the suggestions, or ask about a specific holding.';
+  for(var i=0;i<DB.ai.answers.length;i++){if(DB.ai.answers[i].q.test(q)){ans=DB.ai.answers[i].a(c);break;}}
+  AICONV[c].push({role:'ai',text:ans});
+  audit('Asked Vitti Intelligence',q.slice(0,60));
+  render(); setTimeout(scrollAIBottom,30);
+}
+function scrollAIBottom(){var t=document.getElementById('ai-thread');if(t)t.scrollTop=t.scrollHeight;}
+
+/* ==================== ADMIN: RESEARCH DESK ==================== */
+function viewAdminResearch(){
+  var n=DB.note;
+  var h='<div class="phead"><div><div class="eyebrow">Publish to all clients</div><h1>Research desk</h1><div class="sub">Push the daily note, ratings and market updates. Anything you publish appears on every client’s Markets tab and can trigger an alert.</div></div></div>';
+  h+='<div class="split"><div class="col">';
+  h+='<div class="card"><div class="ch"><b>Today’s morning note</b><span class="pill live"><span class="dot"></span>Published '+n.time+'</span></div>'+
+     '<div class="frow"><label>Headline</label><input id="rdTitle" value="'+n.title.replace(/"/g,'&quot;')+'"></div>'+
+     '<div class="frow"><label>Body</label><textarea id="rdBody" style="width:100%;border:1px solid var(--line-2);border-radius:9px;padding:10px 12px;font-size:13px;min-height:90px;font-family:inherit">'+n.body+'</textarea></div>'+
+     '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--mut);margin-top:10px"><input type="checkbox" id="rdAlert" checked> Send an in-app + email alert to all clients</label>'+
+     '<button class="btn green block" style="margin-top:13px" onclick="publishNote()">Publish update to all clients</button></div>';
+  h+='<div class="card"><div class="ch"><b>Investment ideas</b><button class="btn green sm" onclick="openIdeaComposer()">+ Publish idea</button></div><div style="font-size:13px;color:var(--mut);margin-bottom:10px">Ideas appear on every client’s Invest tab with a 60-word thesis, entry range and target. '+DB.ideas.length+' live.</div><table class="tbl">';
+  DB.ideas.slice(0,6).forEach(function(i){var up=upside(i);h+='<tr><td><span class="code">'+i.code+'</span><div class="sub2">'+i.theme+'</div></td><td class="r mono">'+(i.target!=null?'$'+i.target.toFixed(2):'deal')+'</td><td class="r mono '+(up>0?'up':'')+'">'+(up!=null?'+'+up+'%':'—')+'</td></tr>';});
+  h+='</table></div>';
+  h+='<div class="card"><div class="ch"><b>Broadcast a market update</b></div><div style="font-size:13px;color:var(--mut);margin-bottom:8px">A short alert pushed to every client (e.g. a stock on the move, a deal reminder).</div><div class="frow"><input id="bcMsg" placeholder="e.g. Lithium names rallying — MRD book closes 4:00pm"></div><button class="btn navy block" style="margin-top:10px" onclick="broadcastUpdate()">Send to all clients</button></div>';
+  h+='</div><div class="col">';
+  h+='<div class="card"><div class="ch"><b>Recommendations live</b><span class="meta">on client Markets tab</span></div><table class="tbl">';
+  DB.recos.forEach(function(r){var rc=r.rating.indexOf('buy')>-1||r.rating==='Buy'?'gain':(r.rating==='Hold'?'neutral':'loss');h+='<tr><td><span class="code">'+r.code+'</span></td><td><span class="pill '+rc+'">'+r.rating+'</span></td><td class="r mono">'+(r.tp?'$'+r.tp.toFixed(2):'—')+'</td></tr>';});
+  h+='</table></div>';
+  h+='<div class="card"><div class="ch"><b>Reach</b></div><div class="grid g2" style="gap:10px"><div class="stat"><div class="l">Clients</div><div class="v" style="font-size:22px">'+Object.keys(DB.clients).length+'</div></div><div class="stat"><div class="l">Last note</div><div class="v" style="font-size:16px">'+n.time+'</div></div></div></div>';
+  h+='</div></div>';
+  return h;
+}
+function publishNote(){DB.note.title=document.getElementById('rdTitle').value;DB.note.body=document.getElementById('rdBody').value;DB.note.time=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+  if(document.getElementById('rdAlert').checked){Object.keys(DB.clients).forEach(function(c){DB.alerts.unshift({id:'A'+(alertSeq++),client:c,optId:null,kind:'price',sev:'green',title:'New morning note from Vitti',sub:DB.note.title,ts:new Date(auditClock),ack:false});});}
+  audit('Published morning note',DB.note.title.slice(0,50));sortAlerts();toast('Morning note published to all clients.');render();updateBadges();}
+function broadcastUpdate(){var m=document.getElementById('bcMsg').value.trim();if(!m){toast('Enter a message to broadcast.');return;}
+  Object.keys(DB.clients).forEach(function(c){DB.alerts.unshift({id:'A'+(alertSeq++),client:c,optId:null,kind:'price',sev:'amber',title:'Market update',sub:m,ts:new Date(auditClock),ack:false});});
+  audit('Broadcast market update',m.slice(0,50));sortAlerts();toast('Update sent to all clients.');render();updateBadges();}
+</script>
+
+<script>
+/* ==================== INVEST — guided discovery ==================== */
+function ideaByCode(code){return DB.ideas.find(function(i){return i.code===code;});}
+function inBuyZone(i){return i.last!=null&&i.entryLo!=null&&i.last>=i.entryLo&&i.last<=i.entryHi;}
+function upside(i){return (i.target!=null&&i.last)?Math.round((i.target/i.last-1)*100):null;}
+function convDots(n){var s='';for(var k=0;k<3;k++)s+='<span class="cd'+(k<n?' on':'')+'"></span>';return '<span class="conv">'+s+'</span>';}
+function riskPill(r){var cl=r==='Low'?'gain':(r==='Medium'?'amber':'loss');return '<span class="pill '+cl+'">'+r+' risk</span>';}
+function entryZoneHTML(i){
+  if(i.entryLo==null)return '<div class="ez"><div class="ez-lab"><span>Deal price</span><span class="mono">$'+(ideaDealPrice(i)||'—')+'</span></div></div>';
+  var lo=i.entryLo,hi=i.entryHi,pad=(hi-lo)*0.6||0.1;var min=lo-pad,max=hi+pad;
+  var pos=Math.max(0,Math.min(100,(i.last-min)/(max-min)*100));
+  var zl=(lo-min)/(max-min)*100, zw=(hi-lo)/(max-min)*100;
+  var inz=inBuyZone(i);
+  return '<div class="ez"><div class="ez-lab"><span>Entry $'+lo.toFixed(2)+'–$'+hi.toFixed(2)+'</span>'+(inz?'<span class="pill gain" style="padding:1px 8px">In buy zone</span>':'<span class="mono" style="color:var(--mut)">now $'+i.last.toFixed(2)+'</span>')+'</div>'+
+    '<div class="ez-bar"><div class="ez-zone" style="left:'+zl+'%;width:'+zw+'%"></div><div class="ez-now" style="left:'+pos+'%"></div></div></div>';
+}
+function ideaDealPrice(i){if(!i.deal)return null;var p=DB.placements.find(function(x){return x.id===i.deal;});return p?p.price.toFixed(2):null;}
+function viewInvest(){
+  var goal=STATE.investGoal, theme=STATE.investTheme||'All';
+  var goalObj=goal?DB.goals.find(function(g){return g.k===goal;}):null;
+  var h='<div class="phead"><div><div class="eyebrow">Curated by Vitti research</div><h1>Invest</h1><div class="sub">A short, explained set of ideas with clear targets and timeframes — built around what you want, not an endless list.</div></div></div>';
+  // plan + targets, or build prompt
+  if(PLANS[STATE.clientId]){ h+=planSummaryHTML(STATE.clientId); }
+  else if(goalObj){
+    h+='<div class="card green" style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><div style="flex:1;min-width:200px"><div class="eyebrow" style="margin-bottom:3px">Your focus</div><div style="font-weight:600;font-size:15px">'+goalObj.label+'</div><div class="sub2">'+goalObj.blurb+'</div></div><button class="btn navy sm" onclick="openPlanBuilder()">Build a full plan →</button></div></div>';
+  }else{
+    h+='<div class="card navy" style="margin-bottom:16px"><div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap"><div style="flex:1;min-width:220px"><div style="font-family:var(--disp);font-size:21px;font-weight:500">Put your capital to work, with a plan</div><div style="color:#c8cdde;font-size:13.5px;margin-top:4px">Tell us how much to deploy and what you’re after. We’ll return 3–4 recommendations across short, medium and long horizons — each with a target and a date.</div></div><button class="btn green" onclick="openPlanBuilder()">Build my plan →</button></div></div>';
+  }
+  // idea of the week
+  var hot=ideaByCode('MRD')||DB.ideas[0];
+  h+='<div class="eyebrow">Idea of the week</div><div class="card" style="border-color:var(--green);margin-bottom:20px"><div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start"><div style="flex:1;min-width:220px">'+
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="code" style="font-size:17px">'+hot.code+'</span><span class="pill unl">'+hot.theme+'</span>'+(hot.deal?'<span class="pill live"><span class="dot"></span>Live deal</span>':'')+'</div>'+
+    '<div style="font-family:var(--disp);font-size:18px;font-weight:500;margin:6px 0 4px">'+hot.hook+'</div>'+
+    '<div style="font-size:13px;color:var(--mut);line-height:1.55">'+hot.thesis+'</div></div>'+
+    '<div style="width:200px;flex:none">'+ideaStatBox(hot)+'<button class="btn green block sm" style="margin-top:10px" onclick="openIdea(\''+hot.code+'\')">View idea</button></div></div></div>';
+  // theme chips
+  var chips=['All'].concat(DB.themes);
+  h+='<div class="filters" style="margin-bottom:14px"><span style="font-size:11px;font-weight:600;color:var(--mut);margin-right:2px">Browse:</span>'+chips.map(function(t){return '<button class="chip2'+(theme===t?' on':'')+'" onclick="setInvestTheme(\''+t+'\')">'+t+'</button>';}).join('')+'</div>';
+  // filtered ideas
+  var list=DB.ideas.filter(function(i){
+    if(goalObj && (!goalObj.themes.indexOf||goalObj.themes.indexOf(i.theme)<0))return false;
+    if(theme!=='All' && i.theme!==theme)return false;
+    return true;
+  });
+  if(!list.length)list=DB.ideas.filter(function(i){return theme==='All'||i.theme===theme;});
+  h+='<div class="grid g2">';
+  list.forEach(function(i){h+=ideaCardHTML(i);});
+  h+='</div>';
+  return h;
+}
+function ideaStatBox(i){
+  var up=upside(i);
+  return '<div class="ibox">'+
+    '<div class="ibox-row"><span>Target</span><b class="mono">'+(i.target!=null?'$'+i.target.toFixed(2):'—')+'</b></div>'+
+    '<div class="ibox-row"><span>Upside</span><b class="mono '+(up>0?'up':'')+'">'+(up!=null?'+'+up+'%':'—')+'</b></div>'+
+    '<div class="ibox-row"><span>Risk</span><b>'+i.risk+'</b></div>'+
+    '<div class="ibox-row"><span>Horizon</span><b style="font-size:12px">'+i.horizon+'</b></div></div>';
+}
+function ideaCardHTML(i){
+  var up=upside(i);
+  return '<div class="card idea'+(inBuyZone(i)?' zone':'')+'"><div class="ch"><div style="display:flex;align-items:center;gap:8px"><span class="code" style="font-size:15px">'+i.code+'</span>'+convDots(i.conv)+'</div>'+riskPill(i.risk)+'</div>'+
+    '<div style="font-weight:600;font-size:14px">'+i.hook+'</div>'+
+    '<div class="sub2" style="margin:3px 0 10px">'+i.name+' · '+i.theme+'</div>'+
+    entryZoneHTML(i)+
+    '<div style="display:flex;gap:14px;margin:11px 0 12px"><div><div class="idx-n">Target</div><div class="mono" style="font-weight:600">'+(i.target!=null?'$'+i.target.toFixed(2):'Deal')+'</div></div><div><div class="idx-n">Upside</div><div class="mono '+(up>0?'up':'')+'" style="font-weight:600">'+(up!=null?'+'+up+'%':'—')+'</div></div><div><div class="idx-n">Horizon</div><div style="font-weight:600;font-size:12px;margin-top:2px">'+i.horizon+'</div></div></div>'+
+    '<div style="display:flex;gap:8px"><button class="btn green sm" style="flex:1.4" onclick="openIdea(\''+i.code+'\')">View idea</button><button class="btn ghost sm" style="flex:1" onclick="addToWatch(\''+i.code+'\',\''+i.name.replace(/'/g,"")+'\')">Watch</button></div></div>';
+}
+function openIdea(code){var i=ideaByCode(code);var up=upside(i);
+  var act = i.deal ? '<button class="btn green" style="flex:1.6" onclick="closeModal();openDeal(\''+i.deal+'\')">Invest in this deal →</button>' : '<button class="btn green" style="flex:1.6" onclick="investAct(\''+i.code+'\')">Invest →</button>';
+  openModal('<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:4px"><span class="code" style="font-size:18px">'+i.code+'</span>'+convDots(i.conv)+riskPill(i.risk)+(i.deal?'<span class="pill live"><span class="dot"></span>Live deal</span>':(inBuyZone(i)?'<span class="pill gain">In buy zone</span>':''))+'</div>'+
+    '<h3 style="font-size:19px">'+i.hook+'</h3><p class="ms">'+i.name+' · '+i.theme+'</p>'+
+    '<div style="font-size:13.5px;line-height:1.6;margin:10px 0 14px">'+i.thesis+'</div>'+
+    '<div style="margin-bottom:6px">'+entryZoneHTML(i)+'</div>'+
+    '<div style="margin:12px 0">'+
+      '<div class="sumrow"><span>Entry range</span><b class="mono">'+(i.entryLo!=null?'$'+i.entryLo.toFixed(2)+'–$'+i.entryHi.toFixed(2):'Deal price $'+(ideaDealPrice(i)||'—'))+'</b></div>'+
+      '<div class="sumrow"><span>Price target</span><b class="mono">'+(i.target!=null?'$'+i.target.toFixed(2):'—')+'</b></div>'+
+      '<div class="sumrow"><span>Implied upside</span><b class="mono '+(up>0?'up':'')+'">'+(up!=null?'+'+up+'%':'—')+'</b></div>'+
+      '<div class="sumrow"><span>Time horizon</span><b>'+i.horizon+'</b></div>'+
+      '<div class="sumrow"><span>Risk level</span><b>'+i.risk+'</b></div></div>'+
+    ''+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="addToWatch(\''+i.code+'\',\''+i.name.replace(/'/g,"")+'\');closeModal()">Watch</button>'+act+'</div>'+
+    '<div class="help" style="margin-top:10px">General advice only — consider whether it suits your objectives. Past performance isn’t a guide to future returns.</div>');
+}
+function investAct(code){var i=ideaByCode(code);
+  openModal('<h3>Invest in '+i.code+'</h3><p class="ms">'+i.name+' · market $'+(i.last!=null?i.last.toFixed(2):'—')+'</p>'+
+    '<div class="frow"><label>Amount to invest (AUD)</label><input id="ivAmt" class="mono" inputmode="numeric" value="10,000" oninput="ivCalc(\''+code+'\')"></div>'+
+    '<div class="help" id="ivCalc"></div>'+
+    '<div class="help" style="margin-top:8px">Your order is routed to the Vitti desk for execution at or near market. Brokerage applies.</div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.5" onclick="placeOrder(\''+code+'\')">Place order with desk</button></div>');
+  setTimeout(function(){ivCalc(code);},0);
+}
+function ivCalc(code){var i=ideaByCode(code);var raw=(document.getElementById('ivAmt').value||'').replace(/[^0-9]/g,'');var a=raw?parseInt(raw,10):0;var sh=i.last?a/i.last:0;
+  document.getElementById('ivCalc').textContent = a?('≈ '+num(sh)+' shares at $'+i.last.toFixed(2)+(inBuyZone(i)?' · inside the entry range':'')):'';}
+function placeOrder(code){var i=ideaByCode(code);var c=STATE.clientId;var raw=(document.getElementById('ivAmt').value||'').replace(/[^0-9]/g,'');var a=raw?parseInt(raw,10):0;if(!a){toast('Enter an amount.');return;}
+  var sh=Math.round(a/i.last);
+  var existing=DB.positions.find(function(p){return p.c===c&&p.code===i.code;});
+  if(existing){var tot=existing.qty+sh;existing.cost=(existing.cost*existing.qty+i.last*sh)/tot;existing.qty=tot;}
+  else DB.positions.push({c:c,code:i.code,name:i.name,qty:sh,cost:i.last,last:i.last,sector:i.theme});
+  DB.alerts.unshift({id:'A'+(alertSeq++),client:c,optId:null,kind:'itm',sev:'green',title:'Order placed: '+i.code,sub:'Buy '+money(a)+' (~'+num(sh)+' shares) routed to the desk',ts:new Date(auditClock),ack:false});
+  audit('Placed buy order',i.code+' · '+money(a));closeModal();toast('Order placed with the desk for '+i.code+'.');sortAlerts();render();updateBadges();}
+function openGoalPicker(){
+  var h=DB.goals.map(function(g){return '<button class="goal-opt" onclick="chooseGoal(\''+g.k+'\')"><span class="goal-ic"><svg viewBox="0 0 24 24"><path d="'+g.icon+'"/></svg></span><span style="flex:1;text-align:left"><b>'+g.label+'</b><span class="sub2" style="display:block">'+g.blurb+'</span></span><span style="color:var(--green-d);font-weight:600">→</span></button>';}).join('');
+  openModal('<h3>What matters most to you?</h3><p class="ms">Pick one — we’ll show a handful of ideas that fit. You can change this any time.</p><div style="margin-top:14px;display:flex;flex-direction:column;gap:9px">'+h+'</div>');
+}
+function chooseGoal(k){STATE.investGoal=k;STATE.investTheme='All';audit('Chose investing goal',k);closeModal();var g=DB.goals.find(function(x){return x.k===k;});toast('Showing ideas for: '+g.label);render();}
+function setInvestTheme(t){STATE.investTheme=t;render();}
+
+/* ==================== LEARN ==================== */
+function viewInsights(){
+  var c=STATE.clientId; var holdCodes=clientPositions(c).map(function(p){return p.code;});
+  var h='<div class="phead"><div><div class="eyebrow">Market intelligence · '+fmtDate(TODAY)+'</div><h1>Insights</h1><div class="sub">Where the money is moving, what’s driving it, and how it reads across your book.</div></div></div>';
+  // hot sectors
+  h+='<div class="eyebrow">Hot sectors</div><div class="card flush" style="margin-bottom:18px"><div style="padding:14px 16px">';
+  var maxMom=Math.max.apply(null,DB.sectors.map(function(s){return Math.abs(s.mom);}));
+  DB.sectors.forEach(function(s,i){var held=s.benef.filter(function(b){return holdCodes.indexOf(b)>-1;});
+    h+='<div style="padding:'+(i?'13px':'0')+' 0 13px;'+(i?'border-top:1px solid var(--line)':'')+'">'+
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b style="font-size:13.5px;flex:1;min-width:150px">'+s.name+'</b>'+
+      '<div class="mom"><div class="mom-bar"><div class="mom-fill '+(s.mom<0?'dn':'')+'" style="width:'+(Math.abs(s.mom)/maxMom*100)+'%"></div></div><span class="mono '+(s.mom>=0?'up':'dn')+'" style="font-size:12px;font-weight:600">'+(s.mom>=0?'+':'')+s.mom.toFixed(1)+'%</span></div></div>'+
+      '<div style="font-size:12.5px;color:var(--mut);margin-top:5px">'+s.drivers+'</div>'+
+      '<div style="margin-top:7px;font-size:11.5px">'+(s.benef.length?'Names: '+s.benef.map(function(b){return '<span class="code" style="margin-right:6px'+(holdCodes.indexOf(b)>-1?';color:var(--green-d)':'')+'">'+b+(holdCodes.indexOf(b)>-1?' ●':'')+'</span>';}).join(''):'<span style="color:var(--mut)">No direct names on your platform yet</span>')+
+      (held.length?'<span class="pill gain" style="margin-left:6px">You hold '+held.length+'</span>':(s.benef.length&&s.mom>2?'<span class="pill amber" style="margin-left:6px">Not in your book</span>':''))+'</div></div>';});
+  h+='</div></div>';
+  // global news with impact
+  h+='<div class="split"><div class="col"><div class="card flush"><div style="padding:15px 17px 0" class="ch"><b>Global news &amp; what it means for you</b><span class="meta">live wire</span></div><div style="padding:6px 17px 16px">';
+  DB.news.forEach(function(nw,i){
+    h+='<div style="padding:'+(i?'14px':'8px')+' 0 0;'+(i?'border-top:1px solid var(--line);margin-top:14px':'')+'">'+
+      '<div style="display:flex;gap:9px;align-items:baseline;flex-wrap:wrap"><span class="pill '+(nw.dir==='up'?'gain':'loss')+'">'+nw.impact+'</span><span class="mono" style="font-size:10.5px;color:var(--mut)">'+nw.src+' · '+nw.time+'</span></div>'+
+      '<div style="font-weight:600;font-size:13.5px;margin:6px 0 4px">'+nw.head+'</div>'+
+      '<div style="font-size:12.5px;color:var(--mut);line-height:1.55"><b style="color:var(--green-d)">How to use it:</b> '+nw.use+'</div></div>';});
+  h+='</div></div></div>';
+  // right: thematic + ask vitti
+  h+='<div class="col">';
+  h+='<div class="card navy"><div class="ch"><b style="color:#fff">This week’s theme</b><span class="meta">deep dive</span></div><div style="font-family:var(--disp);font-size:18px;font-weight:500;line-height:1.25">The lithium deficit is back on the table</div><div style="font-size:13px;color:#c8cdde;margin-top:7px;line-height:1.6">Supply discipline and resurgent EV demand point to a structural deficit from 2027. We prefer the lowest-cost producers with balance-sheet resilience — PLS is our key exposure.</div><button class="btn green sm" style="margin-top:12px" onclick="navTo(\'invest\')">See the idea →</button></div>';
+  h+='<div class="card"><div class="ch"><b>Research library</b></div>';
+  DB.reports.forEach(function(rp,i){h+='<div style="padding:9px 0;'+(i?'border-top:1px solid var(--line)':'')+'"><div style="font-size:12.5px;font-weight:600">'+rp.title+'</div><div class="sub2">'+rp.kind+' · '+fmtDate(rp.date)+' · '+rp.pp+' pp</div></div>';});
+  h+='</div>';
+  h+='<div class="card ai-teaser"><div class="ch"><b>Ask Vitti</b><span class="ai-dot">AI</span></div><div style="font-size:13px;color:var(--mut);margin-bottom:11px">Want this read against your exact positions? Ask for a tailored take.</div><button class="btn navy block sm" onclick="navTo(\'askvitti\')">Open Vitti Intelligence →</button></div>';
+  h+='</div></div>';
+  return h;
+}
+
+/* ==================== ADMIN: publish an idea ==================== */
+function openIdeaComposer(){
+  var th=DB.themes.map(function(t){return '<option>'+t+'</option>';}).join('');
+  openModal('<h3>Publish an investment idea</h3><p class="ms">Goes live on every client’s Invest tab. Keep the thesis to ~60 words.</p>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Code</label><input id="idC" value="WBC"></div><div class="frow"><label>Theme</label><select id="idT">'+th+'</select></div></div>'+
+    '<div class="frow"><label>One-line hook</label><input id="idH" placeholder="What makes this interesting"></div>'+
+    '<div class="frow"><label>Thesis (~60 words)</label><textarea id="idTh" style="width:100%;border:1px solid var(--line-2);border-radius:9px;padding:10px 12px;font-size:13px;min-height:70px;font-family:inherit"></textarea><div class="help" id="idWc">0 words</div></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Entry low ($)</label><input id="idLo" class="mono" value="0.00"></div><div class="frow"><label>Entry high ($)</label><input id="idHi" class="mono" value="0.00"></div></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Price target ($)</label><input id="idTg" class="mono" value="0.00"></div><div class="frow"><label>Last ($)</label><input id="idLs" class="mono" value="0.00"></div></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Risk</label><select id="idR"><option>Low</option><option selected>Medium</option><option>High</option></select></div><div class="frow"><label>Horizon</label><input id="idHz" value="12 months"></div></div>'+
+    '<label style="display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--mut);margin-top:10px"><input type="checkbox" id="idN" checked> Notify clients by email + in-app</label>'+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.4" onclick="publishIdea()">Publish to clients</button></div>');
+  setTimeout(function(){var t=document.getElementById('idTh');if(t)t.oninput=function(){document.getElementById('idWc').textContent=(this.value.trim()?this.value.trim().split(/\s+/).length:0)+' words';};},0);
+}
+function publishIdea(){
+  var g=function(id){return document.getElementById(id).value;};
+  var i={code:g('idC').toUpperCase(),name:g('idC').toUpperCase(),theme:g('idT'),hook:g('idH')||'New Vitti idea',thesis:g('idTh')||'',risk:g('idR'),horizon:g('idHz'),conv:2,
+    last:parseFloat(g('idLs'))||null,entryLo:parseFloat(g('idLo'))||null,entryHi:parseFloat(g('idHi'))||null,target:parseFloat(g('idTg'))||null};
+  DB.ideas.unshift(i);
+  if(document.getElementById('idN').checked){Object.keys(DB.clients).forEach(function(c){DB.alerts.unshift({id:'A'+(alertSeq++),client:c,optId:null,kind:'price',sev:'green',title:'New idea: '+i.code+' — '+i.hook,sub:'Vitti research · target '+(i.target?'$'+i.target.toFixed(2):'n/a')+' · tap to view in Invest',ts:new Date(auditClock),ack:false});});}
+  audit('Published investment idea',i.code+' · '+i.theme);sortAlerts();closeModal();toast('Idea published to all clients’ Invest tab.');render();updateBadges();}
+</script>
+
+<script>
+/* ==================== PLANS, TARGETS, BRIEFING ==================== */
+var PLANS={};
+var TFMETA={Tactical:{label:'Tactical',sub:'2–4 weeks',days:21,w:0.30},Core:{label:'Core',sub:'1–3 months',days:60,w:0.45},Strategic:{label:'Strategic',sub:'6–12 months',days:240,w:0.25}};
+function deriveTF(i){if(i.deal||inBuyZone(i))return 'Tactical';if(i.risk==='High')return 'Strategic';return 'Core';}
+function openPlanBuilder(){
+  var c=STATE.clientId; var cash=cashOf(c);
+  var gopts=DB.goals.map(function(g){return '<option value="'+g.k+'"'+(STATE.investGoal===g.k?' selected':'')+'>'+g.label+'</option>';}).join('');
+  openModal('<h3>Build my plan</h3><p class="ms">Tell us the brief. We’ll return 3–4 recommendations across timeframes, each with a target and date.</p>'+
+    '<div class="frow"><label>Amount to deploy (AUD)</label><input id="plAmt" class="mono" inputmode="numeric" value="'+num(Math.max(50000,Math.round(cash*0.6/1000)*1000))+'"><div class="help">Available cash: '+money(cash)+'</div></div>'+
+    '<div class="frow"><label>Objective</label><select id="plObj">'+gopts+'</select></div>'+
+    '<div class="split-even" style="gap:10px"><div class="frow"><label>Risk tolerance</label><select id="plRisk"><option>Conservative</option><option selected>Balanced</option><option>Aggressive</option></select></div>'+
+    '<div class="frow"><label>Primary horizon</label><select id="plHz"><option>Short (weeks)</option><option selected>Medium (months)</option><option>Long (1 yr+)</option></select></div></div>'+
+    '<div style="display:flex;gap:10px;margin-top:16px"><button class="btn ghost" style="flex:1" onclick="closeModal()">Cancel</button><button class="btn green" style="flex:1.5" onclick="generatePlan()">Generate my plan</button></div>');
+}
+function generatePlan(){
+  var c=STATE.clientId;
+  var amt=parseInt((document.getElementById('plAmt').value||'0').replace(/[^0-9]/g,''),10)||50000;
+  var obj=document.getElementById('plObj').value; var risk=document.getElementById('plRisk').value;
+  var g=DB.goals.find(function(x){return x.k===obj;});
+  var pool=DB.ideas.filter(function(i){return g.themes.indexOf(i.theme)>-1;});
+  if(pool.length<3)pool=DB.ideas.slice();
+  // one per bucket where possible, up to 4
+  var buckets={Tactical:[],Core:[],Strategic:[]};
+  pool.forEach(function(i){buckets[deriveTF(i)].push(i);});
+  if(risk==='Conservative')buckets.Strategic=buckets.Strategic.filter(function(i){return i.risk!=='High';});
+  var picks=[];
+  ['Tactical','Core','Strategic'].forEach(function(b){if(buckets[b][0])picks.push(buckets[b][0]);});
+  // fill to 4 from remaining pool
+  pool.forEach(function(i){if(picks.length<4&&picks.indexOf(i)<0)picks.push(i);});
+  picks=picks.slice(0,4);
+  var wsum=picks.reduce(function(s,i){return s+TFMETA[deriveTF(i)].w;},0)||1;
+  var items=picks.map(function(i){var tf=deriveTF(i);var pctw=TFMETA[tf].w/wsum;
+    return {code:i.code,tf:tf,allocPct:Math.round(pctw*100),allocAmt:Math.round(amt*pctw/1000)*1000,target:i.target,date:addDays(TFMETA[tf].days),deal:i.deal};});
+  PLANS[c]={amount:amt,objective:g.label,risk:risk,ts:new Date(),items:items};
+  STATE.investGoal=obj;
+  audit('Generated investment plan',g.label+' · '+money(amt)+' · '+items.length+' ideas');
+  closeModal();toast('Your plan is ready — '+items.length+' ideas with targets.');render();
+}
+function planSummaryHTML(c){
+  var pl=PLANS[c];
+  var h='<div class="card" style="margin-bottom:16px;border-color:var(--green)"><div class="ch"><div><div class="eyebrow" style="margin-bottom:2px">Your plan · '+pl.objective+' · '+pl.risk+'</div><b style="font-size:15px">Deploy '+money(pl.amount)+' across '+pl.items.length+' ideas</b></div><button class="btn ghost sm" onclick="openPlanBuilder()">Rebuild</button></div>';
+  h+='<div class="plan-grid">';
+  pl.items.forEach(function(it){var i=ideaByCode(it.code);var up=i&&i.target&&i.last?Math.round((i.target/i.last-1)*100):null;var m=TFMETA[it.tf];
+    h+='<div class="plan-rec"><div class="ch" style="margin-bottom:6px"><span class="tfchip tf-'+it.tf+'">'+m.label+' · '+m.sub+'</span><span class="mono" style="font-size:11px;color:var(--mut)">'+it.allocPct+'%</span></div>'+
+      '<div style="display:flex;align-items:center;gap:7px"><span class="code" style="font-size:14px">'+it.code+'</span>'+(i?riskPill(i.risk):'')+'</div>'+
+      '<div class="sub2" style="margin:3px 0 8px">'+(i?i.hook:'')+'</div>'+
+      '<div style="display:flex;gap:12px;margin-bottom:9px"><div><div class="idx-n">Allocate</div><div class="mono" style="font-weight:600">'+money(it.allocAmt)+'</div></div><div><div class="idx-n">Target</div><div class="mono" style="font-weight:600">'+(it.target?'$'+it.target.toFixed(2):'deal')+(up!=null?' <span class="up">+'+up+'%</span>':'')+'</div></div><div><div class="idx-n">By</div><div class="mono" style="font-weight:600;font-size:12px">'+fmtDate(it.date)+'</div></div></div>'+
+      '<button class="btn green block sm" onclick="'+(it.deal?'openDeal(\''+it.deal+'\')':'investActAmt(\''+it.code+'\','+it.allocAmt+')')+'">Deploy '+money(it.allocAmt)+' →</button></div>';});
+  h+='</div>';
+  h+=targetsHTML(c);
+  h+='</div>';
+  return h;
+}
+function investActAmt(code,amt){investAct(code);setTimeout(function(){var f=document.getElementById('ivAmt');if(f){f.value=num(amt);ivCalc(code);}},20);}
+function planTargets(c){var pl=PLANS[c];if(!pl)return [];
+  var held=clientPositions(c).map(function(p){return p.code;});
+  var deployed=pl.items.reduce(function(s,it){var p=clientPositions(c).find(function(x){return x.code===it.code;});return s+(p?posValue(p):0);},0);
+  var t=[{label:'Deploy '+money(pl.amount)+' into the market',kind:'deploy',prog:Math.min(100,Math.round(deployed/pl.amount*100)),done:deployed>=pl.amount*0.98}];
+  pl.items.forEach(function(it){t.push({label:'Establish your '+it.code+' position',kind:'pos',done:held.indexOf(it.code)>-1});});
+  // one aspirational price target
+  var first=pl.items.find(function(it){return it.target;});
+  if(first){var i=ideaByCode(first.code);t.push({label:first.code+' reaches $'+first.target.toFixed(2),kind:'price',done:i&&i.last>=first.target});}
+  return t;
+}
+function targetsHTML(c){
+  var ts=planTargets(c);if(!ts.length)return '';
+  var done=ts.filter(function(t){return t.done;}).length;
+  var h='<div style="border-top:1px solid var(--line);margin-top:14px;padding-top:14px"><div class="ch"><b style="font-size:13.5px">Your targets</b><span class="meta">'+done+' of '+ts.length+' reached</span></div>';
+  ts.forEach(function(t){
+    h+='<div class="tgt"><span class="tgt-box'+(t.done?' on':'')+'">'+(t.done?'✓':'')+'</span><span style="flex:1;font-size:13px'+(t.done?';color:var(--mut);text-decoration:line-through':'')+'">'+t.label+'</span>'+
+      (t.kind==='deploy'&&!t.done?'<span class="mono" style="font-size:11px;color:var(--green-d);font-weight:600">'+t.prog+'%</span>':'')+'</div>';
+    if(t.kind==='deploy'&&!t.done)h+='<div class="prog" style="height:6px;margin:2px 0 8px"><div class="prog-fill" style="width:'+t.prog+'%"></div></div>';
+  });
+  h+='</div>';
+  return h;
+}
+
+/* ---- daily briefing on Home ---- */
+function homeBriefing(c){
+  var pv=portfolioValue(c),dpl=dailyPL(c);
+  var pl=PLANS[c];
+  var planLine = pl?(' You’re '+Math.min(100,Math.round(pl.items.reduce(function(s,it){var p=clientPositions(c).find(function(x){return x.code===it.code;});return s+(p?posValue(p):0);},0)/pl.amount*100))+'% through your '+money(pl.amount)+' plan.'):'';
+  var h='<div class="card navy" style="margin-bottom:16px"><div class="ch"><b style="color:#fff">Your morning briefing</b><span class="meta">'+DB.note.time+' · auto-generated</span></div>'+
+    '<div style="font-size:14px;color:#dfe2ee;line-height:1.6">Your book is <b style="color:#fff">'+money(pv)+'</b>, '+(dpl>=0?'up':'down')+' <b style="color:'+(dpl>=0?'#5cc79a':'#e0795b')+'">'+money(Math.abs(dpl))+'</b> ('+pct(dpl/pv*100)+') today. Materials led — PLS +2.1%, BHP +0.8% — while energy lagged. China stimulus and a cooler US CPI are supportive for your resources and financials exposure.'+planLine+'</div></div>';
+  // suggested actions
+  var sg=buildSuggestions(c);
+  if(sg.length){
+    h+='<div class="eyebrow">Suggested for you today</div><div class="grid g'+(sg.length>=3?'3':'2')+'" style="margin-bottom:18px">';
+    sg.forEach(function(s){h+='<div class="card sugg" onclick="'+s.onclick+'"><div class="sugg-ic '+s.tone+'"><svg viewBox="0 0 24 24"><path d="'+s.icon+'"/></svg></div><div style="flex:1"><div style="font-weight:600;font-size:13px">'+s.title+'</div><div class="sub2">'+s.sub+'</div></div><span style="color:var(--green-d);font-weight:600">→</span></div>';});
+    h+='</div>';
+  }
+  return h;
+}
+function buildSuggestions(c){
+  var out=[]; var cash=cashOf(c); var held=clientPositions(c);
+  // 1 idle cash
+  if(cash>=20000)out.push({tone:'green',icon:'M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',title:'Put '+money(cash)+' cash to work',sub:'Build a plan across timeframes',onclick:"navTo('invest')"});
+  // 2 ITM option in window
+  var opt=clientOptions(c).find(function(o){return o.status==='open'&&isITM(o)&&!o.listed&&o.dte<=14&&o.dte>=0;});
+  if(opt)out.push({tone:'red',icon:'M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z',title:'Act on '+opt.code+' — '+opt.dte+'d to exercise',sub:'Unlisted, in the money, window closing',onclick:"navTo('options')"});
+  // 3 take-profit / trim
+  var trim=held.find(function(p){var s=DB.signals[p.code];return s&&(s.action==='Take profit'||s.action==='Trim');});
+  if(trim){var s=DB.signals[trim.code];out.push({tone:'amber',icon:'M4 19V5M4 19h16M8 11l3 3 4-6',title:s.action+' '+trim.code,sub:s.headline,onclick:"openHolding('"+trim.code+"')"});}
+  // 4 add in buy zone (held with Add) or fresh idea
+  if(out.length<3){var add=held.find(function(p){var s=DB.signals[p.code];var i=ideaByCode(p.code);return s&&s.action==='Add'&&i&&inBuyZone(i);});
+    if(add)out.push({tone:'green',icon:'M12 5v14M5 12h14',title:'Add to '+add.code+' in the buy zone',sub:DB.signals[add.code].headline,onclick:"openHolding('"+add.code+"')"});
+    else out.push({tone:'green',icon:'M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z',title:'See this week’s idea',sub:'Curated, with target and timeframe',onclick:"navTo('invest')"});}
+  return out.slice(0,3);
+}
+</script>
+
+
+
+</body>
+</html>
