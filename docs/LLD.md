@@ -59,14 +59,66 @@ export interface Placement {
 
 ---
 
-## 2. Stateful Database Mutation Functions
+## 2. Stateful Mutation & Context Data Flow
+
+The following data flow chart illustrates how client actions and staff console updates propagate through the state lifecycle context reactively, mutating data states cleanly:
+
+```mermaid
+flowchart TD
+    subgraph ClientPortal ["Client Portal (/portal/client)"]
+        Workspace["Bidding Workspace"]
+    end
+
+    subgraph StaffConsole ["Staff Console (/portal/staff)"]
+        Book["Placement Book Manager"]
+    end
+
+    subgraph Context ["State & Context Layer (DatabaseProvider)"]
+        DBState["Stateful DB State (React state)"]
+        MutateBid["mutatePlaceBid / mutateWithdrawBid"]
+        Settle["mutateUpdatePlacementStage (Settlement Engine)"]
+    end
+
+    subgraph Schema ["Data Schema (lib/db.ts)"]
+        Clients["Client Registry"]
+        Positions["Positions Table"]
+        Options["Options Holdings"]
+        Audits["Audit Logs"]
+    end
+
+    %% Client Actions
+    Workspace -->|"1. Submit Bid (amount)"| MutateBid
+    MutateBid -->|"Update bids array"| DBState
+
+    %% Staff Actions
+    Book -->|"2. Adjust scaling slider (scalePct)"| Context
+    Book -->|"3. Commit Allocations (scale & commit)"| MutateBid
+    Book -->|"4. Transition Stage to 'settled'"| Settle
+
+    %% Database mutations
+    DBState --> MutateBid
+    DBState --> Settle
+
+    %% Settlement updates
+    Settle -->|"5. Generate Equity Positions"| Positions
+    Settle -->|"6. Generate Option Sweeteners"| Options
+    Settle -->|"7. Append Logs"| Audits
+
+    %% State propagation
+    DBState -->|"8. Reactively push updates"| Workspace
+    DBState -->|"8. Reactively push updates"| Book
+```
+
+---
+
+## 3. Stateful Database Mutation Functions
 Mutations in `lib/db.ts` are pure functions that accept the database instance, create deep copies, apply adjustments, log transactions in the audit logs, and return a new `Database` state.
 
-### 2.1 Placing and Withdrawing Bids
+### 3.1 Placing and Withdrawing Bids
 - `mutatePlaceBid`: Adds or updates a user's bid size.
 - `mutateWithdrawBid`: Removes a user's bid.
 
-### 2.2 Settlement Hook (`mutateUpdatePlacementStage`)
+### 3.2 Settlement Hook (`mutateUpdatePlacementStage`)
 When a deal stage updates to `"settled"`:
 1. It iterates through all bids.
 2. If `alloc > 0`, it computes shares: `qty = Math.round(alloc / price)`.
@@ -75,9 +127,9 @@ When a deal stage updates to `"settled"`:
 
 ---
 
-## 3. UI Component Engineering
+## 4. UI Component Engineering
 
-### 3.1 Donut Chart Component (`app/portal/client/positions/page.tsx`)
+### 4.1 Donut Chart Component (`app/portal/client/positions/page.tsx`)
 Rendered inside the portfolio analysis page using functional SVG markup:
 - Renders segmented arcs using SVG `<circle>` and `strokeDasharray` properties.
 - **Offset Math:** Segment offsets must be precalculated side-effect free during render to comply with React's immutability guidelines:
@@ -94,7 +146,7 @@ const segsWithOffsets = segs.map((s, idx) => {
 });
 ```
 
-### 3.2 Expiry Urgency Rail (`app/portal/staff/clients/[id]/page.tsx`)
+### 4.2 Expiry Urgency Rail (`app/portal/staff/clients/[id]/page.tsx`)
 A custom rail visualizing options time-to-expiry using conditional LED segments:
 - Draws tick marks corresponding to `[30, 14, 7, 3, 1]` days.
 - If `dte` is less than or equal to a threshold, the tick lights up.
@@ -102,7 +154,7 @@ A custom rail visualizing options time-to-expiry using conditional LED segments:
 
 ---
 
-## 4. State Synchronization & Optimization
+## 5. State Synchronization & Optimization
 
 ### 4.1 Login Query Bails
 In Next.js, static routes that use `useSearchParams()` must be wrapped in a React `<Suspense>` block. In `app/login/page.tsx`, we structured it by splitting the page:

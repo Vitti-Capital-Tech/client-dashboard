@@ -14,29 +14,30 @@ The objectives of the platform are:
 
 ```mermaid
 graph TD
-    A["Root Layout"] --> B["DatabaseProvider Context"]
-    B --> C["Landing Page (/)"]
-    B --> D["Login Page (/login)"]
-    B --> E["Portal Shell Layout (/portal)"]
+    A["Root Layout (app/layout.tsx)"] --> B["DatabaseProvider Context (contexts/DatabaseContext.tsx)"]
+    B --> C["Landing Page (app/page.tsx)"]
+    B --> D["Login Page (app/login/page.tsx)"]
+    B --> E["Portal Shell Layout (app/portal/layout.tsx)"]
+    
     E --> F["Client Views (/portal/client)"]
     E --> G["Staff Views (/portal/staff)"]
     
-    subgraph "Reactive State Store"
-        B --> DB["Stateful Mock DB"]
+    subgraph "State Store"
+        B --> DB["Stateful Mock Database (lib/db.ts)"]
     end
     
-    subgraph "Client App"
-        F --> F1["Dashboard"]
-        F --> F2["Portfolio/Positions"]
-        F --> F3["Options Desk"]
-        F --> F4["Bidding Workspace"]
-        F --> F5["Ask Vitti AI Chat"]
+    subgraph "Client Views"
+        F --> F1["Dashboard (/portal/client)"]
+        F --> F2["Portfolio & Positions (/positions)"]
+        F --> F3["Options Desk (/options)"]
+        F --> F4["Bidding Workspace (/placements)"]
+        F --> F5["Ask Vitti AI Chat (/askvitti)"]
     end
     
-    subgraph "Staff App"
-        G --> G1["Client Register"]
-        G --> G2["Deal Book Manager"]
-        G --> G3["Audit Log Viewer"]
+    subgraph "Staff Views"
+        G --> G1["Client Register (/portal/staff)"]
+        G --> G2["Deal Book Manager (/placements)"]
+        G --> G3["Audit Log Viewer (/audits)"]
     end
 ```
 
