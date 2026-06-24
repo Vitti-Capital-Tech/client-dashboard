@@ -139,7 +139,7 @@ export default function ClientDetailAdviser() {
         </div>
 
         {/* Tab Selection */}
-        <div className="inline-flex bg-paper-2 rounded-[9px] p-[3px]">
+        <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
           {(["holdings", "options", "bids", "alerts"] as const).map(t => (
             <button
               key={t}

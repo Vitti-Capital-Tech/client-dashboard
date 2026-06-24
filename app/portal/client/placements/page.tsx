@@ -212,7 +212,7 @@ export default function ClientPlacementsPage() {
               <p className="text-xs text-ink font-semibold">{p.code} initiation — drilling the Pilbara&apos;s quiet corner</p>
               <button 
                 onClick={() => alert("Morning note PDF would open in a new tab.")}
-                className="btn ghost sm text-[11px] py-1.5 px-3 border border-line rounded-[8px] hover:border-mut cursor-pointer transition-colors"
+                className="btn ghost sm text-[11px] py-1.5 px-3 border border-line rounded-lg hover:border-mut cursor-pointer transition-colors"
               >
                 Read the note
               </button>
@@ -265,7 +265,7 @@ export default function ClientPlacementsPage() {
         {/* Confirmation Modal */}
         {showConfirmModal && (
           <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-            <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
               <h3 className="font-disp font-medium text-lg text-ink">Confirm your bid</h3>
               <p className="text-xs text-mut">
                 {p.name} &middot; {p.type} at ${p.price.toFixed(2)}
@@ -407,8 +407,8 @@ export default function ClientPlacementsPage() {
                       </div>
                       
                       {!isPaid && (
-                        <div className="card border border-line bg-paper p-3.5 rounded-[12px] shadow-none mt-2 max-w-[360px] space-y-2 select-none">
-                          <div className="divide-y divide-[#e7e4dc] text-xs leading-normal">
+                        <div className="card border border-line bg-paper p-3.5 rounded-xl shadow-none mt-2 max-w-90 space-y-2 select-none">
+                          <div className="divide-y divide-line text-xs leading-normal">
                             <div className="flex justify-between py-1.5">
                               <span className="text-mut">Amount</span>
                               <b className="font-mono text-ink">${bid.alloc!.toLocaleString("en-AU")}.00</b>
@@ -424,7 +424,7 @@ export default function ClientPlacementsPage() {
                           </div>
                           <button 
                             onClick={handleBpayPayment}
-                            className="w-full btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 rounded-[8px] text-xs cursor-pointer"
+                            className="w-full btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 rounded-lg text-xs cursor-pointer"
                           >
                             I&apos;ve paid — notify Vitti
                           </button>
@@ -482,13 +482,13 @@ export default function ClientPlacementsPage() {
                 <div className="flex gap-2">
                   <button 
                     onClick={() => handleOpenDeal(p.id)}
-                    className="btn ghost sm text-xs py-1.5 border border-line rounded-[8px] hover:border-mut cursor-pointer flex-1 bg-white font-semibold"
+                    className="btn ghost sm text-xs py-1.5 border border-line rounded-lg hover:border-mut cursor-pointer flex-1 bg-white font-semibold"
                   >
                     Amend
                   </button>
                   <button 
                     onClick={handleWithdrawBid}
-                    className="btn ghost sm text-xs py-1.5 border border-line rounded-[8px] hover:border-mut cursor-pointer flex-1 bg-white font-semibold"
+                    className="btn ghost sm text-xs py-1.5 border border-line rounded-lg hover:border-mut cursor-pointer flex-1 bg-white font-semibold"
                   >
                     Withdraw
                   </button>
@@ -504,7 +504,7 @@ export default function ClientPlacementsPage() {
               </p>
               <button 
                 onClick={() => alert("Secure adviser messaging would open here.")}
-                className="w-full btn ghost sm text-xs font-semibold py-2 border border-line rounded-[8px] bg-white hover:border-mut cursor-pointer"
+                className="w-full btn ghost sm text-xs font-semibold py-2 border border-line rounded-lg bg-white hover:border-mut cursor-pointer"
               >
                 Message the desk
               </button>

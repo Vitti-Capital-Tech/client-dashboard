@@ -97,8 +97,8 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
     };
 
     return (
-      <div className={`w-[34px] h-[34px] rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
-        <svg className="w-[17px] h-[17px] stroke-current stroke-[1.8] fill-none stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+      <div className={`w-8.5 h-8.5 rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
+        <svg className="w-4.25 h-4.25 stroke-current stroke-[1.8] fill-none stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
           <path d={path} />
         </svg>
       </div>
@@ -106,12 +106,12 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   };
 
   const sidebar = (
-    <aside className="hidden md:flex w-[236px] flex-none bg-navy text-[#c2c7d8] flex-col p-5 sticky top-0 h-screen z-40 select-none">
+    <aside className="hidden md:flex w-59 flex-none bg-navy text-[#c2c7d8] flex-col p-5 sticky top-0 h-screen z-40 select-none">
       <Link href="/" className="inline-flex items-center gap-2.5 font-disp font-semibold text-xl tracking-wide text-white py-1 px-2 mb-2">
         <span className="inline-flex gap-[2.5px] items-end h-[1em] text-xl">
-          <i className="block w-[3px] h-[0.5em] rounded-[2px] bg-green" />
-          <i className="block w-[3px] h-[0.72em] rounded-[2px] bg-green" />
-          <i className="block w-[3px] h-[0.95em] rounded-[2px] bg-green" />
+          <i className="block w-0.75 h-[0.5em] rounded-xs bg-green" />
+          <i className="block w-0.75 h-[0.72em] rounded-xs bg-green" />
+          <i className="block w-0.75 h-[0.95em] rounded-xs bg-green" />
         </span>
         Vitti
         <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
@@ -122,7 +122,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         {role === "admin" ? "Vitti staff console" : "Client portal"}
       </div>
 
-      <nav className="flex-1 space-y-[2px]">
+      <nav className="flex-1 space-y-0.5">
         {items.map((it) => {
           const isActive = pathname === it.path;
           const badgeVal = getBadgeValue(it.badge);
@@ -130,21 +130,21 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
             <Link
               key={it.k}
               href={it.path}
-              className={`flex items-center gap-[11px] w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] cursor-pointer transition-colors ${
+              className={`flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] cursor-pointer transition-colors ${
                 isActive
                   ? "bg-navy-3 text-white"
                   : it.ai
                   ? "text-[#9fe9cf] hover:bg-green/12 hover:text-[#9fe9cf]"
-                  : "text-[#9aa0b4] hover:text-white hover:bg-white/[0.05]"
+                  : "text-mut-d hover:text-white hover:bg-white/5"
               }`}
             >
-              <svg className="w-[18px] h-[18px] stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
+              <svg className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
                 <path d={it.icon} />
               </svg>
               <span>{it.label}</span>
               {it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>}
               {badgeVal !== null && (
-                <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-[18px] text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
+                <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
                   {badgeVal}
                 </span>
               )}
@@ -155,19 +155,19 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
 
       <div className="mt-auto border-t border-navy-line pt-3.5 space-y-1">
         <div className="flex items-center gap-2.5 py-1.5 px-2">
-          <div className="w-[32px] h-[32px] rounded-full bg-green text-[#08130e] font-bold text-xs flex items-center justify-center flex-none">
+          <div className="w-8 h-8 rounded-full bg-green text-[#08130e] font-bold text-xs flex items-center justify-center flex-none">
             {role === "admin" ? "SG" : client.av}
           </div>
           <div className="leading-tight">
-            <div className="text-[12.5px] font-semibold text-white truncate max-w-[140px]">{role === "admin" ? "S. Goyal" : client.name}</div>
-            <div className="text-[10.5px] text-[#9aa0b4] truncate max-w-[140px]">{role === "admin" ? "Director · admin" : "Wholesale client"}</div>
+            <div className="text-[12.5px] font-semibold text-white truncate max-w-35">{role === "admin" ? "S. Goyal" : client.name}</div>
+            <div className="text-[10.5px] text-mut-d truncate max-w-35">{role === "admin" ? "Director · admin" : "Wholesale client"}</div>
           </div>
         </div>
         <button
           onClick={handleSignOut}
-          className="flex items-center gap-2 text-xs text-[#9aa0b4] hover:text-white hover:bg-white/[0.05] p-2 w-full rounded-[8px] transition-colors cursor-pointer"
+          className="flex items-center gap-2 text-xs text-mut-d hover:text-white hover:bg-white/5 p-2 w-full rounded-lg transition-colors cursor-pointer"
         >
-          <svg className="w-[15px] h-[15px] stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
+          <svg className="w-3.75 h-3.75 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
           </svg>
           <span>Sign out</span>
@@ -177,14 +177,14 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   );
 
   const topbar = (
-    <header className="flex items-center gap-4 bg-white/85 backdrop-blur-[8px] border-b border-line px-6 h-[58px] sticky top-0 z-30 select-none">
+    <header className="flex items-center gap-4 bg-white/85 backdrop-blur-sm border-b border-line px-6 h-14.5 sticky top-0 z-30 select-none">
       <div className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-green-d bg-green-bg py-1.5 px-3.5 rounded-full" title="Broker front-office feed">
         <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse shadow-[0_0_0_3px_rgba(54,187,145,0.18)]" />
         <span>Broker feed &middot; live</span>
       </div>
 
       <input
-        className="hidden md:block w-[230px] border border-line bg-white rounded-[9px] text-[12.5px] text-mut px-3.5 py-2 placeholder-mut-d focus:outline-none focus:border-green"
+        className="hidden md:block w-57.5 border border-line bg-white rounded-[9px] text-[12.5px] text-mut px-3.5 py-2 placeholder-mut-d focus:outline-none focus:border-green"
         placeholder="Search securities, clients, deals…"
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -202,18 +202,18 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         className="relative flex p-1.5 rounded-[9px] hover:bg-white border border-transparent hover:border-line cursor-pointer text-ink transition-all"
         aria-label="Alerts"
       >
-        <svg className="w-[19px] h-[19px] stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+        <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
           <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.7 21a2 2 0 0 1-3.4 0" />
         </svg>
         {alertsCount > 0 && (
-          <span className="absolute top-[3px] right-[2px] min-w-[15px] h-[15px] px-1 rounded-full bg-loss text-white text-[9px] font-bold flex items-center justify-center border-2 border-paper">
+          <span className="absolute top-0.75 right-0.5 min-w-3.75 h-3.75 px-1 rounded-full bg-loss text-white text-[9px] font-bold flex items-center justify-center border-2 border-paper">
             {alertsCount}
           </span>
         )}
       </button>
 
-      <div className="w-[31px] h-[31px] rounded-full bg-navy text-white font-semibold text-[11px] flex items-center justify-center flex-none">
+      <div className="w-7.75 h-7.75 rounded-full bg-navy text-white font-semibold text-[11px] flex items-center justify-center flex-none">
         {role === "admin" ? "SG" : client.av}
       </div>
     </header>
@@ -228,14 +228,14 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
           <button
             key={it.k}
             onClick={() => router.push(it.path)}
-            className={`flex-1 flex flex-col items-center gap-[3px] text-[9.5px] font-semibold cursor-pointer relative ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`}
+            className={`flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold cursor-pointer relative ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`}
           >
-            <svg className="w-[20px] h-[20px] stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
               <path d={it.icon} />
             </svg>
             <span>{it.label}</span>
             {badgeVal !== null && (
-              <span className="absolute top-[-3px] right-[50%] mr-[-16px] bg-loss text-white text-[8.5px] font-bold rounded-full px-1 min-w-[14px] text-center">
+              <span className="absolute -top-0.75 right-[50%] -mr-4 bg-loss text-white text-[8.5px] font-bold rounded-full px-1 min-w-3.5 text-center">
                 {badgeVal}
               </span>
             )}
@@ -246,9 +246,9 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
       {/* More menu drawer trigger */}
       <button
         onClick={() => setIsMoreOpen(true)}
-        className="flex-1 flex flex-col items-center gap-[3px] text-[9.5px] font-semibold cursor-pointer text-mut hover:text-ink"
+        className="flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold cursor-pointer text-mut hover:text-ink"
       >
-        <svg className="w-[20px] h-[20px] stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+        <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
           <circle cx="5" cy="12" r="1.6" />
           <circle cx="12" cy="12" r="1.6" />
           <circle cx="19" cy="12" r="1.6" />
@@ -265,14 +265,14 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         className={`fixed inset-0 bg-navy/55 backdrop-blur-[2px] transition-opacity z-50 ${isAlertsOpen ? "opacity-100 block" : "opacity-0 hidden"}`}
         onClick={() => setIsAlertsOpen(false)}
       />
-      <div className={`fixed top-0 right-0 w-[392px] max-w-[94vw] h-full bg-paper border-l border-line z-50 shadow-shadow-lg transition-all duration-300 transform flex flex-col ${isAlertsOpen ? "translate-x-0" : "translate-x-full"}`}>
+      <div className={`fixed top-0 right-0 w-98 max-w-[94vw] h-full bg-paper border-l border-line z-50 shadow-shadow-lg transition-all duration-300 transform flex flex-col ${isAlertsOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex justify-between items-center px-4.5 py-3 border-b border-line bg-paper sticky top-0 z-10">
           <h3 className="font-disp text-xl font-medium text-ink">Alerts</h3>
           <button
             onClick={() => setIsAlertsOpen(false)}
             className="p-1.5 rounded-[9px] hover:bg-white text-ink cursor-pointer"
           >
-            <svg className="w-[19px] h-[19px] stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
+            <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
               <path d="M6 6l12 12M18 6 6 18" />
             </svg>
           </button>
@@ -290,13 +290,13 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               return (
                 <div 
                   key={a.id} 
-                  className={`flex gap-3 p-3.5 border border-line bg-white rounded-[12px] items-start ${a.ack ? "opacity-75" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
+                  className={`flex gap-3 p-3.5 border border-line bg-white rounded-xl items-start ${a.ack ? "opacity-75" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
                 >
                   {alertIco(a)}
                   <div className="flex-1 min-w-0">
                     <div className="text-[13px] font-semibold text-ink leading-tight flex items-center gap-1.5 flex-wrap">
                       {role === "admin" && a.client && (
-                        <span className="bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-0.5 rounded-[4px] uppercase">{a.client}</span>
+                        <span className="bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-0.5 rounded-sm uppercase">{a.client}</span>
                       )}
                       {a.title}
                     </div>
@@ -308,7 +308,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
                   {!a.ack && (
                     <button
                       onClick={() => ackAlert(a.id)}
-                      className="btn ghost sm text-xs py-1.5 px-2.5 rounded-[8px] bg-white border border-line hover:border-green cursor-pointer flex-none self-center"
+                      className="btn ghost sm text-xs py-1.5 px-2.5 rounded-lg bg-white border border-line hover:border-green cursor-pointer flex-none self-center"
                     >
                       Ack
                     </button>
@@ -329,7 +329,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
         className={`fixed inset-0 bg-navy/55 backdrop-blur-[2px] transition-opacity z-50 ${isMoreOpen ? "opacity-100 flex items-center justify-center p-4.5" : "opacity-0 hidden"}`}
         onClick={() => setIsMoreOpen(false)}
       >
-        <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg max-h-[90vh] overflow-auto text-ink" onClick={e => e.stopPropagation()}>
+        <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg max-h-[90vh] overflow-auto text-ink" onClick={e => e.stopPropagation()}>
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-disp font-medium text-[22px]">More</h3>
             <button onClick={() => setIsMoreOpen(false)} className="text-mut hover:text-ink cursor-pointer">
@@ -351,12 +351,12 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
                   }}
                   className={`flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`}
                 >
-                  <svg className="w-[19px] h-[19px] stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+                  <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
                     <path d={it.icon} />
                   </svg>
                   <span>{it.label}</span>
                   {badgeVal !== null && (
-                    <span className="ml-auto bg-loss text-white text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-[18px] text-center">
+                    <span className="ml-auto bg-loss text-white text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center">
                       {badgeVal}
                     </span>
                   )}
@@ -375,7 +375,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
       {sidebar}
       <div className="main flex-1 flex flex-col min-w-0 relative pb-16 md:pb-0">
         {topbar}
-        <main className="content p-6 flex-1 max-w-[1200px] w-full mx-auto pb-10">
+        <main className="content p-6 flex-1 max-w-300 w-full mx-auto pb-10">
           {children}
         </main>
         {bottomnav}

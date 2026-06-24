@@ -116,7 +116,7 @@ export default function AskVittiPage() {
   ];
 
   return (
-    <div className="space-y-4 max-w-[760px] mx-auto select-text flex flex-col min-h-[calc(100vh-140px)]">
+    <div className="space-y-4 max-w-190 mx-auto select-text flex flex-col min-h-[calc(100vh-140px)]">
       {/* Page Header */}
       <div className="select-none">
         <div className="font-mono text-xs tracking-wider uppercase text-mut">Vitti Intelligence &middot; prototype</div>
@@ -130,7 +130,7 @@ export default function AskVittiPage() {
       </div>
 
       {/* Message Thread Container */}
-      <div className="flex-1 border border-line bg-white rounded-[16px] shadow-shadow p-4 md:p-5 flex flex-col justify-between space-y-4 min-h-[300px]">
+      <div className="flex-1 border border-line bg-white rounded-2xl shadow-shadow p-4 md:p-5 flex flex-col justify-between space-y-4 min-h-75">
         
         {/* Chat window bubble list */}
         <div className="space-y-3.5 overflow-y-auto max-h-[50vh] pr-1.5 scrollbar-thin">
@@ -139,7 +139,7 @@ export default function AskVittiPage() {
             return (
               <div key={idx} className={`flex gap-3 items-start ${isUser ? "justify-end" : ""}`}>
                 {!isUser && (
-                  <div className="w-[30px] h-[30px] rounded-[9px] bg-navy text-green font-disp font-semibold text-base flex items-center justify-center flex-none select-none">
+                  <div className="w-7.5 h-7.5 rounded-[9px] bg-navy text-green font-disp font-semibold text-base flex items-center justify-center flex-none select-none">
                     V
                   </div>
                 )}
@@ -164,7 +164,7 @@ export default function AskVittiPage() {
             <button
               key={idx}
               onClick={() => handleSendMessage(q)}
-              className="bg-white border border-line-2 hover:border-green text-ink hover:text-green-d text-[12px] md:text-[12.5px] font-medium px-3.5 py-1.5 rounded-full cursor-pointer hover:-translate-y-[1px] shadow-sm transition-all"
+              className="bg-white border border-line-2 hover:border-green text-ink hover:text-green-d text-[12px] md:text-[12.5px] font-medium px-3.5 py-1.5 rounded-full cursor-pointer hover:-translate-y-px shadow-sm transition-all"
             >
               {q}
             </button>

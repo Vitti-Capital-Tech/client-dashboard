@@ -48,8 +48,8 @@ export default function StaffAlertsPage() {
     };
 
     return (
-      <div className={`w-[34px] h-[34px] rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
-        <svg className="w-[17px] h-[17px] stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+      <div className={`w-8.5 h-8.5 rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
+        <svg className="w-4.25 h-4.25 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
           <path d={path} />
         </svg>
       </div>
@@ -72,7 +72,7 @@ export default function StaffAlertsPage() {
     return (
       <div 
         key={a.id} 
-        className={`flex gap-3.5 p-3.5 border border-line bg-white rounded-[12px] items-start ${a.ack ? "opacity-70" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
+        className={`flex gap-3.5 p-3.5 border border-line bg-white rounded-xl items-start ${a.ack ? "opacity-70" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
       >
         {alertIco(a)}
         <div className="flex-1 min-w-0 space-y-0.5">
@@ -91,12 +91,12 @@ export default function StaffAlertsPage() {
         {!a.ack ? (
           <button
             onClick={() => ackAlert(a.id)}
-            className="btn ghost sm text-xs py-1.5 px-3 border border-line bg-white hover:border-green rounded-[8px] cursor-pointer flex-none self-center font-semibold"
+            className="btn ghost sm text-xs py-1.5 px-3 border border-line bg-white hover:border-green rounded-lg cursor-pointer flex-none self-center font-semibold"
           >
             Acknowledge
           </button>
         ) : (
-          <span className="pill bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-1 rounded-[6px] select-none self-center flex-none">
+          <span className="pill bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-1 rounded-md select-none self-center flex-none">
             Acked
           </span>
         )}
@@ -180,7 +180,7 @@ export default function StaffAlertsPage() {
       {/* Custom Price Alert Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <form onSubmit={handleAddCustomAlert} className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+          <form onSubmit={handleAddCustomAlert} className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">Create client alert</h3>
             <p className="text-xs text-mut">
               Set custom price triggers for wholesale client portfolios.

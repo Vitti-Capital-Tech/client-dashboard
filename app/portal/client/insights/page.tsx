@@ -37,7 +37,7 @@ export default function ClientInsightsPage() {
                   <b className="text-sm font-semibold text-ink leading-tight">{s.name}</b>
                   <div className="flex items-center gap-2 font-mono font-bold text-xs select-none">
                     {/* Momentum Bar */}
-                    <div className="w-[80px] h-1.5 bg-paper-2 rounded-full overflow-hidden flex justify-end">
+                    <div className="w-20 h-1.5 bg-paper-2 rounded-full overflow-hidden flex justify-end">
                       <div 
                         style={{ width: `${momPercent}%` }} 
                         className={`h-full rounded-full ${isNegative ? "bg-loss" : "bg-green"}`} 
@@ -58,7 +58,7 @@ export default function ClientInsightsPage() {
                       {s.benef.map(code => (
                         <span 
                           key={code} 
-                          className={`code font-mono px-1 rounded-[4px] ${holdings.includes(code) ? "text-green-d font-bold" : ""}`}
+                          className={`code font-mono px-1 rounded-sm ${holdings.includes(code) ? "text-green-d font-bold" : ""}`}
                         >
                           {code} {holdings.includes(code) && "●"}
                         </span>
@@ -116,7 +116,7 @@ export default function ClientInsightsPage() {
         {/* Strategy note */}
         <div className="space-y-4">
           <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3 relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-r from-green to-transparent opacity-5" />
+            <div className="absolute inset-0 bg-linear-to-r from-green to-transparent opacity-5" />
             <div className="text-xs font-semibold text-white/50 flex justify-between">
               <span>This week’s theme</span>
               <span className="font-mono uppercase tracking-wider">deep dive</span>

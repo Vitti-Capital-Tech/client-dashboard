@@ -75,7 +75,7 @@ export default function ClientDashboard() {
         maximumFractionDigits: x.dp !== undefined ? x.dp : 1
       });
       return (
-        <span key={x.code} className="inline-block mr-[22px]">
+        <span key={x.code} className="inline-block mr-5.5">
           {x.code} {valStr} {" "}
           <span className={isUp ? "text-[#5cc79a]" : "text-[#e0795b]"}>
             {isUp ? "▲" : "▼"} {Math.abs(x.chg).toFixed(2)}%
@@ -224,9 +224,9 @@ export default function ClientDashboard() {
               <div 
                 key={idx} 
                 onClick={s.action}
-                className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow flex items-center gap-3.5 hover:-translate-y-[2px] transition-transform cursor-pointer select-none"
+                className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow flex items-center gap-3.5 hover:-translate-y-0.5 transition-transform cursor-pointer select-none"
               >
-                <div className={`w-[38px] h-[38px] rounded-[10px] flex-none flex items-center justify-center ${getSuggIconColor(s.tone)}`}>
+                <div className={`w-9.5 h-9.5 rounded-[10px] flex-none flex items-center justify-center ${getSuggIconColor(s.tone)}`}>
                   <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
                     <path d={s.icon} />
                   </svg>
@@ -281,7 +281,7 @@ export default function ClientDashboard() {
               <span className="text-mut font-semibold">1Y &middot; time-weighted</span>
             </div>
             
-            <div className="w-full relative h-[130px] pt-2">
+            <div className="w-full relative h-32.5 pt-2">
               <svg className="w-full h-full block" viewBox="0 0 600 120" preserveAspectRatio="none">
                 <defs>
                   <linearGradient id="gd" x1="0" y1="0" x2="0" y2="1">
@@ -355,7 +355,7 @@ export default function ClientDashboard() {
         <div className="lg:col-span-5 space-y-4">
           {/* Live Placement Card */}
           {liveDeal && (
-            <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3.5 bg-gradient-to-b from-green-bg/60 to-white/70">
+            <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3.5 bg-linear-to-b from-green-bg/60 to-white/70">
               <div className="flex justify-between items-center text-xs">
                 <b className="text-green-d text-sm font-semibold flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-green animate-ping" />
@@ -389,7 +389,7 @@ export default function ClientDashboard() {
           )}
 
           {/* Ask Vitti AI Card */}
-          <div className="card bg-gradient-to-b from-green-bg to-white/80 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2">
+          <div className="card bg-linear-to-b from-green-bg to-white/80 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2">
             <div className="flex justify-between items-center text-xs">
               <b className="text-ink text-sm font-semibold">Ask Vitti</b>
               <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>
@@ -399,7 +399,7 @@ export default function ClientDashboard() {
             </p>
             <button 
               onClick={() => router.push("/portal/client/askvitti")}
-              className="w-full btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 rounded-[8px] text-xs cursor-pointer select-none transition-colors mt-2"
+              className="w-full btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 rounded-lg text-xs cursor-pointer select-none transition-colors mt-2"
             >
               Open Vitti Intelligence &rarr;
             </button>
@@ -451,7 +451,7 @@ export default function ClientDashboard() {
             <div className="space-y-2">
               {clientAlerts.length > 0 ? (
                 clientAlerts.map(a => (
-                  <div key={a.id} className="flex gap-2.5 p-2.5 border border-line rounded-[12px] bg-white items-start text-xs">
+                  <div key={a.id} className="flex gap-2.5 p-2.5 border border-line rounded-xl bg-white items-start text-xs">
                     {getAlertIco(a.kind, a.sev)}
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-ink leading-tight truncate">{a.title}</div>
@@ -460,7 +460,7 @@ export default function ClientDashboard() {
                     {!a.ack && (
                       <button 
                         onClick={() => ackAlert(a.id)}
-                        className="btn ghost sm text-[10px] py-1 px-2 border border-line rounded-[6px] hover:border-green cursor-pointer flex-none align-self-center"
+                        className="btn ghost sm text-[10px] py-1 px-2 border border-line rounded-md hover:border-green cursor-pointer flex-none align-self-center"
                       >
                         Ack
                       </button>

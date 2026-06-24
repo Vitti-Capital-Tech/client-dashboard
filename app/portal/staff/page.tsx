@@ -107,7 +107,7 @@ export default function StaffOverview() {
           {db.placements.filter(p => p.stage !== "upcoming").map(p => {
             const totalBidsVal = p.bids.reduce((sum, b) => sum + b.amount, 0);
             return (
-              <div key={p.id} className="border border-line rounded-[12px] p-4 space-y-3">
+              <div key={p.id} className="border border-line rounded-xl p-4 space-y-3">
                 <div className="flex justify-between items-center">
                   <div>
                     <span className="code text-xs bg-paper-2 rounded-[5px] px-1.5 py-0.5 font-bold">{p.code}</span>
@@ -128,7 +128,7 @@ export default function StaffOverview() {
                 </div>
                 <button 
                   onClick={() => router.push("/portal/staff/placements")}
-                  className="w-full btn bg-navy hover:bg-slate-800 text-white font-semibold py-1.5 rounded-[8px] text-[11px] cursor-pointer"
+                  className="w-full btn bg-navy hover:bg-slate-800 text-white font-semibold py-1.5 rounded-lg text-[11px] cursor-pointer"
                 >
                   Manage deal
                 </button>
@@ -202,7 +202,7 @@ export default function StaffOverview() {
             </button>
           </div>
 
-          <div className="p-4 flex-1 overflow-y-auto space-y-3.5 max-h-[300px]">
+          <div className="p-4 flex-1 overflow-y-auto space-y-3.5 max-h-75">
             {db.audit.slice(0, 5).map((log, idx) => (
               <div key={idx} className="space-y-0.5 text-xs">
                 <div className="flex justify-between items-baseline font-mono text-[9.5px] text-mut select-none">

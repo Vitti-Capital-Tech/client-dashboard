@@ -203,7 +203,7 @@ export default function StaffPlacementsPage() {
                     <textarea
                       value={clientMessage}
                       onChange={e => setClientMessage(e.target.value)}
-                      className="w-full border border-line-2 bg-white rounded-[9px] p-2 text-xs font-medium focus:border-green focus:outline-none min-h-[64px]"
+                      className="w-full border border-line-2 bg-white rounded-[9px] p-2 text-xs font-medium focus:border-green focus:outline-none min-h-16"
                     />
                   </div>
 
@@ -218,7 +218,7 @@ export default function StaffPlacementsPage() {
 
               {/* Settlement step */}
               {p.stage === "closed" && isAllocated && (
-                <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3 bg-gradient-to-b from-green-bg/60 to-white/70">
+                <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3 bg-linear-to-b from-green-bg/60 to-white/70">
                   <div className="text-xs font-semibold text-green-d select-none">
                     Allocations published
                   </div>
@@ -299,7 +299,7 @@ export default function StaffPlacementsPage() {
                       {p.stage !== "upcoming" && (
                         <button
                           onClick={() => handleOpenPlacement(p.id)}
-                          className="btn ghost sm text-xs font-semibold py-1.5 px-3 border border-line rounded-[8px] hover:border-mut cursor-pointer transition-colors bg-white"
+                          className="btn ghost sm text-xs font-semibold py-1.5 px-3 border border-line rounded-lg hover:border-mut cursor-pointer transition-colors bg-white"
                         >
                           Manage
                         </button>

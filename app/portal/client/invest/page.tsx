@@ -206,7 +206,7 @@ export default function ClientInvestPage() {
             </div>
             <button 
               onClick={handleOpenBuilder}
-              className="btn ghost sm text-xs py-1.5 px-3 border border-line rounded-[8px] hover:border-mut cursor-pointer font-semibold bg-white"
+              className="btn ghost sm text-xs py-1.5 px-3 border border-line rounded-lg hover:border-mut cursor-pointer font-semibold bg-white"
             >
               Rebuild
             </button>
@@ -219,7 +219,7 @@ export default function ClientInvestPage() {
               const isHeld = isHoldingStock(it.code);
               const tfLabels = { Tactical: "Tactical · 2–4w", Core: "Core · 1–3m", Strategic: "Strategic · 6–12m" };
               return (
-                <div key={it.code} className="border border-line rounded-[12px] p-4.5 space-y-3">
+                <div key={it.code} className="border border-line rounded-xl p-4.5 space-y-3">
                   <div className="flex justify-between items-center select-none">
                     <span className={`pill text-[10px] font-bold rounded-full px-2.5 py-0.5 ${getTfChipColor(it.tf)}`}>
                       {tfLabels[it.tf]}
@@ -259,7 +259,7 @@ export default function ClientInvestPage() {
 
                   <button
                     onClick={() => handleOpenDeploy(it.code, it.allocAmt)}
-                    className="w-full btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-2 rounded-[8px] text-xs cursor-pointer select-none"
+                    className="w-full btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-2 rounded-lg text-xs cursor-pointer select-none"
                   >
                     Deploy ${it.allocAmt.toLocaleString("en-AU")} &rarr;
                   </button>
@@ -311,8 +311,8 @@ export default function ClientInvestPage() {
         </div>
       ) : (
         <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3 relative overflow-hidden">
-          <div className="absolute inset-0 pointer-events-none opacity-5 bg-gradient-to-r from-green to-transparent" />
-          <div className="max-w-[500px] space-y-1">
+          <div className="absolute inset-0 pointer-events-none opacity-5 bg-linear-to-r from-green to-transparent" />
+          <div className="max-w-125 space-y-1">
             <h3 className="font-disp font-medium text-xl text-white">Put your capital to work, with a plan</h3>
             <p className="text-xs text-slate-300 leading-relaxed">
               Tell us how much to deploy and what you’re after. We’ll return 3–4 recommendations across short, medium and long horizons — each with a target and a date.
@@ -332,7 +332,7 @@ export default function ClientInvestPage() {
         <div className="font-mono text-[11px] tracking-wider uppercase text-mut">Idea of the week</div>
         <div className="card bg-white border border-green/30 rounded-[14px] p-5 shadow-shadow hover:border-green transition-colors">
           <div className="flex gap-4 items-start flex-wrap">
-            <div className="flex-1 min-w-[220px] space-y-2 select-none">
+            <div className="flex-1 min-w-55 space-y-2 select-none">
               <div className="flex items-center gap-2">
                 <span className="code text-[17px] bg-paper-2 rounded-[5px] px-1.5 py-0.5 font-bold">{ideaOfWeek.code}</span>
                 <span className="pill text-[11px] font-bold bg-[#ece9f3] text-[#5c5775] px-2.5 py-0.5 rounded-full">{ideaOfWeek.theme}</span>
@@ -346,7 +346,7 @@ export default function ClientInvestPage() {
               <p className="text-xs text-mut leading-relaxed">{ideaOfWeek.thesis}</p>
             </div>
 
-            <div className="w-[200px] flex-none select-none">
+            <div className="w-50 flex-none select-none">
               <div className="bg-paper-2 rounded-[10px] p-3 space-y-1.5 text-xs text-mut font-semibold leading-normal">
                 <div className="flex justify-between">
                   <span>Target</span>
@@ -368,7 +368,7 @@ export default function ClientInvestPage() {
 
               <button 
                 onClick={() => setShowIdeaModal(ideaOfWeek.code)}
-                className="w-full btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-2 rounded-[8px] text-xs cursor-pointer mt-3"
+                className="w-full btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-2 rounded-lg text-xs cursor-pointer mt-3"
               >
                 View idea
               </button>
@@ -438,13 +438,13 @@ export default function ClientInvestPage() {
                 <div className="flex gap-2 pt-1 select-none">
                   <button 
                     onClick={() => setShowIdeaModal(i.code)}
-                    className="btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-1.5 px-3 rounded-[8px] text-xs cursor-pointer flex-[1.4]"
+                    className="btn bg-green hover:shadow-lg text-[#08130e] font-semibold py-1.5 px-3 rounded-lg text-xs cursor-pointer flex-[1.4]"
                   >
                     View idea
                   </button>
                   <button 
                     onClick={() => alert(`${i.code} added to watchlist.`)}
-                    className="btn ghost border border-line rounded-[8px] text-mut hover:border-mut py-1.5 px-3 text-xs font-semibold cursor-pointer flex-1 bg-white"
+                    className="btn ghost border border-line rounded-lg text-mut hover:border-mut py-1.5 px-3 text-xs font-semibold cursor-pointer flex-1 bg-white"
                   >
                     Watch
                   </button>
@@ -458,7 +458,7 @@ export default function ClientInvestPage() {
       {/* Plan Builder Dialog Modal */}
       {showBuilder && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4">
             <h3 className="font-disp font-medium text-lg text-ink">Build my plan</h3>
             <p className="text-xs text-mut leading-normal">
               Tell us the brief. We’ll return 3–4 recommendations across timeframes, each with a target and date.
@@ -543,7 +543,7 @@ export default function ClientInvestPage() {
             const i = db.ideas.find(x => x.code === showIdeaModal)!;
             const up = i.target && i.last ? Math.round((i.target / i.last - 1) * 100) : null;
             return (
-              <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+              <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
                 <div className="flex items-center gap-2.5 flex-wrap">
                   <span className="code text-lg bg-paper-2 rounded-[5px] px-2 py-0.5">{i.code}</span>
                   <span className={`pill text-[10px] font-semibold px-2 py-0.5 rounded-full bg-paper-2 text-mut`}>{i.theme}</span>
@@ -608,7 +608,7 @@ export default function ClientInvestPage() {
       {/* Deploy Money Modal */}
       {showDeployModal && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">Invest in {showDeployModal.code}</h3>
             <p className="text-xs text-mut">
               Execute order with the Vitti desk

@@ -148,7 +148,7 @@ export default function ClientOptionsPage() {
                       {o.listed ? (
                         <button
                           onClick={() => handleActionClick(o.code)}
-                          className="btn ghost sm text-xs font-semibold py-1.5 px-3 border border-line rounded-[8px] bg-white hover:border-mut cursor-pointer transition-colors"
+                          className="btn ghost sm text-xs font-semibold py-1.5 px-3 border border-line rounded-lg bg-white hover:border-mut cursor-pointer transition-colors"
                         >
                           Exercise
                         </button>
@@ -185,7 +185,7 @@ export default function ClientOptionsPage() {
         </div>
 
         {/* View Mode switcher */}
-        <div className="inline-flex bg-paper-2 rounded-[9px] p-[3px]">
+        <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
           <button
             onClick={() => setViewMode("table")}
             className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${viewMode === "table" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
@@ -283,14 +283,14 @@ export default function ClientOptionsPage() {
                     {o.listed ? (
                       <button
                         onClick={() => handleActionClick(o.code)}
-                        className="w-full btn ghost sm text-xs font-semibold py-2 rounded-[8px] bg-white border border-line hover:border-mut cursor-pointer transition-colors"
+                        className="w-full btn ghost sm text-xs font-semibold py-2 rounded-lg bg-white border border-line hover:border-mut cursor-pointer transition-colors"
                       >
                         Exercise / Sell
                       </button>
                     ) : hasAction ? (
                       <button
                         onClick={() => handleActionClick(o.code)}
-                        className="w-full btn bg-green text-[#08130e] hover:shadow-lg font-semibold py-2 rounded-[8px] text-xs cursor-pointer animate-pulse transition-all"
+                        className="w-full btn bg-green text-[#08130e] hover:shadow-lg font-semibold py-2 rounded-lg text-xs cursor-pointer animate-pulse transition-all"
                       >
                         Act now &middot; exercise window open
                       </button>

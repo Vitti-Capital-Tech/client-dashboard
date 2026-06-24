@@ -64,7 +64,7 @@ function LoginContent() {
   return (
     <div className="min-h-screen grid md:grid-cols-2 bg-paper text-ink font-body">
       {/* Left Aside (Hero Design) */}
-      <aside className="bg-navy text-white p-10 md:p-14 flex flex-col justify-between relative overflow-hidden hidden md:flex">
+      <aside className="bg-navy text-white p-10 md:p-14 flex-col justify-between relative overflow-hidden hidden md:flex">
         {/* Decorative Grid background */}
         <div 
           className="absolute inset-0 pointer-events-none opacity-10"
@@ -79,9 +79,9 @@ function LoginContent() {
 
         <Link href="/" className="relative z-10 inline-flex items-center gap-2 font-disp font-semibold text-xl tracking-wide decoration-0 text-white">
           <span className="inline-flex gap-[2.5px] items-end h-[1em] text-xl">
-            <i className="block w-[3px] h-[0.5em] rounded-[2px] bg-green" />
-            <i className="block w-[3px] h-[0.72em] rounded-[2px] bg-green" />
-            <i className="block w-[3px] h-[0.95em] rounded-[2px] bg-green" />
+            <i className="block w-0.75 h-[0.5em] rounded-xs bg-green" />
+            <i className="block w-0.75 h-[0.72em] rounded-xs bg-green" />
+            <i className="block w-0.75 h-[0.95em] rounded-xs bg-green" />
           </span>
           Vitti
           <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
@@ -95,7 +95,7 @@ function LoginContent() {
           </div>
         </div>
 
-        <div className="relative z-10 text-[12.5px] text-[#9aa0b4] leading-relaxed">
+        <div className="relative z-10 text-[12.5px] text-mut-d leading-relaxed">
           Level 49, 8 Parramatta Square, NSW 2150<br />
           Wholesale clients only &middot; AFSL 518031
         </div>
@@ -103,7 +103,7 @@ function LoginContent() {
 
       {/* Right Login Area */}
       <main className="flex items-center justify-center p-6 md:p-10 bg-white">
-        <div className="w-full max-w-[392px]">
+        <div className="w-full max-w-98">
           {step === 1 ? (
             <form onSubmit={handleContinue} className="space-y-4">
               <div className="mb-4">

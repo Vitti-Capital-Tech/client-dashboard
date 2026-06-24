@@ -27,7 +27,7 @@ export default function ClientMarketsPage() {
           {db.indices.map(x => {
             const isUp = x.chg >= 0;
             return (
-              <div key={x.code} className="flex-1 min-w-[104px] px-5 py-3 select-none">
+              <div key={x.code} className="flex-1 min-w-26 px-5 py-3 select-none">
                 <div className="font-mono text-[10.5px] text-mut font-semibold tracking-wider uppercase">{x.code}</div>
                 <div className="font-mono font-bold text-base mt-0.5 text-ink">
                   {x.last.toLocaleString("en-AU", {
@@ -48,7 +48,7 @@ export default function ClientMarketsPage() {
       <div className="grid md:grid-cols-12 gap-4">
         {/* Morning Note */}
         <div className="md:col-span-7 space-y-4">
-          <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3.5 relative overflow-hidden bg-gradient-to-b from-navy to-[#181a28]">
+          <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3.5 relative overflow-hidden bg-linear-to-b from-navy to-[#181a28]">
             <div className="flex justify-between items-center text-xs font-semibold text-white/50 select-none">
               <span>Morning note</span>
               <span>{note.time} &middot; research desk</span>
@@ -64,7 +64,7 @@ export default function ClientMarketsPage() {
 
             <button 
               onClick={() => alert("Full RBA miners research PDF would open here.")}
-              className="btn bg-green text-[#08130e] hover:shadow-lg font-semibold py-2 px-4 rounded-[8px] text-xs cursor-pointer select-none"
+              className="btn bg-green text-[#08130e] hover:shadow-lg font-semibold py-2 px-4 rounded-lg text-xs cursor-pointer select-none"
             >
               Read full note
             </button>
@@ -126,13 +126,13 @@ export default function ClientMarketsPage() {
             </div>
             <button 
               onClick={() => alert("Research library portal would open here.")}
-              className="w-full btn ghost sm text-xs font-semibold py-2 border border-line rounded-[8px] bg-white hover:border-mut cursor-pointer select-none"
+              className="w-full btn ghost sm text-xs font-semibold py-2 border border-line rounded-lg bg-white hover:border-mut cursor-pointer select-none"
             >
               All research reports
             </button>
           </div>
 
-          <div className="card bg-gradient-to-b from-green-bg to-white border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2 select-none">
+          <div className="card bg-linear-to-b from-green-bg to-white border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2 select-none">
             <div className="flex justify-between items-center text-xs">
               <b className="text-ink text-sm font-semibold">Ask Vitti AI</b>
               <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>

@@ -126,13 +126,13 @@ export default function StaffOptionsPage() {
       </div>
 
       {/* Filters Strip */}
-      <div className="flex flex-wrap gap-3 items-center text-xs font-semibold bg-white border border-line rounded-[12px] p-3.5 shadow-shadow">
+      <div className="flex flex-wrap gap-3 items-center text-xs font-semibold bg-white border border-line rounded-xl p-3.5 shadow-shadow">
         <div className="flex items-center gap-1.5">
           <span className="text-mut uppercase text-[10px]">Client</span>
           <select
             value={filterClient}
             onChange={e => setFilterClient(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-[6px] focus:outline-none"
+            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
           >
             <option value="all">All clients</option>
             {Object.keys(db.clients).map(cid => (
@@ -146,7 +146,7 @@ export default function StaffOptionsPage() {
           <select
             value={filterType}
             onChange={e => setFilterType(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-[6px] focus:outline-none"
+            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
           >
             <option value="all">All</option>
             <option value="listed">Listed</option>
@@ -159,7 +159,7 @@ export default function StaffOptionsPage() {
           <select
             value={filterExpiry}
             onChange={e => setFilterExpiry(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-[6px] focus:outline-none"
+            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
           >
             <option value="all">Any</option>
             <option value="7">&le; 7 days</option>
@@ -172,7 +172,7 @@ export default function StaffOptionsPage() {
           <select
             value={filterMoney}
             onChange={e => setFilterMoney(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-[6px] focus:outline-none"
+            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
           >
             <option value="all">All</option>
             <option value="itm">In the money</option>
@@ -183,7 +183,7 @@ export default function StaffOptionsPage() {
         {(filterClient !== "all" || filterType !== "all" || filterExpiry !== "all" || filterMoney !== "all") && (
           <button
             onClick={handleClearFilters}
-            className="btn ghost sm text-[11px] font-semibold py-1.5 px-3 border border-line rounded-[8px] bg-paper hover:bg-white cursor-pointer ml-auto"
+            className="btn ghost sm text-[11px] font-semibold py-1.5 px-3 border border-line rounded-lg bg-paper hover:bg-white cursor-pointer ml-auto"
           >
             Clear filters
           </button>
@@ -302,7 +302,7 @@ export default function StaffOptionsPage() {
       {/* Manual Unlisted Option Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <form onSubmit={handleAddOptionSubmit} className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+          <form onSubmit={handleAddOptionSubmit} className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">Add unlisted option</h3>
             <p className="text-xs text-mut leading-normal">
               Unlisted options are not on the broker feed. Enter them on the client register manually.

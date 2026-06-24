@@ -58,7 +58,7 @@ export default function StaffAuditLog() {
                       <div className="text-[10px] text-mut uppercase font-semibold mt-0.5">{e.role}</div>
                     </td>
                     <td className="px-4.5 py-3 font-semibold text-ink">{e.action}</td>
-                    <td className="px-4.5 py-3 text-mut leading-relaxed hidden md:table-cell truncate max-w-[300px]">
+                    <td className="px-4.5 py-3 text-mut leading-relaxed hidden md:table-cell truncate max-w-75">
                       {e.detail}
                     </td>
                   </tr>

@@ -53,13 +53,13 @@ const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v
 const BarChart = ({ items, height = 120 }: { items: { label: string; v: number; col?: string }[]; height?: number }) => {
   const max = Math.max(...items.map(i => Math.abs(i.v))) || 1;
   return (
-    <div className="flex items-end gap-1.5 h-[120px] select-none">
+    <div className="flex items-end gap-1.5 h-30 select-none">
       {items.map((it, idx) => {
         const bh = (Math.abs(it.v) / max) * (height - 26);
         const col = it.col || (it.v < 0 ? "var(--color-loss)" : "var(--color-green)");
         return (
           <div key={idx} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0">
-            <div style={{ height: `${bh}px`, backgroundColor: col }} className="w-[60%] max-w-[30px] rounded-t-[3px] transition-all" />
+            <div style={{ height: `${bh}px`, backgroundColor: col }} className="w-[60%] max-w-7.5 rounded-t-[3px] transition-all" />
             <div className="text-[9.5px] text-mut text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
               {it.label}
             </div>
@@ -193,7 +193,7 @@ export default function ClientPositionsPage() {
                 </div>
               </div>
               
-              <div className="flex-1 min-w-[150px] space-y-2">
+              <div className="flex-1 min-w-37.5 space-y-2">
                 {alloc.map(a => (
                   <div key={a.label} className="flex items-center gap-2 text-xs font-medium text-ink">
                     <i style={{ backgroundColor: a.col }} className="w-2.5 h-2.5 rounded-[3px] block flex-none" />
@@ -248,7 +248,7 @@ export default function ClientPositionsPage() {
               <b className="text-sm font-semibold text-ink">Portfolio growth</b>
               <span className="text-mut font-semibold">1Y</span>
             </div>
-            <div className="w-full h-[120px]">
+            <div className="w-full h-30">
               <svg className="w-full h-full block" viewBox="0 0 600 120" preserveAspectRatio="none">
                 <defs>
                   <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
@@ -282,7 +282,7 @@ export default function ClientPositionsPage() {
         </div>
 
         {/* Tabs switcher */}
-        <div className="inline-flex bg-paper-2 rounded-[9px] p-[3px]">
+        <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
           <button
             onClick={() => setTab("holdings")}
             className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "holdings" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
@@ -386,7 +386,7 @@ export default function ClientPositionsPage() {
       {/* Holdings Detailed Advice Modal */}
       {selectedStock && advice && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4">
             <div className="flex items-center gap-2.5">
               <span className="code text-lg bg-paper-2 rounded-[5px] px-2 py-0.5">{selectedHolding}</span>
               {getActionPill(advice.action)}
@@ -463,7 +463,7 @@ export default function ClientPositionsPage() {
       {/* Trade Execution Modal */}
       {isTradeModalOpen && selectedStock && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">
               Route {tradeAction === "Buy" ? "Buy" : "Sell"} Order to Desk
             </h3>

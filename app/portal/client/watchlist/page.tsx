@@ -118,7 +118,7 @@ export default function ClientWatchlistPage() {
       {matchedPlacement && (
         <div className="card bg-green-bg border border-green rounded-[14px] p-4.5 shadow-shadow select-none">
           <div className="flex items-center gap-3.5 flex-wrap">
-            <div className="flex-1 min-w-[200px] space-y-1">
+            <div className="flex-1 min-w-50 space-y-1">
               <span className="pill bg-green border border-green-d text-[#08130e] text-[10px] font-bold py-0.5 px-2.5 rounded-full uppercase">
                 From your watchlist
               </span>
@@ -131,7 +131,7 @@ export default function ClientWatchlistPage() {
             </div>
             <button 
               onClick={() => alert("Redirecting to placements review details...")}
-              className="btn bg-navy text-white hover:bg-slate-800 font-semibold py-1.5 px-3 rounded-[8px] text-xs cursor-pointer"
+              className="btn bg-navy text-white hover:bg-slate-800 font-semibold py-1.5 px-3 rounded-lg text-xs cursor-pointer"
             >
               Review deal
             </button>
@@ -193,7 +193,7 @@ export default function ClientWatchlistPage() {
                       <td className="px-4.5 py-3.5 text-right">
                         <button
                           onClick={() => handleRemoveSecurity(idx)}
-                          className="p-1 rounded-[8px] hover:bg-paper-2 text-mut hover:text-ink cursor-pointer"
+                          className="p-1 rounded-lg hover:bg-paper-2 text-mut hover:text-ink cursor-pointer"
                         >
                           <svg className="w-3.5 h-3.5 fill-none stroke-current stroke-2" viewBox="0 0 24 24">
                             <path d="M6 6l12 12M18 6 6 18" />
@@ -212,7 +212,7 @@ export default function ClientWatchlistPage() {
       {/* Add Security Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <form onSubmit={handleAddSecurity} className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+          <form onSubmit={handleAddSecurity} className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">Add to watchlist</h3>
             <p className="text-xs text-mut leading-normal">
               Track any ASX security for live prices and custom trigger notifications.
@@ -267,7 +267,7 @@ export default function ClientWatchlistPage() {
           {(() => {
             const item = watchlist[showAlertModal];
             return (
-              <div className="bg-white rounded-[16px] max-w-[440px] w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+              <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
                 <h3 className="font-disp font-medium text-lg text-ink">Price alert &middot; {item.code}</h3>
                 <p className="text-xs text-mut">
                   {item.name} &middot; last closes ${item.last ? item.last.toFixed(2) : "—"}
