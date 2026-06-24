@@ -1,11 +1,11 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { Alert } from "@/lib/db";
 
 export default function StaffAlertsPage() {
-  const { db, ackAlert, addCustomAlert } = useDatabase();
+  const { db, ackAlert, addCustomAlert } = useDatabaseStore();
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Form states

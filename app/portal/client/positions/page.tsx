@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientPositions,
   posValue,
@@ -71,7 +71,7 @@ const BarChart = ({ items, height = 120 }: { items: { label: string; v: number; 
 };
 
 export default function ClientPositionsPage() {
-  const { db, clientId, addCustomAlert } = useDatabase();
+  const { db, clientId, addCustomAlert } = useDatabaseStore();
   const [tab, setTab] = useState<"holdings" | "analytics">("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
   

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   cashOf,
   clientPositions,
@@ -26,7 +26,7 @@ interface Plan {
 }
 
 export default function ClientInvestPage() {
-  const { db, clientId } = useDatabase();
+  const { db, clientId } = useDatabaseStore();
   
   // Guided investment plan state (simulated session state)
   const [plan, setPlan] = useState<Plan | null>(null);

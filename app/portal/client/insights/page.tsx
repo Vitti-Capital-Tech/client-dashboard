@@ -1,11 +1,11 @@
 "use client";
 
 import React from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { clientPositions } from "@/lib/db";
 
 export default function ClientInsightsPage() {
-  const { db, clientId } = useDatabase();
+  const { db, clientId } = useDatabaseStore();
 
   const holdings = clientPositions(db, clientId).map(p => p.code);
   const maxMom = Math.max(...db.sectors.map(s => Math.abs(s.mom)));

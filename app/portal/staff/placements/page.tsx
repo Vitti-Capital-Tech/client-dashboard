@@ -1,11 +1,15 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { Placement } from "@/lib/db";
 
+import { useShallow } from "zustand/react/shallow";
+
 export default function StaffPlacementsPage() {
-  const { db, scaleBids, updatePlacementStage } = useDatabase();
+  const scaleBids = useDatabaseStore(state => state.scaleBids);
+  const updatePlacementStage = useDatabaseStore(state => state.updatePlacementStage);
+  const db = useDatabaseStore(state => state.db);
   const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null);
 
   // Allocations publishing states

@@ -1,10 +1,10 @@
 "use client";
 
 import React from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 
 export default function StaffAuditLog() {
-  const { db } = useDatabase();
+  const { db } = useDatabaseStore();
 
   const handleExportCSV = () => {
     alert("CSV export completed. File downloaded: vitti_audit_log.csv");

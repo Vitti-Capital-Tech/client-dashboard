@@ -3,12 +3,12 @@
 import { useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { setRole, setClientId } = useDatabase();
+  const { setRole, setClientId } = useDatabaseStore();
 
   const initialRole = (searchParams.get("role") as "client" | "admin") || "client";
   const [step, setStep] = useState<1 | 2>(1);

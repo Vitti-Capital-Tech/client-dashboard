@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { hankenGrotesk, fraunces, ibmPlexMono } from "@/lib/fonts";
-import { DatabaseProvider } from "@/contexts/DatabaseContext";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,9 +18,9 @@ export default function RootLayout({
       className={`${hankenGrotesk.variable} ${fraunces.variable} ${ibmPlexMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-body bg-paper text-ink">
-        <DatabaseProvider>
+        
           {children}
-        </DatabaseProvider>
+        
       </body>
     </html>
   );

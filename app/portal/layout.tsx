@@ -3,13 +3,13 @@
 import React, { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { clientPositions, clientOptions, scanAlerts, intrinsic, isITM, Alert } from "@/lib/db";
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { db, role, clientId, ackAlert, currentUserLabel, setRole } = useDatabase();
+  const { db, role, clientId, ackAlert, currentUserLabel, setRole } = useDatabaseStore();
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
 

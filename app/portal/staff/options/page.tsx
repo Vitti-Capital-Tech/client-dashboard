@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { isITM, moneyness, intrinsic, OptionHolding } from "@/lib/db";
 
 // Expiry Rail Component
@@ -54,7 +54,7 @@ const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; 
 };
 
 export default function StaffOptionsPage() {
-  const { db } = useDatabase();
+  const { db } = useDatabaseStore();
 
   // Filters state
   const [filterClient, setFilterClient] = useState("all");

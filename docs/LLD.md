@@ -59,9 +59,9 @@ export interface Placement {
 
 ---
 
-## 2. Stateful Mutation & Context Data Flow
+## 2. Stateful Mutation & Store Data Flow
 
-The following data flow chart illustrates how client actions and staff console updates propagate through the state lifecycle context reactively, mutating data states cleanly:
+The following data flow chart illustrates how client actions and staff console updates propagate through the state lifecycle store reactively, mutating data states cleanly:
 
 ```mermaid
 flowchart TD
@@ -73,8 +73,8 @@ flowchart TD
         Book["Placement Book Manager"]
     end
 
-    subgraph Context ["State & Context Layer (DatabaseProvider)"]
-        DBState["Stateful DB State (React state)"]
+    subgraph Store ["State Management Layer (Zustand Store)"]
+        DBState["Stateful DB State (Zustand state)"]
         MutateBid["mutatePlaceBid / mutateWithdrawBid"]
         Settle["mutateUpdatePlacementStage (Settlement Engine)"]
     end
@@ -91,7 +91,7 @@ flowchart TD
     MutateBid -->|"Update bids array"| DBState
 
     %% Staff Actions
-    Book -->|"2. Adjust scaling slider (scalePct)"| Context
+    Book -->|"2. Adjust scaling slider (scalePct)"| Store
     Book -->|"3. Commit Allocations (scale & commit)"| MutateBid
     Book -->|"4. Transition Stage to 'settled'"| Settle
 
@@ -165,7 +165,7 @@ In Next.js, static routes that use `useSearchParams()` must be wrapped in a Reac
 The adviser scaling dashboard features an interactive scaling handle.
 - State: `scalePct` (0% to 100%) and individual bid text boxes.
 - When the slider drags, it sets the scale percentage and updates all calculated allocation states: `alloc = bid.amount * (scalePct / 100)`.
-- Staff can commit allocations, instantly updating the global reactive DB context.
+- Staff can commit allocations, instantly updating the global reactive Zustand store.
 
 ### 4.3 Contextual Ask Vitti AI Chat (`portal/client/askvitti/page.tsx`)
 - Resets messages state on client switches using render-phase verification:

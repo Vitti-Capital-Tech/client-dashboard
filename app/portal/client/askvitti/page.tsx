@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientPositions,
   clientOptions,
@@ -18,7 +18,7 @@ interface Message {
 }
 
 export default function AskVittiPage() {
-  const { db, clientId } = useDatabase();
+  const { db, clientId } = useDatabaseStore();
   const client = db.clients[clientId];
   const pvVal = portfolioValue(db, clientId);
   const dplVal = dailyPL(db, clientId);

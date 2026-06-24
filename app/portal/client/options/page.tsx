@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientOptions,
   isITM,
@@ -68,7 +68,7 @@ const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; 
 };
 
 export default function ClientOptionsPage() {
-  const { db, clientId } = useDatabase();
+  const { db, clientId } = useDatabaseStore();
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
 
   const options = clientOptions(db, clientId).filter(o => o.status !== "expired");

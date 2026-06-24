@@ -25,8 +25,8 @@ client-dashboard/
 │       ├── layout.tsx      # Portals shell, bottom bar nav, alerts drawer, mobile emulator
 │       ├── client/         # Client views (Dashboard, Portfolio, Options, Ask Vitti AI)
 │       └── staff/          # Staff/Adviser views (Client Registry, Book Builder, Audits)
-├── contexts/
-│   └── DatabaseContext.tsx # Stateful mock database React Context provider
+├── store/
+│   └── useDatabaseStore.ts # Zustand global state management
 ├── docs/
 │   ├── HLD.md              # High-Level Architecture Design
 │   └── LLD.md              # Low-Level Component Design
@@ -44,7 +44,7 @@ client-dashboard/
 - **Framework:** Next.js 16 (App Router) & React 19 (Hooks, Suspense).
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
 - **Fonts:** `Fraunces` (serif accent headers), `Hanken Grotesk` (clean sans body text), and `IBM Plex Mono` (financial figures and metrics).
-- **State Engine:** Pure, reactively updated in-memory database context (`DatabaseContext.tsx`) syncing clients, position parameters, alerts logs, and audit entries.
+- **State Engine:** Pure, reactively updated in-memory database using **Zustand** (`useDatabaseStore.ts`) syncing clients, position parameters, alerts logs, and audit entries.
 - **Developer Features:** Instantly toggle between **Web Layout** (fluid responsive web design) and **Mobile Frame** (rendering layout components within a simulated smartphone device mockup frame).
 
 ---

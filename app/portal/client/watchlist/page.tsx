@@ -1,10 +1,14 @@
 "use client";
 
 import React, { useState } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
+
+import { useShallow } from "zustand/react/shallow";
 
 export default function ClientWatchlistPage() {
-  const { db, clientId, addCustomAlert } = useDatabase();
+  const clientId = useDatabaseStore(state => state.clientId);
+  const addCustomAlert = useDatabaseStore(state => state.addCustomAlert);
+  const db = useDatabaseStore(state => state.db);
   
   // Local list state since watchlist can be mutated locally or from DB
   const [watchlist, setWatchlist] = useState(() => {

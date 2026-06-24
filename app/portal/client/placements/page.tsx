@@ -1,11 +1,17 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { Placement } from "@/lib/db";
 
+import { useShallow } from "zustand/react/shallow";
+
 export default function ClientPlacementsPage() {
-  const { db, clientId, placeBid, withdrawBid, notifyBpayPayment } = useDatabase();
+  const clientId = useDatabaseStore(state => state.clientId);
+  const placeBid = useDatabaseStore(state => state.placeBid);
+  const withdrawBid = useDatabaseStore(state => state.withdrawBid);
+  const notifyBpayPayment = useDatabaseStore(state => state.notifyBpayPayment);
+  const db = useDatabaseStore(state => state.db);
   const [selectedDealId, setSelectedDealId] = useState<string | null>(null);
   
   // Bid form inputs

@@ -2,12 +2,12 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import { portfolioValue } from "@/lib/db";
 
 export default function StaffClientsPage() {
   const router = useRouter();
-  const { db, setViewClient } = useDatabase();
+  const { db, setViewClient } = useDatabaseStore();
 
   const clientIds = Object.keys(db.clients);
 

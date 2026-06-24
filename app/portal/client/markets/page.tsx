@@ -1,10 +1,10 @@
 "use client";
 
 import React from "react";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 
 export default function ClientMarketsPage() {
-  const { db } = useDatabase();
+  const { db } = useDatabaseStore();
   const note = db.note;
 
   return (

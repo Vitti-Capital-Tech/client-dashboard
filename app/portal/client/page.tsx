@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientPositions,
   clientOptions,
@@ -17,9 +17,13 @@ import {
   isITM
 } from "@/lib/db";
 
+import { useShallow } from "zustand/react/shallow";
+
 export default function ClientDashboard() {
   const router = useRouter();
-  const { db, clientId, ackAlert } = useDatabase();
+  const clientId = useDatabaseStore(state => state.clientId);
+  const ackAlert = useDatabaseStore(state => state.ackAlert);
+  const db = useDatabaseStore(state => state.db);
   const [countdown, setCountdown] = useState("closes 4:00:00");
 
   const client = db.clients[clientId];

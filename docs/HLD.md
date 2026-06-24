@@ -14,7 +14,7 @@ The objectives of the platform are:
 
 ```mermaid
 graph TD
-    A["Root Layout (app/layout.tsx)"] --> B["DatabaseProvider Context (contexts/DatabaseContext.tsx)"]
+    A["Root Layout (app/layout.tsx)"] --> B["Zustand Store (store/useDatabaseStore.ts)"]
     B --> C["Landing Page (app/page.tsx)"]
     B --> D["Login Page (app/login/page.tsx)"]
     B --> E["Portal Shell Layout (app/portal/layout.tsx)"]
@@ -45,12 +45,12 @@ graph TD
 
 ## 3. High-Level Components
 
-### 3.1 Reactive State Store (`contexts/DatabaseContext.tsx`)
+### 3.1 Reactive State Store (`store/useDatabaseStore.ts`)
 Because this is a self-contained prototype, database interactions are simulated in memory:
 - An initial database object (`INITIAL_DATABASE`) is loaded from `lib/db.ts`.
-- The database is wrapped in React state (`db`) inside the `DatabaseProvider`.
+- The database is managed globally using a **Zustand** store (`useDatabaseStore`).
 - Mutators copy the database and return updated versions with mutations (e.g., bid increments, allocation scales, custom price alerts).
-- The state changes trigger reactively across all active pages (e.g., client placements update immediately when a staff member scales allocations).
+- The state changes trigger reactively across all active pages via fine-grained slice selectors (e.g., client placements update immediately when a staff member scales allocations).
 
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx`)
 The wrapper coordinates:

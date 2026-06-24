@@ -2,7 +2,7 @@
 
 import React from "react";
 import { useRouter } from "next/navigation";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientPositions,
   posValue,
@@ -11,7 +11,7 @@ import {
 
 export default function StaffOverview() {
   const router = useRouter();
-  const { db, setViewClient } = useDatabase();
+  const { db, setViewClient } = useDatabaseStore();
 
   // Derived metrics
   let totalBookValue = 0;

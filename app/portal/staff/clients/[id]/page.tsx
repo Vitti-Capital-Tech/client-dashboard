@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { useDatabase } from "@/contexts/DatabaseContext";
+import { useDatabaseStore } from "@/store/useDatabaseStore";
 import {
   clientPositions,
   clientOptions,
@@ -69,7 +69,7 @@ export default function ClientDetailAdviser() {
   const params = useParams();
   const cid = (params.id as string) || "C1";
 
-  const { db } = useDatabase();
+  const { db } = useDatabaseStore();
   const [activeTab, setActiveTab] = useState<"holdings" | "options" | "bids" | "alerts">("holdings");
 
   const cl = db.clients[cid];
