@@ -14,30 +14,29 @@ The objectives of the platform are:
 
 ```mermaid
 graph TD
-    A[Root Layout] --> B[DatabaseProvider Context]
-    B --> C[Landing Page /]
-    B --> D[Login Page /login]
-    B --> E[Portal Shell Layout /portal]
-    E --> F[Client Views /portal/client]
-    E --> G[Staff Views /portal/staff]
+    A["Root Layout"] --> B["DatabaseProvider Context"]
+    B --> C["Landing Page (/)"]
+    B --> D["Login Page (/login)"]
+    B --> E["Portal Shell Layout (/portal)"]
+    E --> F["Client Views (/portal/client)"]
+    E --> G["Staff Views (/portal/staff)"]
     
     subgraph Reactive State Store
-        B --> DB[(Stateful Mock DB)]
-        B --> DevTool[Simulation Config]
+        B --> DB[("Stateful Mock DB")]
     end
     
     subgraph Client App
-        F --> F1[Dashboard]
-        F --> F2[Portfolio/Positions]
-        F --> F3[Options Desk]
-        F --> F4[Bidding Workspace]
-        F --> F5[Ask Vitti AI Chat]
+        F --> F1["Dashboard"]
+        F --> F2["Portfolio/Positions"]
+        F --> F3["Options Desk"]
+        F --> F4["Bidding Workspace"]
+        F --> F5["Ask Vitti AI Chat"]
     end
     
     subgraph Staff App
-        G --> G1[Client Register]
-        G --> G2[Deal Book Manager]
-        G --> G3[Audit Log Viewer]
+        G --> G1["Client Register"]
+        G --> G2["Deal Book Manager"]
+        G --> G3["Audit Log Viewer"]
     end
 ```
 
