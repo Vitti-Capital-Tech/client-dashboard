@@ -1,36 +1,73 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vitti Capital - Client & Adviser Dashboard
 
-## Getting Started
+Vitti Capital is a production-grade, stateful Next.js App Router application written in TypeScript and styled with Tailwind CSS v4. It mirrors the exact visual style and dual-workspace architecture of the single-file prototype (`vitti-capital-platform.html`).
 
-First, run the development server:
+---
+
+## 1. Document Directory
+Detailed design information is available under the `docs` folder:
+* **[High-Level Design (HLD)](docs/HLD.md):** Focuses on platform structure, mock DB state synchronization, dual-workspace workspaces, and device emulation.
+* **[Low-Level Design (LLD)](docs/LLD.md):** Focuses on database schemas, state mutation algorithms, math formulas for UI charts, and layout styles.
+
+---
+
+## 2. Directory Structure
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+client-dashboard/
+├── app/
+│   ├── globals.css         # Tailwind v4 theme definitions and custom components
+│   ├── layout.tsx          # Root Layout loading Google fonts and DB context
+│   ├── page.tsx            # Main Landing / Role Selector
+│   ├── login/
+│   │   └── page.tsx        # Suspense-wrapped login interface with prefilled 2FA OTP
+│   └── portal/
+│       ├── layout.tsx      # Portals shell, bottom bar nav, alerts drawer, mobile emulator
+│       ├── client/         # Client views (Dashboard, Portfolio, Options, Ask Vitti AI)
+│       └── staff/          # Staff/Adviser views (Client Registry, Book Builder, Audits)
+├── contexts/
+│   └── DatabaseContext.tsx # Stateful mock database React Context provider
+├── docs/
+│   ├── HLD.md              # High-Level Architecture Design
+│   └── LLD.md              # Low-Level Component Design
+├── lib/
+│   ├── db.ts               # Core database definitions, helper methods, mutations
+│   └── fonts.ts            # next/font loader configurations
+├── package.json
+└── tsconfig.json
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 3. Technology Stack & Features
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Framework:** Next.js 16 (App Router) & React 19 (Hooks, Suspense).
+- **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
+- **Fonts:** `Fraunces` (serif accent headers), `Hanken Grotesk` (clean sans body text), and `IBM Plex Mono` (financial figures and metrics).
+- **State Engine:** Pure, reactively updated in-memory database context (`DatabaseContext.tsx`) syncing clients, position parameters, alerts logs, and audit entries.
+- **Developer Features:** Instantly toggle between **Web Layout** (fluid responsive web design) and **Mobile Frame** (rendering layout components within a simulated smartphone device mockup frame).
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+## 4. Getting Started
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 4.1 Installation
+Install project dependencies:
+```bash
+npm install
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 4.2 Run Development Server
+Start the local Next.js development server:
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) inside your web browser.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 4.3 Production Build & Verification
+Lint the code and compile the optimized static exports:
+```bash
+npm run lint
+npm run build
+```
+The build produces statically pre-rendered HTML routes, confirming all TypeScript constraints and next bails compile cleanly.

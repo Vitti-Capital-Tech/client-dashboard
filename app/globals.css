@@ -1,26 +1,233 @@
 @import "tailwindcss";
 
+@theme {
+  --color-navy: #1d202f;
+  --color-navy-2: #262a3d;
+  --color-navy-3: #2f3447;
+  --color-navy-line: #383d52;
+  --color-green: #36bb91;
+  --color-green-d: #1f8e6b;
+  --color-green-bg: #e4f5ee;
+  --color-green-soft: #d5efe5;
+  --color-paper: #f7f6f3;
+  --color-paper-2: #efece5;
+  --color-card: #ffffff;
+  --color-ink: #1d202f;
+  --color-mut: #6e7180;
+  --color-mut-d: #9aa0b4;
+  --color-line: #e7e4dc;
+  --color-line-2: #dedacf;
+  --color-gain: #1f9d6b;
+  --color-gain-bg: #e4f5ee;
+  --color-loss: #d6573a;
+  --color-loss-bg: #fae8e2;
+  --color-loss-d: #b8442b;
+  --color-amber: #c98a2b;
+  --color-amber-bg: #f7ecd6;
+  --color-amber-d: #9a6a1c;
+
+  --font-disp: var(--font-fraunces), Georgia, serif;
+  --font-body: var(--font-hanken-grotesk), system-ui, sans-serif;
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
+
+  --shadow-shadow: 0 1px 2px rgba(29,32,47,.04), 0 8px 24px -16px rgba(29,32,47,.18);
+  --shadow-shadow-lg: 0 30px 70px -32px rgba(29,32,47,.45);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #f7f6f3;
+  --foreground: #1d202f;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- expiry urgency rail (SIGNATURE) ---------- */
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 118px;
+}
+.rail .ticks {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  height: 16px;
+  position: relative;
+}
+.rail .seg {
+  flex: 1;
+  height: 4px;
+  background: var(--color-line-2);
+  position: relative;
+}
+.rail .seg:first-child {
+  border-radius: 3px 0 0 3px;
+}
+.rail .seg:last-child {
+  border-radius: 0 3px 3px 0;
+}
+.rail .seg.lit-amber {
+  background: var(--color-amber);
+}
+.rail .seg.lit-red {
+  background: var(--color-loss);
+}
+.rail .seg .tk {
+  position: absolute;
+  top: -3px;
+  right: -1px;
+  width: 2px;
+  height: 10px;
+  background: #fff;
+  border-radius: 1px;
+}
+.rail .labs {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  color: var(--color-mut);
+}
+.rail .dleft {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+.rail.danger .dleft {
+  color: var(--color-loss);
+}
+.rail.warn .dleft {
+  color: var(--color-amber-d);
+}
+
+/* moneyness bar */
+.mbar {
+  display: inline-block;
+  width: 54px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-paper-2);
+  position: relative;
+  vertical-align: middle;
+}
+.mbar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--color-mut);
+}
+.mbar b {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+}
+
+/* timeline */
+.tl-row {
+  display: flex;
+  gap: 12px;
+}
+.tl-row .rail2 {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.tl-row .node {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #fff;
+  font-weight: 700;
+}
+.node.done {
+  background: var(--color-green);
+}
+.node.now {
+  background: var(--color-amber);
+}
+.node.todo {
+  background: #fff;
+  border: 2px solid var(--color-line-2);
+}
+.tl-row .bar {
+  width: 2px;
+  flex: 1;
+  background: var(--color-line-2);
+  min-height: 12px;
+}
+.tl-row .bar.done {
+  background: var(--color-green);
+}
+.tl-row .body {
+  padding-bottom: 16px;
+  flex: 1;
+}
+.tl-row .t {
+  font-weight: 600;
+  font-size: 13px;
+}
+.tl-row .s {
+  font-size: 11.5px;
+  color: var(--color-mut);
+}
+
+/* device emulator styles */
+body.is-mobile {
+  background: var(--color-navy) !important;
+  background-image: radial-gradient(ellipse 70% 60% at 50% 0%, #2a2f44, var(--color-navy)) !important;
+}
+
+/* ticker styling */
+.tickwrap {
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--color-navy);
+  border-radius: 11px;
+  padding: 10px 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: #c2c7d8;
+}
+.tickrun {
+  display: inline-block;
+  animation: tickmove 40s linear infinite;
+  padding-left: 24px;
+}
+@keyframes tickmove {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tickrun {
+    animation: none;
+    padding-left: 16px;
+  }
 }

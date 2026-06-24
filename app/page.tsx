@@ -1,65 +1,107 @@
-import Image from "next/image";
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
+
+  const handleStartLogin = (role: "client" | "admin") => {
+    router.push(`/login?role=${role}`);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="relative min-h-screen bg-navy text-white overflow-hidden flex flex-col justify-between font-body">
+      {/* Radial grid background */}
+      <div 
+        className="absolute inset-0 pointer-events-none opacity-40"
+        style={{
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
+          `,
+          backgroundSize: "54px 54px",
+          maskImage: "radial-gradient(ellipse 80% 70% at 70% 0%, #000, transparent)",
+          WebkitMaskImage: "radial-gradient(ellipse 80% 70% at 70% 0%, #000, transparent)"
+        }}
+      />
+
+      {/* Header */}
+      <header className="relative z-10 flex items-center justify-between px-6 py-6 md:px-10">
+        <Link href="/" className="inline-flex items-center gap-2 font-disp font-semibold text-xl tracking-wide decoration-0">
+          <span className="inline-flex gap-[2.5px] items-end h-[1em] text-xl">
+            <i className="block w-[3px] h-[0.5em] rounded-[2px] bg-green" />
+            <i className="block w-[3px] h-[0.72em] rounded-[2px] bg-green" />
+            <i className="block w-[3px] h-[0.95em] rounded-[2px] bg-green" />
+          </span>
+          Vitti
+          <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
+            Capital
+          </small>
+        </Link>
+      </header>
+
+      {/* Main Wrap */}
+      <main className="relative z-10 max-w-[1120px] w-full mx-auto px-6 md:px-10 py-10 flex-1 flex flex-col justify-center">
+        <div className="max-w-[760px] mb-12">
+          <p className="font-mono text-xs tracking-[0.2em] uppercase text-green mb-5">
+            Client portal &amp; placement desk
+          </p>
+          <h1 className="font-disp font-medium text-4xl sm:text-5xl md:text-6xl leading-[1.05] tracking-tight">
+            Your capital,<br />
+            <em className="not-italic text-green font-serif">in perfect order.</em>
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-6 text-base sm:text-lg text-slate-300 max-w-[36em] leading-relaxed">
+            One platform for portfolios, placements, and the options whose exercise windows you cannot afford to miss — for Vitti Capital&apos;s wholesale clients and the team who looks after them.
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+
+        {/* Roles Selectors */}
+        <div className="grid md:grid-cols-2 gap-5 max-w-[820px]">
+          <button 
+            onClick={() => handleStartLogin("client")}
+            className="group text-left bg-navy-2 border border-navy-line hover:border-green rounded-[18px] p-6.5 transition-all cursor-pointer hover:-translate-y-[3px] hover:shadow-shadow-lg"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            <div className="w-[46px] h-[46px] rounded-[12px] bg-navy-3 flex items-center justify-center mb-4 transition-colors">
+              <svg className="w-[23px] h-[23px] fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+                <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
+              </svg>
+            </div>
+            <h3 className="font-disp font-medium text-2xl mb-1 text-white">Client sign in</h3>
+            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] mb-4 leading-normal">
+              See your portfolio, options, placements and alerts — your data only.
+            </p>
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-green group-hover:translate-x-1 transition-transform">
+              Continue as client &rarr;
+            </span>
+          </button>
+
+          <button 
+            onClick={() => handleStartLogin("admin")}
+            className="group text-left bg-navy-2 border border-navy-line hover:border-green rounded-[18px] p-6.5 transition-all cursor-pointer hover:-translate-y-[3px] hover:shadow-shadow-lg"
           >
-            Documentation
-          </a>
+            <div className="w-[46px] h-[46px] rounded-[12px] bg-navy-3 flex items-center justify-center mb-4 transition-colors">
+              <svg className="w-[23px] h-[23px] fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+                <circle cx="12" cy="8" r="3.4" />
+                <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" />
+                <path d="M19 4.5l1.4 1.4M4.6 4.5 3.2 5.9" />
+              </svg>
+            </div>
+            <h3 className="font-disp font-medium text-2xl mb-1 text-white">Vitti staff sign in</h3>
+            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] mb-4 leading-normal">
+              Consolidated book across all clients, bidding on their behalf, allocations, alerts and audit.
+            </p>
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-green group-hover:translate-x-1 transition-transform">
+              Continue as staff &rarr;
+            </span>
+          </button>
         </div>
       </main>
+
+      {/* Footer */}
+      <footer className="relative z-10 border-t border-navy-line mt-12 py-6 px-6 md:px-10 text-[11.5px] text-[#7e8298] max-w-[1120px] w-full mx-auto leading-relaxed text-center md:text-left">
+        Vitti Capital Pty Ltd (ABN 13 670 030 145) is a Corporate Authorised Representative (001306367) of Point Capital Group Pty Ltd (ABN 41 625 931 900), holder of AFSL 518031. For wholesale clients (s761G / s761GA, Corporations Act 2001). Figures shown are illustrative prototype data. &copy; Vitti Capital 2026.
+      </footer>
     </div>
   );
 }
