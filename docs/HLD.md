@@ -21,11 +21,11 @@ graph TD
     E --> F["Client Views (/portal/client)"]
     E --> G["Staff Views (/portal/staff)"]
     
-    subgraph Reactive State Store
-        B --> DB[("Stateful Mock DB")]
+    subgraph "Reactive State Store"
+        B --> DB["Stateful Mock DB"]
     end
     
-    subgraph Client App
+    subgraph "Client App"
         F --> F1["Dashboard"]
         F --> F2["Portfolio/Positions"]
         F --> F3["Options Desk"]
@@ -33,7 +33,7 @@ graph TD
         F --> F5["Ask Vitti AI Chat"]
     end
     
-    subgraph Staff App
+    subgraph "Staff App"
         G --> G1["Client Register"]
         G --> G2["Deal Book Manager"]
         G --> G3["Audit Log Viewer"]
