@@ -12,34 +12,92 @@ The objectives of the platform are:
 
 ## 2. Architecture Layout
 
-```mermaid
-graph TD
-    A["Root Layout (app/layout.tsx)"] --> B["DatabaseProvider Context (contexts/DatabaseContext.tsx)"]
-    B --> C["Landing Page (app/page.tsx)"]
-    B --> D["Login Page (app/login/page.tsx)"]
-    B --> E["Portal Shell Layout (app/portal/layout.tsx)"]
-    
-    E --> F["Client Views (/portal/client)"]
-    E --> G["Staff Views (/portal/staff)"]
-    
-    subgraph "State Store"
-        B --> DB["Stateful Mock Database (lib/db.ts)"]
-    end
-    
-    subgraph "Client Views"
-        F --> F1["Dashboard (/portal/client)"]
-        F --> F2["Portfolio & Positions (/positions)"]
-        F --> F3["Options Desk (/options)"]
-        F --> F4["Bidding Workspace (/placements)"]
-        F --> F5["Ask Vitti AI Chat (/askvitti)"]
-    end
-    
-    subgraph "Staff Views"
-        G --> G1["Client Register (/portal/staff)"]
-        G --> G2["Deal Book Manager (/placements)"]
-        G --> G3["Audit Log Viewer (/audits)"]
-    end
-```
+<svg viewBox="0 0 900 450" width="100%" height="auto" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .node { fill: #1e293b; stroke: #38bdf8; stroke-width: 2; rx: 6px; }
+    .node-db { fill: #0f172a; stroke: #10b981; stroke-width: 2; rx: 6px; }
+    .node-client { fill: #1e293b; stroke: #f59e0b; stroke-width: 2; rx: 6px; }
+    .node-staff { fill: #1e293b; stroke: #ec4899; stroke-width: 2; rx: 6px; }
+    .text { fill: #f8fafc; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+    .title { fill: #f8fafc; font-family: system-ui, -apple-system, sans-serif; font-size: 14px; font-weight: bold; text-anchor: middle; dominant-baseline: middle; }
+    .edge { stroke: #64748b; stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 2 L 10 5 L 0 8 z" fill="#64748b" />
+    </marker>
+  </defs>
+  
+  <!-- Connections -->
+  <path class="edge" d="M 450 55 L 450 90" />
+  
+  <path class="edge" d="M 350 125 C 350 150, 150 145, 150 170" />
+  <path class="edge" d="M 390 125 C 390 150, 310 145, 310 170" />
+  <path class="edge" d="M 550 125 C 550 150, 600 145, 600 170" />
+  
+  <path class="edge" d="M 600 205 L 600 220 C 600 230 480 230 480 250" />
+  <path class="edge" d="M 600 205 L 600 220 C 600 230 740 230 740 250" />
+  
+  <!-- Client Sub-pages -->
+  <path class="edge" d="M 480 285 L 480 300 C 480 310 340 310 340 330" />
+  <path class="edge" d="M 480 285 L 480 300 C 480 310 460 310 460 330" />
+  <path class="edge" d="M 480 285 L 480 330" />
+  <path class="edge" d="M 480 285 L 480 300 C 480 310 700 310 700 330" />
+  <path class="edge" d="M 480 285 L 480 300 C 480 310 820 310 820 330" />
+
+  <!-- Staff Sub-pages -->
+  <path class="edge" d="M 740 285 L 740 360 C 740 370 600 370 600 390" />
+  <path class="edge" d="M 740 285 L 740 360 C 740 370 720 370 720 390" />
+  <path class="edge" d="M 740 285 L 740 360 C 740 370 840 370 840 390" />
+
+  <!-- Nodes -->
+  <rect class="node" x="360" y="20" width="180" height="35" />
+  <text class="title" x="450" y="37.5">Root Layout</text>
+  
+  <rect class="node-db" x="320" y="90" width="260" height="35" />
+  <text class="title" x="450" y="107.5">DatabaseProvider (Context State)</text>
+  
+  <rect class="node" x="80" y="170" width="140" height="35" />
+  <text class="text" x="150" y="187.5">Landing Page (/)</text>
+  
+  <rect class="node" x="240" y="170" width="140" height="35" />
+  <text class="text" x="310" y="187.5">Login Page (/login)</text>
+  
+  <rect class="node" x="510" y="170" width="180" height="35" />
+  <text class="title" x="600" y="187.5">Portal Shell (/portal)</text>
+  
+  <rect class="node-client" x="400" y="250" width="160" height="35" />
+  <text class="title" x="480" y="267.5">Client Views</text>
+  
+  <rect class="node-staff" x="660" y="250" width="160" height="35" />
+  <text class="title" x="740" y="267.5">Staff Views</text>
+  
+  <!-- Client Pages -->
+  <rect class="node" x="285" y="330" width="110" height="35" />
+  <text class="text" x="340" y="347.5">Dashboard</text>
+  
+  <rect class="node" x="405" y="330" width="110" height="35" />
+  <text class="text" x="460" y="347.5">Portfolio</text>
+  
+  <rect class="node" x="525" y="330" width="110" height="35" />
+  <text class="text" x="580" y="347.5">Options Desk</text>
+  
+  <rect class="node" x="645" y="330" width="110" height="35" />
+  <text class="text" x="700" y="347.5">Bids Workspace</text>
+  
+  <rect class="node" x="765" y="330" width="110" height="35" />
+  <text class="text" x="820" y="347.5">Ask Vitti Chat</text>
+
+  <!-- Staff Pages -->
+  <rect class="node" x="545" y="390" width="110" height="35" />
+  <text class="text" x="600" y="407.5">Client Register</text>
+  
+  <rect class="node" x="665" y="390" width="110" height="35" />
+  <text class="text" x="720" y="407.5">Deals Manager</text>
+  
+  <rect class="node" x="785" y="390" width="110" height="35" />
+  <text class="text" x="840" y="407.5">Audit Viewer</text>
+</svg>
 
 ---
 
