@@ -1,7 +1,9 @@
 # Low-Level Design (LLD) - Vitti Capital Platform
 
 ## 1. Data Schema & Core Interfaces (`lib/db.ts`)
-The mock database uses TypeScript interfaces representing the broker registry, positions, deals, and logs:
+The mock database uses TypeScript interfaces representing the broker registry, positions, deals, logs, and the research/content surfaces. The whole shape is aggregated by the top-level `Database` interface and seeded by `INITIAL_DATABASE`.
+
+### 1.1 Holdings & Deal Entities
 
 ```typescript
 export interface Client {
@@ -17,8 +19,8 @@ export interface Position {
   code: string;    // Stock code (e.g., BHP)
   name: string;
   qty: number;
-  cost: number;
-  last: number;
+  cost: number;    // Average cost per share
+  last: number;    // Last traded price
   sector: string;
 }
 
@@ -31,17 +33,24 @@ export interface OptionHolding {
   type: "Call" | "Put";
   qty: number;
   strike: number;
-  under: number;
-  dte: number;     // Days to expiry
+  under: number;   // Underlying price
+  dte: number;     // Days to expiry (may be negative once expired)
   source: string;  // How it was obtained
   status: "open" | "pending" | "expired";
+}
+
+export interface Bid {
+  c: string;            // Client ID foreign key
+  amount: number;       // Bid (application) amount in dollars
+  alloc: number | null; // Allocated amount; null until scaled by staff
+  _paid?: boolean;      // BPAY payment notified by client
 }
 
 export interface Placement {
   id: string;
   code: string;
   name: string;
-  type: string;    // Placement / Pre-IPO / SPP
+  type: string;    // Placement / Pre-IPO / SPP / Rights
   price: number;   // Subscription price
   last: number | null;
   disc: number | null;
@@ -56,6 +65,89 @@ export interface Placement {
   bids: Bid[];     // List of bids
 }
 ```
+
+### 1.2 Market, Research & Content Entities
+
+```typescript
+export interface IndexData {
+  code: string; name: string; last: number;
+  chg: number;          // % change
+  dp?: number;          // display decimal places (default 1)
+}
+
+export interface Signal {
+  action: "Add" | "Hold" | "Trim" | "Take profit" | "Watch";
+  headline: string; detail: string; target: number | null;
+}
+
+export interface Sector {
+  name: string; mom: number; drivers: string; benef: string[]; // beneficiary codes
+}
+
+export interface News {
+  time: string; src: string; head: string; impact: string;
+  dir: "up" | "dn"; use: string;   // adviser "how to use this" note
+}
+
+export interface Goal {            // goal-based discovery on /invest
+  k: string; label: string; icon: string; themes: string[]; blurb: string;
+}
+
+export interface InvestmentIdea {
+  code: string; name: string; theme: string;
+  risk: "Low" | "Medium" | "High"; horizon: string;
+  conv: number;                    // conviction rating 1–3
+  last: number | null; entryLo: number | null; entryHi: number | null;
+  target: number | null; hook: string; thesis: string;
+  deal?: string;                   // optional Placement id link (live deal)
+}
+
+export interface WatchItem {
+  code: string; name: string; last: number | null; chg: number;
+  alert: number | null;            // price threshold
+  dir?: "above" | "below"; unl?: boolean; // unlisted
+}
+
+export interface Alert {
+  id: string; client: string | null; optId: string | null;
+  kind: "expiry" | "itm" | "window" | "price";
+  sev: "red" | "amber" | "green";
+  title: string; sub: string; ts: Date; ack: boolean;
+}
+
+export interface AuditEntry {
+  ts: Date; user: string; role: string; action: string; detail: string;
+}
+
+export interface ResearchNote  { title: string; time: string; body: string; }
+export interface ResearchReport { title: string; kind: string; date: Date; pp: number; }
+```
+
+### 1.3 Aggregate Root
+
+```typescript
+export interface Database {
+  clients: Record<string, Client>;
+  positions: Position[];
+  options: OptionHolding[];
+  placements: Placement[];
+  indices: IndexData[];
+  note: ResearchNote;
+  recos: { code: string; name: string; rating: string; tp: number | null; move: string; sect: string }[];
+  reports: ResearchReport[];
+  signals: Record<string, Signal>;
+  sectors: Sector[];
+  news: News[];
+  themes: string[];
+  goals: Goal[];
+  ideas: InvestmentIdea[];
+  watch: Record<string, WatchItem[]>;   // keyed by client id
+  alerts: Alert[];
+  audit: AuditEntry[];
+}
+```
+
+> **Time base:** `TODAY = new Date(2026, 5, 12)` is the fixed "now" the seed data and the alerts engine are anchored to; `addDays(d, n)` derives the relative deal dates.
 
 ---
 
@@ -112,18 +204,42 @@ flowchart TD
 ---
 
 ## 3. Stateful Database Mutation Functions
-Mutations in `lib/db.ts` are pure functions that accept the database instance, create deep copies, apply adjustments, log transactions in the audit logs, and return a new `Database` state.
+Mutations in `lib/db.ts` are pure functions that accept the database instance, create shallow/deep copies as needed, apply adjustments, append an `AuditEntry` to the front of `db.audit`, and return a new `Database` state. Each is wrapped by a thin action in `useDatabaseStore` that injects `clientId`/`currentUserLabel` (see §6).
 
 ### 3.1 Placing and Withdrawing Bids
-- `mutatePlaceBid`: Adds or updates a user's bid size.
-- `mutateWithdrawBid`: Removes a user's bid.
+- `mutatePlaceBid(db, placementId, clientId, amount, user)`: Adds a new bid or updates the existing bid's `amount` for that client on that deal. Logs a `Placed bid` entry.
+- `mutateWithdrawBid(db, placementId, clientId, user)`: Removes the client's bid from the deal. Logs a `Withdrew bid` entry.
 
-### 3.2 Settlement Hook (`mutateUpdatePlacementStage`)
-When a deal stage updates to `"settled"`:
-1. It iterates through all bids.
-2. If `alloc > 0`, it computes shares: `qty = Math.round(alloc / price)`.
-3. It pushes the new `Position` into `db.positions`.
-4. If options are attached (e.g., `opts !== "None"`), it computes attaching option count (matching ratios like `1:2` or `1:1`) and pushes a new `OptionHolding` into `db.options` with a `status: "open"` and a 1-year expiration date.
+### 3.2 Allocation Scaling (`mutateScaleBids`)
+- `mutateScaleBids(db, placementId, clientAllocations, user)`: Applies a `Record<clientId, number | null>` of allocations onto each matching bid's `alloc` field, leaving untouched bids as-is. Logs an `Updated allocations` entry. Drives the staff scaling slider (§5.2).
+
+### 3.3 Settlement Hook (`mutateUpdatePlacementStage`)
+`mutateUpdatePlacementStage(db, placementId, stage, user)` always updates the deal `stage` and logs a `Change deal stage` entry. Additionally, on the transition **into** `"settled"` (from a non-settled stage) it runs the settlement engine over every bid:
+1. It iterates through all bids; for `alloc > 0` it computes shares `qty = Math.round(alloc / price)`.
+2. It pushes a new `Position` into `db.positions` (cost = subscription `price`, `last = p.last ?? p.price`, `sector` defaults to `"Materials"`).
+3. If options are attached (`opts !== "None"`), it parses the ratio from the `opts` string — `(1:1) → 1.0`, `(1:2) → 0.5`, `(1:3) → 1/3` (default `0.5`) — computes `optQty = Math.round(qty * ratio)`, and pushes a new `OptionHolding` with `status: "open"`, `strike = price * 1.5` (a 50% premium), `dte: 365` (1-year expiry), and `code = p.code + "O"`. (Note the MRD deal is special-cased as an **unlisted** attaching option.)
+
+### 3.4 Alerts & Payments
+- `mutateAckAlert(db, alertId, user)`: Flags an alert `ack: true` (no audit entry).
+- `mutateAddCustomAlert(db, clientId, code, threshold, direction, user)`: Creates a `price` alert, upserts the matching `WatchItem` (adding the security to the client watchlist if absent), and logs a `Created alert` entry.
+- `mutateClientBpayPayment(db, placementId, clientId, user)`: Flags the client's bid `_paid: true` and logs a `Notified payment` entry (amount taken from the bid's `alloc`).
+
+---
+
+## 3A. Alert Engine & Derived Helpers (`lib/db.ts`)
+
+### 3A.1 `scanAlerts(db, baseTime = TODAY)`
+Pure generator (re-run at store init) that scans every `open` option and emits `Alert` objects:
+- **Expiry escalation:** for `0 ≤ dte ≤ 30`, severity is `red` when `dte ≤ 3` else `amber`; the displayed window snaps to the nearest of `[30, 14, 7, 3, 1]`.
+- **In-the-money:** any ITM option emits a `green` `itm` alert showing intrinsic value.
+- **Exercise window:** an **unlisted, ITM** option with `dte ≤ 14` emits a `red` `window` alert ("not auto-exercised").
+- Two seeded custom **`price`** alerts (MRD / FMG) are appended, then the list is sorted: unacknowledged first, then by severity (`red → amber → green`), then newest first.
+
+### 3A.2 `seedAudits()`
+Returns the initial five-entry `AuditEntry[]` (staff sign-in, client bid, note upload, client sign-in, system alert) anchored to `2026-06-12 09:41`.
+
+### 3A.3 Financial helpers
+`clientPositions` / `clientOptions` (filter by client), `posValue` / `posCost` / `posPL`, `cashOf` (hardcoded per-client cash), `portfolioValue` (positions + cash), `unlistedValue` (intrinsic of open unlisted options), `dailyPL` (per-code factor model), `totalPL`, and the options math `moneyness` / `isITM` / `intrinsic`.
 
 ---
 
@@ -156,18 +272,18 @@ A custom rail visualizing options time-to-expiry using conditional LED segments:
 
 ## 5. State Synchronization & Optimization
 
-### 4.1 Login Query Bails
+### 5.1 Login Query Bails
 In Next.js, static routes that use `useSearchParams()` must be wrapped in a React `<Suspense>` block. In `app/login/page.tsx`, we structured it by splitting the page:
 - `LoginContent`: Logic containing credentials inputs, 2FA forms, and `useSearchParams()` checks.
 - `LoginPage` (Export Default): Suspense wrapper ensuring that bailing to CSR doesn't crash builds.
 
-### 4.2 Interactive Bids Scaling Slider (`portal/staff/placements/page.tsx`)
+### 5.2 Interactive Bids Scaling Slider (`portal/staff/placements/page.tsx`)
 The adviser scaling dashboard features an interactive scaling handle.
 - State: `scalePct` (0% to 100%) and individual bid text boxes.
 - When the slider drags, it sets the scale percentage and updates all calculated allocation states: `alloc = bid.amount * (scalePct / 100)`.
 - Staff can commit allocations, instantly updating the global reactive Zustand store.
 
-### 4.3 Contextual Ask Vitti AI Chat (`portal/client/askvitti/page.tsx`)
+### 5.3 Contextual Ask Vitti AI Chat (`portal/client/askvitti/page.tsx`)
 - Resets messages state on client switches using render-phase verification:
 ```typescript
 if (clientId !== prevClientId) {
@@ -177,8 +293,54 @@ if (clientId !== prevClientId) {
 ```
 - Custom queries are processed by mapping keywords against portfolio valuations (`portfolioValue(db, clientId)`) and options exposure tables (`clientOptions(db, clientId)`) for high-fidelity responses.
 
-### 4.4 Responsive Viewport Adaptations
+### 5.4 Responsive Viewport Adaptations
 To ensure native responsiveness on real mobile and tablet devices, the unified portal shell uses conditional styling and markup:
 - **Sidebar Aside:** Styled with `hidden md:flex flex-col` to hide the left sidebar layout completely on viewports smaller than `768px` (`md` breakpoint) and display it on larger screens.
 - **Bottom Navigation Bar:** Renders bottom nav bar using fixed positioning (`fixed bottom-0 left-0 right-0 z-20`) to anchor the tab bar at the bottom of the device viewport on real mobile and tablet browsers.
 - **Main Shell Wrapper:** Uses responsive padding classes (`pb-16 md:pb-0 relative`) on viewports under the `md` breakpoint, ensuring that main page content doesn't get covered by the overlay bottom navigation.
+
+---
+
+## 6. Zustand Store Contract (`store/useDatabaseStore.ts`)
+The store wraps `INITIAL_DATABASE` and exposes both the data and the session context, plus one action per mutation:
+
+| State | Type | Purpose |
+|-------|------|---------|
+| `db` | `Database` | The live in-memory database (alerts + audit seeded at init). |
+| `role` | `"client" \| "admin"` | Active workspace. |
+| `clientId` | `string` | The logged-in client (default `"C1"`). |
+| `viewClient` | `string` | The client a staff member is currently inspecting. |
+| `currentUserLabel` | getter | `"S. Goyal (staff)"` for admin, else the client's name — stamped onto audit entries. |
+
+**Actions** (each injects `clientId` / `currentUserLabel` into the matching `mutate*`): `setRole` (also logs a `Signed in` audit entry), `setClientId`, `setViewClient`, `placeBid`, `withdrawBid`, `scaleBids`, `updatePlacementStage`, `ackAlert`, `addCustomAlert`, `notifyBpayPayment`.
+
+---
+
+## 7. Production SQL Schema (`db/schema.sql`)
+The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) that re-expresses the flat prototype objects as an integrity-constrained relational model. It is **not** wired into the running app — it documents the intended production persistence layer.
+
+### 7.1 Interface → Table Mapping
+
+| `lib/db.ts` (in-memory) | `db/schema.sql` (relational) | Notes |
+|-------------------------|------------------------------|-------|
+| `Client` | `clients` | `av → initials`, `type → account_type`, `s708 → s708_expiry` (date). |
+| *(hardcoded `cashOf()`)* | `client_accounts` | Cash is a real per-client row with `currency`, not a hardcoded map. |
+| `Position` | `positions` | `name`/`sector`/`last` **not** stored — joined from `securities`. Unique `(client_id, security_code)`. |
+| `OptionHolding` | `option_holdings` | `dte` is **computed** from `expiry_date` at read time; `under` comes from `securities` via `underlying_code`. |
+| `Placement` + `Bid` | `placements` + `bids` | `disc → discount_pct`, `raise → raise_millions`, `min → min_bid`, `_paid → paid`. One bid per client per deal. |
+| `IndexData` | `market_indices` | `dp → decimal_places`, `chg` = % change. |
+| `Signal` / `Sector` / `News` | `signals` / `sectors` / `news` | `mom → momentum`, `benef → beneficiaries[]`, `use → use_note`. |
+| `InvestmentIdea` | `investment_ideas` | `conv → conviction (1–3 CHECK)`, `deal → placement_id` FK. |
+| `WatchItem` | `watchlist_items` | Threshold/direction columns; unlisted allowed (no FK). |
+| `Alert` | `alerts` | `kind`/`severity`/`direction` are enums; partial index on unacknowledged. |
+| `AuditEntry` | `audit_log` | **Append-only, month-partitioned**; UPDATE/DELETE blocked by trigger. |
+| `ResearchReport` | `research_reports` | `pp → pages`. |
+| *(prototype `Position.last`, `OptionHolding.under`)* | `securities` | Prices live **once** in the shared master table, not per holding. |
+
+### 7.2 Deliberate Divergences
+- **Price normalization:** the prototype duplicates `last`/`under` onto each holding for convenience; the schema stores them once in `securities` (cache-friendly, single source of truth).
+- **Computed `dte`:** stored as a number in the prototype, derived from `expiry_date - current_date` in SQL so it can never go stale.
+- **Cash:** a hardcoded lookup in TS becomes a first-class `client_accounts` row (multi-account / multi-currency ready).
+- **Audit immutability:** an in-memory array in TS becomes an append-only, time-partitioned compliance table with a trigger that rejects mutation.
+- **Enums & integrity:** free-form strings (`type`, `kind`, `sev`, `dir`, `action`…) are promoted to Postgres enums and FK/UNIQUE/CHECK constraints. The `placement_type` enum also adds `'Rights'`, present in the data model but not enumerated in the TS union.
+- **Production hardening (checklist, not DDL):** Row-Level Security per client, read-replica + Redis caching of shared market data, a connection pooler for serverless Next.js, and automated audit-partition rotation with cold-archive to S3.

@@ -24,20 +24,30 @@ graph TD
     
     subgraph "State Store"
         B --> DB["Stateful Mock Database (lib/db.ts)"]
+        DB -.->|"persistence model"| SQL["Production SQL Schema (db/schema.sql)"]
     end
     
     subgraph "Client Views"
-        F --> F1["Dashboard (/portal/client)"]
-        F --> F2["Portfolio & Positions (/positions)"]
-        F --> F3["Options Desk (/options)"]
-        F --> F4["Bidding Workspace (/placements)"]
+        F --> F1["Dashboard / Home (/portal/client)"]
+        F --> F2["Invest — goal-based ideas (/invest)"]
+        F --> F3["Portfolio & Positions (/positions)"]
+        F --> F4["Insights — signals & sectors (/insights)"]
         F --> F5["Ask Vitti AI Chat (/askvitti)"]
+        F --> F6["Markets — indices & news (/markets)"]
+        F --> F7["Bidding Workspace (/placements)"]
+        F --> F8["Options Desk (/options)"]
+        F --> F9["Watchlist & price alerts (/watchlist)"]
+        F --> F10["Alerts log (/alerts)"]
     end
     
     subgraph "Staff Views"
-        G --> G1["Client Register (/portal/staff)"]
-        G --> G2["Deal Book Manager (/placements)"]
-        G --> G3["Audit Log Viewer (/audits)"]
+        G --> G1["Overview / Desk summary (/portal/staff)"]
+        G --> G2["Client Registry (/clients)"]
+        G --> G3["Client Detail — expiry rail (/clients/[id])"]
+        G --> G4["Deal Book Manager (/placements)"]
+        G --> G5["Firm-wide Options Monitor (/options)"]
+        G --> G6["Alerts log (/alerts)"]
+        G --> G7["Audit Log Viewer (/audit)"]
     end
 ```
 
@@ -47,20 +57,25 @@ graph TD
 
 ### 3.1 Reactive State Store (`store/useDatabaseStore.ts`)
 Because this is a self-contained prototype, database interactions are simulated in memory:
-- An initial database object (`INITIAL_DATABASE`) is loaded from `lib/db.ts`.
-- The database is managed globally using a **Zustand** store (`useDatabaseStore`).
-- Mutators copy the database and return updated versions with mutations (e.g., bid increments, allocation scales, custom price alerts).
+- An initial database object (`INITIAL_DATABASE`) is loaded from `lib/db.ts`. At store-init the alerts engine (`scanAlerts`) and audit seeder (`seedAudits`) run once to populate `db.alerts` and `db.audit`.
+- The database is managed globally using a **Zustand** store (`useDatabaseStore`), which also tracks session context: `role` (`client | admin`), `clientId`, `viewClient` (the client a staff member is inspecting), and a derived `currentUserLabel` getter used to stamp audit entries.
+- Mutators (`mutatePlaceBid`, `mutateWithdrawBid`, `mutateScaleBids`, `mutateUpdatePlacementStage`, `mutateAckAlert`, `mutateAddCustomAlert`, `mutateClientBpayPayment`) copy the database and return updated versions with mutations (e.g., bid increments, allocation scales, custom price alerts, BPAY payment flags).
 - The state changes trigger reactively across all active pages via fine-grained slice selectors (e.g., client placements update immediately when a staff member scales allocations).
 
+### 3.1a Production Persistence Model (`db/schema.sql`)
+While the running app is in-memory, the repository ships a portable PostgreSQL schema (`db/schema.sql`) that defines the intended production persistence layer — runnable as-is on Supabase, Neon, or AWS Aurora. It normalizes the flat prototype objects into integrity-constrained relations: a shared `securities` price master, per-client `client_accounts` for cash, an append-only month-partitioned `audit_log`, and reference/content tables (signals, sectors, news, investment ideas, research reports). See the LLD for the full TypeScript-interface → SQL-table mapping and the deliberate divergences.
+
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx`)
-The wrapper coordinates:
-- **Global Header (Topbar):** Status indicators, search bar, active user indicators, and global slide-out alerts drawer.
-- **Desktop Sidebar:** Persistent left panel navigation.
-- **Mobile Bottom Bar:** Navigational tabs for mobile view.
-- **Alerts Slide-out Drawer:** Pull-out notification interface for acknowledging critical ITM and expiry warnings.
+The wrapper coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
+- **Global Header (Topbar):** Live broker-feed status pill, illustrative search bar, active-user avatar, and the alerts toggle (with unread badge).
+- **Desktop Sidebar:** Persistent left panel navigation showing all routes, the workspace label, the signed-in user card, and sign-out.
+- **Mobile Bottom Bar:** Fixed bottom tab bar showing the primary (`tab: true`) routes.
+- **"More" Overflow Menu:** A mobile modal exposing the secondary routes that don't fit the bottom bar.
+- **Alerts Slide-out Drawer:** Pull-out notification interface for acknowledging critical ITM, expiry, exercise-window, and custom price warnings. Staff see firm-wide alerts; clients see only their own.
+- **Badges:** The nav computes live badge counts — unread alerts, and (admin only) the count of closed-deal bids still awaiting allocation (`pendingAlloc`).
 
 ### 3.3 Responsive Web Layout
-The portal layout is fully responsive natively using CSS media queries. On desktop viewports, it renders the left navigation sidebar. On mobile or tablet devices, it automatically hides the sidebar and renders a fixed bottom navigation bar (matching standard mobile app layouts), adjusting page margins to fit nicely.
+The portal layout is fully responsive natively using CSS media queries (Tailwind `md` breakpoint, 768px) — there is no device-frame emulator. On desktop viewports it renders the left navigation sidebar. On mobile or tablet devices it automatically hides the sidebar and renders a fixed bottom navigation bar plus the "More" overflow menu (matching standard mobile app layouts), adjusting page padding (`pb-16 md:pb-0`) so content is never covered by the bottom bar.
 
 ---
 
