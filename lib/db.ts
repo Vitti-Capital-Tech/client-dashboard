@@ -461,15 +461,19 @@ export function intrinsic(o: OptionHolding): number {
 // Alert Engine
 let alertSeq = 1;
 function mkAlert(o: OptionHolding | null, kind: "expiry" | "itm" | "window" | "price", sev: "red" | "amber" | "green", title: string, sub: string, baseTime: Date, clientId?: string): Alert {
+  const seq = alertSeq++;
   return {
-    id: "A" + (alertSeq++),
+    id: "A" + seq,
     client: o ? o.c : (clientId || null),
     optId: o ? o.id : null,
     kind,
     sev,
     title,
     sub,
-    ts: new Date(baseTime.getTime() - Math.round(Math.random() * 7200) * 1000),
+    // Deterministic offset (previously Math.random) — a random timestamp differs
+    // between the server render and client hydration, so the sort order flips and
+    // React throws a hydration mismatch. Spread alerts 5 minutes apart by seq.
+    ts: new Date(baseTime.getTime() - seq * 5 * 60 * 1000),
     ack: false
   };
 }

@@ -71,7 +71,6 @@ CREATE TABLE market_indices (
 CREATE TABLE clients (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   ref            text UNIQUE,                       -- legacy id, e.g. 'C1'
-  email          text UNIQUE,                       -- login email (natural key for future auth)
   display_name   text        NOT NULL,
   initials       text,                              -- avatar initials (was `av`)
   account_type   text        NOT NULL,             -- 'Individual · wholesale', 'SMSF · wholesale'…

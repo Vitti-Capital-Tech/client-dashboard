@@ -4,6 +4,7 @@ import { useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useDatabaseStore } from "@/store/useDatabaseStore";
+import { signIn } from "@/app/actions/session";
 
 function LoginContent() {
   const router = useRouter();
@@ -50,15 +51,16 @@ function LoginContent() {
     }
   };
 
-  const handleVerify = () => {
-    if (initialRole === "admin") {
-      setRole("admin");
-      router.push("/portal/staff");
-    } else {
-      setRole("client");
-      setClientId("C1"); // James Halloran
-      router.push("/portal/client");
+  const handleVerify = async () => {
+    // Write the session cookie (new server components read it) — resolves the
+    // client from the entered email — AND keep the legacy store in sync (pages
+    // still on Zustand during the migration) using the returned ref.
+    setRole(initialRole);
+    const ref = await signIn(initialRole, email);
+    if (initialRole === "client" && ref) {
+      setClientId(ref);
     }
+    router.push(initialRole === "admin" ? "/portal/staff" : "/portal/client");
   };
 
   return (
@@ -164,7 +166,7 @@ function LoginContent() {
                   </>
                 ) : (
                   <>
-                    <b>Prototype:</b> continue to explore James Halloran’s client account.
+                    <b>Prototype:</b> sign in as any client — <code>james@halloran.com.au</code>, <code>margaret.chen@outlook.com</code>, <code>office@endeavourfo.com.au</code>, or <code>david.okafor@gmail.com</code>. Any password &amp; code works.
                   </>
                 )}
               </div>

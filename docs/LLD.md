@@ -323,7 +323,7 @@ The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) tha
 
 | `lib/db.ts` (in-memory) | `db/schema.sql` (relational) | Notes |
 |-------------------------|------------------------------|-------|
-| `Client` | `clients` | `av → initials`, `type → account_type`, `s708 → s708_expiry` (date). |
+| `Client` | `clients` | `av → initials`, `type → account_type`, `s708 → s708_expiry` (date). Adds `email` (UNIQUE) — login key, resolves which client signs in (natural key for future auth). |
 | *(hardcoded `cashOf()`)* | `client_accounts` | Cash is a real per-client row with `currency`, not a hardcoded map. |
 | `Position` | `positions` | `name`/`sector`/`last` **not** stored — joined from `securities`. Unique `(client_id, security_code)`. |
 | `OptionHolding` | `option_holdings` | `dte` is **computed** from `expiry_date` at read time; `under` comes from `securities` via `underlying_code`. |

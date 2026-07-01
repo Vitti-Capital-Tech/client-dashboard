@@ -1,11 +1,32 @@
-"use client";
+import {
+  getResearchNotes,
+  getMarketIndices,
+  getRecommendations,
+  getResearchReports,
+} from "@/lib/data/queries";
+import { AlertButton } from "./AlertButton";
 
-import React from "react";
-import { useDatabaseStore } from "@/store/useDatabaseStore";
+// Server Component: data comes from the DAL (Supabase) at request time.
+export default async function ClientMarketsPage() {
+  const [notes, indices, recos, reports] = await Promise.all([
+    getResearchNotes(),
+    getMarketIndices(),
+    getRecommendations(),
+    getResearchReports(),
+  ]);
 
-export default function ClientMarketsPage() {
-  const { db } = useDatabaseStore();
-  const note = db.note;
+  const note = notes[0];
+  const noteTime = note
+    ? new Date(note.published)
+        .toLocaleTimeString("en-AU", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: "Australia/Sydney",
+        })
+        .replace(/\s/g, "")
+        .toLowerCase()
+    : "";
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -17,14 +38,14 @@ export default function ClientMarketsPage() {
         </div>
         <div className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-green-d bg-green-bg py-1.5 px-3.5 rounded-full select-none">
           <span className="w-1.5 h-1.5 rounded-full bg-green animate-ping" />
-          <span>Live &middot; {note.time}</span>
+          <span>Live &middot; {noteTime}</span>
         </div>
       </div>
 
       {/* Index Strip */}
       <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
         <div className="flex divide-x divide-line overflow-x-auto scrollbar-none py-1">
-          {db.indices.map(x => {
+          {indices.map(x => {
             const isUp = x.chg >= 0;
             return (
               <div key={x.code} className="flex-1 min-w-26 px-5 py-3 select-none">
@@ -51,23 +72,23 @@ export default function ClientMarketsPage() {
           <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3.5 relative overflow-hidden bg-linear-to-b from-navy to-[#181a28]">
             <div className="flex justify-between items-center text-xs font-semibold text-white/50 select-none">
               <span>Morning note</span>
-              <span>{note.time} &middot; research desk</span>
+              <span>{noteTime} &middot; research desk</span>
             </div>
-            
+
             <h3 className="font-disp font-medium text-lg md:text-xl text-white leading-tight">
-              {note.title}
+              {note?.title}
             </h3>
-            
+
             <p className="text-xs md:text-sm text-slate-300 leading-relaxed font-medium">
-              {note.body}
+              {note?.body}
             </p>
 
-            <button 
-              onClick={() => alert("Full RBA miners research PDF would open here.")}
+            <AlertButton
+              message="Full RBA miners research PDF would open here."
               className="btn bg-green text-[#08130e] hover:shadow-lg font-semibold py-2 px-4 rounded-lg text-xs cursor-pointer select-none"
             >
               Read full note
-            </button>
+            </AlertButton>
           </div>
 
           {/* Analyst recommendations table */}
@@ -86,7 +107,7 @@ export default function ClientMarketsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {db.recos.map(r => {
+                {recos.map(r => {
                   const ratingColor = r.rating.toLowerCase().includes("buy") ? "bg-green-bg text-green-d" : "bg-paper-2 text-mut";
                   return (
                     <tr key={r.code} className="hover:bg-[#faf9f5]">
@@ -97,7 +118,7 @@ export default function ClientMarketsPage() {
                         </span>
                       </td>
                       <td className="px-4.5 py-2.5 text-right font-mono text-[12.5px]">
-                        {r.tp ? `$${r.tp.toFixed(2)}` : "—"}
+                        {r.target ? `$${r.target.toFixed(2)}` : "—"}
                       </td>
                       <td className="px-4.5 py-2.5 text-right font-mono text-mut hidden sm:table-cell">
                         {r.move}
@@ -115,21 +136,21 @@ export default function ClientMarketsPage() {
           <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
             <b className="text-sm font-semibold text-ink block select-none">Latest strategy reports</b>
             <div className="divide-y divide-[#f0ede5] text-xs font-medium">
-              {db.reports.map((rp, idx) => (
-                <div key={idx} className="py-2.5 space-y-0.5">
+              {reports.map((rp) => (
+                <div key={rp.id} className="py-2.5 space-y-0.5">
                   <div className="font-semibold text-ink">{rp.title}</div>
                   <div className="text-mut text-[10.5px]">
-                    {rp.kind} &middot; {rp.date.toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {rp.pp} pp
+                    {rp.kind} &middot; {new Date(rp.published).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {rp.pages} pp
                   </div>
                 </div>
               ))}
             </div>
-            <button 
-              onClick={() => alert("Research library portal would open here.")}
+            <AlertButton
+              message="Research library portal would open here."
               className="w-full btn ghost sm text-xs font-semibold py-2 border border-line rounded-lg bg-white hover:border-mut cursor-pointer select-none"
             >
               All research reports
-            </button>
+            </AlertButton>
           </div>
 
           <div className="card bg-linear-to-b from-green-bg to-white border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2 select-none">
