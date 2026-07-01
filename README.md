@@ -2,7 +2,7 @@
 
 Vitti Capital is a production-grade, stateful Next.js App Router application written in TypeScript and styled with Tailwind CSS v4. It mirrors the exact visual style and dual-workspace architecture of the single-file prototype (`vitti-capital-platform.html`).
 
-> **Migration status:** the app is being moved from a purely in-memory prototype (Zustand + `lib/db.ts`) to a **Supabase (PostgreSQL) backend**. A data-access layer, a session-cookie bridge, and real per-client login are in place, and several routes now render as Server Components reading live data. The remaining routes still run on the legacy Zustand store during the incremental cut-over — see the [migration status](#5-supabase-migration-status).
+> **Migration status:** the app has been moved from a purely in-memory prototype (Zustand + `lib/db.ts`) to a **Supabase (PostgreSQL) backend**. All portal routes now render as Server Components reading live data through the data-access layer, every state mutation is a Server Action writing to Supabase + `audit_log`, and the portal shell reads the session-cookie bridge. The legacy Zustand store is no longer imported by any route. The one remaining stage is real authentication (Supabase Auth + RLS) to replace the interim session cookie — see the [migration status](#5-supabase-migration-status).
 
 ---
 
@@ -17,7 +17,7 @@ Detailed design information is available under the `docs` folder:
 
 ## 2. Directory Structure
 
-Routes marked ✅ have been migrated to Server Components reading the Supabase DAL; the rest still run on the legacy Zustand store.
+Every portal route is a Server Component (✅) that reads the Supabase DAL and delegates interactivity to a colocated `"use client"` island.
 
 ```bash
 client-dashboard/
@@ -26,44 +26,47 @@ client-dashboard/
 │   ├── layout.tsx              # Root Layout loading Google fonts
 │   ├── page.tsx                # Landing / role selector
 │   ├── actions/
-│   │   └── session.ts          # Server actions: signIn / setViewClient / signOut (session cookie)
+│   │   ├── session.ts          # Server actions: signIn / setViewClient / signOut (session cookie)
+│   │   ├── placements.ts       # Server actions: placeBid / withdrawBid / scaleBids / settlePlacement / notifyBpayPayment
+│   │   └── alerts.ts           # Server actions: ackAlert / addCustomAlert
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
-│       ├── layout.tsx          # Portal shell: sidebar, bottom-bar nav, "More" menu, alerts drawer (Zustand — pending)
+│       ├── layout.tsx          # ✅ Server shell: fetches session + alerts + nav badges from the DAL
+│       ├── PortalShell.tsx     #   Island: sidebar, bottom-bar nav, "More" menu, alerts drawer (ack + sign-out via server actions)
 │       ├── client/             # Client views
-│       │   ├── page.tsx        #   Dashboard / Home
+│       │   ├── page.tsx        #   ✅ Dashboard / Home + DashboardClient.tsx (island)
 │       │   ├── invest/         #   ✅ page.tsx (server) + InvestClient.tsx (island) + discovery config
 │       │   ├── positions/      #   ✅ page.tsx (server) + PositionsClient.tsx (donut/analytics island)
 │       │   ├── insights/       #   ✅ page.tsx (server — signals, sectors, news, research)
-│       │   ├── askvitti/       #   Ask Vitti AI chat
+│       │   ├── askvitti/       #   ✅ page.tsx (server) + AskVittiClient.tsx (chat island)
 │       │   ├── markets/        #   ✅ page.tsx (server) + AlertButton.tsx (island)
-│       │   ├── placements/     #   Bidding workspace (capital raises)
-│       │   ├── options/        #   Options desk overview
-│       │   ├── watchlist/      #   Watchlist & custom price alerts
-│       │   └── alerts/         #   Alerts log
+│       │   ├── placements/     #   ✅ page.tsx (server) + PlacementsClient.tsx (bidding island)
+│       │   ├── options/        #   ✅ page.tsx (server) + OptionsClient.tsx (island)
+│       │   ├── watchlist/      #   ✅ page.tsx (server) + WatchlistClient.tsx (island)
+│       │   └── alerts/         #   ✅ page.tsx (server) + AlertsClient.tsx (island)
 │       └── staff/              # Staff/Adviser views
-│           ├── page.tsx        #   Overview / desk summary
+│           ├── page.tsx        #   ✅ Overview / desk summary + StaffOverviewClient.tsx (island)
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
-│           │   └── [id]/       #   Client detail (expiry urgency rail)
-│           ├── placements/     #   Deal book manager (scaling & settlement)
-│           ├── options/        #   Firm-wide options monitor
-│           ├── alerts/         #   Alerts log
+│           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed detail island)
+│           ├── placements/     #   ✅ page.tsx (server) + StaffPlacementsClient.tsx (scaling & settlement island)
+│           ├── options/        #   ✅ page.tsx (server) + StaffOptionsClient.tsx (firm-wide monitor island)
+│           ├── alerts/         #   ✅ page.tsx (server) + StaffAlertsClient.tsx (island)
 │           └── audit/          #   ✅ page.tsx (server) + ExportButton.tsx (island)
 ├── lib/
-│   ├── db.ts                   # Legacy in-memory DB (Zustand source; still powers unmigrated pages)
+│   ├── db.ts                   # Legacy in-memory DB — no longer imported by any route (pending removal)
 │   ├── fonts.ts                # next/font loader configurations
-│   ├── session.ts              # Session-cookie read helpers: getSession / getActiveClientId
+│   ├── session.ts              # Session-cookie helpers: getSession / getActiveClientId / getActor
 │   ├── supabase/
 │   │   ├── client.ts           # Browser Supabase client (@supabase/ssr)
 │   │   ├── server.ts           # Server Supabase client (async cookies)
 │   │   └── database.types.ts   # Generated DB types (supabase gen types)
 │   └── data/
 │       ├── queries.ts          # Data-access layer (read side) — server-only
-│       ├── compute.ts          # Pure financial helpers over DAL shapes (client-safe)
+│       ├── compute.ts          # Pure financial helpers over DAL shapes (client-safe): posValue, dailyPL, isITM, …
 │       └── discovery.ts        # Static /invest goal + theme config (not persisted)
 ├── store/
-│   └── useDatabaseStore.ts     # Zustand store (legacy; being phased out)
+│   └── useDatabaseStore.ts     # Legacy Zustand store — no longer imported by any route (pending removal)
 ├── supabase/
 │   ├── config.toml             # Supabase CLI project config
 │   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
@@ -90,10 +93,11 @@ client-dashboard/
 - **Framework:** Next.js 16 (App Router) & React 19. Note the version specifics this codebase relies on: `cookies()` is **async** (`await cookies()`), and Middleware is now **Proxy** (`proxy.ts`).
 - **Backend:** **Supabase (PostgreSQL)** via `@supabase/ssr` — a browser client (`lib/supabase/client.ts`) and an async server client (`lib/supabase/server.ts`), with types generated by `supabase gen types` into `lib/supabase/database.types.ts`.
 - **Data-access layer:** `lib/data/queries.ts` — server-only read functions returning denormalized, UI-ready shapes (prices/names joined from `securities`, `dte` computed from `expiry_date`), each wrapped in `React.cache`. Pure financial math lives in `lib/data/compute.ts`.
-- **Session bridge:** an interim cookie (`{ role, clientId, viewClient }`) written by `app/actions/session.ts` and read via `lib/session.ts` — real Supabase Auth + RLS will later replace the cookie read with `getUser()`.
+- **Mutations:** all state changes are **Server Actions** (`app/actions/placements.ts`, `app/actions/alerts.ts`) that write to Supabase, append an `audit_log` entry, and `revalidatePath("/portal", "layout")` so the UI reflects the new state. Islands call them from event handlers.
+- **Session bridge:** an interim cookie (`{ role, clientId, viewClient }`) written by `app/actions/session.ts` and read via `lib/session.ts` (`getSession` / `getActiveClientId` / `getActor` for audit attribution) — real Supabase Auth + RLS will later replace the cookie read with `getUser()`.
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
 - **Fonts:** `Fraunces` (serif accent headers), `Hanken Grotesk` (clean sans body text), and `IBM Plex Mono` (financial figures and metrics).
-- **Legacy state engine:** the in-memory **Zustand** store (`useDatabaseStore.ts`) still powers routes not yet migrated; it is being phased out in favour of the DAL.
+- **Legacy state engine:** the in-memory **Zustand** store (`useDatabaseStore.ts`) and `lib/db.ts` are fully superseded by the DAL + Server Actions and are no longer imported by any route (pending removal).
 - **Responsive Shell:** A single portal shell adapts natively across breakpoints — a persistent left sidebar on desktop (`md`+) collapses to a fixed bottom navigation bar plus a "More" overflow menu on mobile/tablet viewports (pure CSS responsiveness).
 - **Production Schema:** A portable PostgreSQL DDL (`db/schema.sql`) modelling the normalized, integrity-constrained relational schema; applied to Supabase as an ordered migration.
 
@@ -147,8 +151,10 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Schema + seed on Supabase | ✅ applied (`supabase/migrations/`, `supabase/seed.sql`) |
 | Data-access layer + generated types | ✅ `lib/data/queries.ts`, `lib/supabase/*` |
 | Session-cookie bridge + email login | ✅ `lib/session.ts`, `app/actions/session.ts` |
-| Migrated routes | ✅ markets, positions, insights, invest (client) · clients, audit (staff) |
-| Pending routes | ⏳ dashboard, options, watchlist, alerts, placements, askvitti; staff overview, clients/[id], options, placements, alerts |
-| Mutations → server actions | ⏳ placeBid, scaleBids, settlement, ackAlert, addCustomAlert, BPAY (still Zustand) |
-| Portal layout on DAL/session | ⏳ still Zustand (nav badges, alerts drawer, sign-out) |
-| Real auth (Supabase Auth + `proxy.ts` + RLS) | ⏳ planned — replaces the cookie bridge |
+| Migrated routes — client | ✅ dashboard, invest, positions, insights, markets, placements, options, watchlist, alerts, askvitti |
+| Migrated routes — staff | ✅ overview, clients, clients/[id], placements, options, alerts, audit |
+| Mutations → server actions | ✅ `app/actions/placements.ts` (placeBid, withdrawBid, scaleBids, settlePlacement, notifyBpayPayment) · `app/actions/alerts.ts` (ackAlert, addCustomAlert) |
+| Portal layout on DAL/session | ✅ server `layout.tsx` fetches session + badges + alerts; interactivity in `PortalShell.tsx` (ack + sign-out call server actions) |
+| Real auth (Supabase Auth + `proxy.ts` + RLS) | ⏳ planned — replaces the interim cookie bridge and the actor derived in `getActor()` |
+
+> **Cut-over complete.** Every portal route now renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, and the shell reads the session. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. The only remaining stage is swapping the interim session cookie for real Supabase Auth + RLS.

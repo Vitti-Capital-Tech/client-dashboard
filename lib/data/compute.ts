@@ -26,6 +26,28 @@ export function totalPL(positions: Position[]): number {
   return positions.reduce((sum, p) => sum + posPL(p), 0);
 }
 
+/**
+ * Illustrative daily P&L. The demo has no intraday price history, so the day
+ * move is modelled with deterministic per-security factors (ported from the
+ * legacy lib/db.ts). Deterministic keeps server render and client hydration in
+ * sync — a random factor would flip values between the two.
+ */
+export function dailyPL(positions: Position[]): number {
+  return positions.reduce((sum, p) => {
+    const factor =
+      p.code === "PLS"
+        ? 0.021
+        : p.code === "BHP"
+          ? 0.008
+          : p.code === "FMG"
+            ? -0.006
+            : p.code === "WDS"
+              ? -0.004
+              : 0.003;
+    return sum + posValue(p) * factor;
+  }, 0);
+}
+
 export function moneyness(o: OptionRow): number {
   const d = o.under - o.strike;
   return o.type === "Put" ? -d : d;

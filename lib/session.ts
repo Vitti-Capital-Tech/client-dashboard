@@ -47,3 +47,32 @@ export async function getActiveClientId(): Promise<string> {
     .maybeSingle();
   return data?.id ?? "";
 }
+
+/**
+ * Resolves the acting user for audit-log writes in server actions. Staff act as
+ * the desk ("S. Goyal (staff)"); a client acts under their own display name.
+ * The real Supabase Auth cut-over will derive this from `getUser()` instead.
+ */
+export async function getActor(): Promise<{
+  role: Role;
+  clientId: string;
+  actor: string;
+}> {
+  const session = await getSession();
+  const role: Role = session?.role ?? "client";
+  const clientId = session?.clientId ?? "";
+
+  if (role === "admin") {
+    return { role, clientId, actor: "S. Goyal (staff)" };
+  }
+
+  const supabase = await createClient();
+  const { data } = clientId
+    ? await supabase
+        .from("clients")
+        .select("display_name")
+        .eq("id", clientId)
+        .maybeSingle()
+    : { data: null };
+  return { role, clientId, actor: data?.display_name ?? "Client" };
+}
