@@ -148,6 +148,7 @@ export type IdeaRow = {
   risk: Enums<"risk_level">;
   horizon: string | null;
   conviction: number;
+  last: number | null; // current price (from securities)
   entryLo: number | null;
   entryHi: number | null;
   target: number | null;
@@ -496,7 +497,10 @@ export const getNews = cache(async (): Promise<NewsRow[]> => {
 
 export const getInvestmentIdeas = cache(async (): Promise<IdeaRow[]> => {
   const supabase = await createClient();
-  const { data, error } = await supabase.from("investment_ideas").select("*");
+  const [{ data, error }, securityMap] = await Promise.all([
+    supabase.from("investment_ideas").select("*"),
+    getSecurityMap(),
+  ]);
   if (error) throw error;
   return data.map((i) => ({
     id: i.id,
@@ -506,6 +510,7 @@ export const getInvestmentIdeas = cache(async (): Promise<IdeaRow[]> => {
     risk: i.risk,
     horizon: i.horizon,
     conviction: i.conviction,
+    last: securityMap.get(i.code)?.last ?? null,
     entryLo: i.entry_lo,
     entryHi: i.entry_hi,
     target: i.target,

@@ -348,3 +348,48 @@ The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) tha
 - **Enums & integrity:** free-form strings (`type`, `kind`, `sev`, `dir`, `action`…) are promoted to Postgres enums and FK/UNIQUE/CHECK constraints. The `placement_type` enum also adds `'Rights'`, present in the data model but not enumerated in the TS union.
 - **Content persisted vs. UI config:** adviser-authored content in the `Database` aggregate is persisted — `recos → recommendations` and `note → research_notes` join the existing `signals`/`news`/`research_reports` content tables. In contrast, `goals` and `themes` are **not** persisted: they are static discovery scaffolding for the `/invest` page (fixed categories, icons, labels, blurbs) and remain in app code, since they are presentation config rather than mutable data.
 - **Production hardening (checklist, not DDL):** Row-Level Security per client, read-replica + Redis caching of shared market data, a connection pooler for serverless Next.js, and automated audit-partition rotation with cold-archive to S3.
+
+---
+
+## 8. Supabase Data Layer (runtime)
+
+The schema above is now wired into the running app for migrated routes. This section documents the runtime layer that reads it.
+
+### 8.1 Next.js version specifics (this codebase)
+This is not a stock Next.js — two conventions differ from older docs and drive the code below (verified against `node_modules/next/dist/docs/`):
+- **`cookies()` is async** — must be `await cookies()`. The server Supabase client factory is therefore `async`.
+- **Middleware is "Proxy"** — session-refresh middleware lives in a root `proxy.ts` (`export function proxy`), not `middleware.ts`. It is added with real auth (not present yet).
+
+### 8.2 Supabase clients (`lib/supabase/`)
+- `client.ts` — `createBrowserClient<Database>` for Client Components.
+- `server.ts` — `createServerClient<Database>` with `getAll`/`setAll` over the awaited `cookieStore`; `setAll` is wrapped in try/catch (Server Components can't set cookies — the future proxy refreshes the session).
+- `database.types.ts` — generated via `supabase gen types typescript --linked`; regenerate after any migration.
+
+### 8.3 Data-access layer (`lib/data/queries.ts`)
+Server-only (`import "server-only"`). One `React.cache`-wrapped read function per entity. It returns **denormalized, UI-ready types** (defined in the same file) rather than raw rows:
+- Identity uses real UUIDs (`clients.id`, `placements.id`); legacy refs (`C1`, `P1`) are exposed as `.ref`.
+- `securities` is loaded once into a `Map` and joined in JS to reconstruct `Position.last/name/sector`, `OptionRow.under`, `RecoRow.name/sector`, `IdeaRow.last`, `WatchRow.last`.
+- `OptionRow.dte` is computed from `expiry_date` relative to a `DEMO_TODAY` anchor (2026-06-12, matching the prototype); swap for `new Date()` in production.
+- Dates are returned as ISO strings (serializable across the RSC boundary; formatted in the UI).
+- `getPlacements` nests `bids` per placement; `getAlerts` reads the (engine-populated) `alerts` table.
+
+### 8.4 Compute helpers (`lib/data/compute.ts`)
+Pure functions over DAL shapes — `posValue`, `posCost`, `posPL`, `portfolioValue`, `totalPL`, `moneyness`, `isITM`, `intrinsic`, `unlistedValue`. Only type-only imports from `queries.ts`, so they are erased at compile time and safe to import into Client Components (islands reuse them).
+
+### 8.5 Session bridge (`lib/session.ts`, `app/actions/session.ts`)
+Interim replacement for the Zustand session, pending real auth:
+- **Read (`lib/session.ts`):** `getSession()` parses the `vitti_session` cookie `{ role, clientId, viewClient }`; `getActiveClientId()` returns `session.clientId` or falls back to the first seeded client (keeps pages renderable pre-login and during migration).
+- **Write (`app/actions/session.ts`, `"use server"`):** `signIn(role, email)` resolves the client by `clients.email` (falling back to the first client for staff/unknown emails), writes the cookie, and returns the client `ref` so the login page can keep the legacy store in sync. `setViewClient(id)` (staff) and `signOut()` round it out.
+- **Email login:** `clients.email` is the login key (also the natural key for future Supabase Auth). Demo emails: `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`.
+
+### 8.6 Static discovery config (`lib/data/discovery.ts`)
+`GOALS` and `THEMES` for the `/invest` page — the deliberately-not-persisted UI scaffolding (see §7.2). Client-safe constants, imported directly by `InvestClient`.
+
+### 8.7 Migration pattern: server page → client island
+Each migrated route is a thin **Server Component** `page.tsx` that resolves the active client (`getActiveClientId`), fetches via the DAL with `Promise.all`, and — for interactive pages — passes the data as props to a `"use client"` island that keeps state/handlers:
+- `markets/` → `AlertButton.tsx`; `positions/` → `PositionsClient.tsx` (tabs, donut, trade modal); `invest/` → `InvestClient.tsx` (plan builder, modals); `staff/clients/` → `ClientsTable.tsx` (row navigation).
+- `insights/` needs no island (pure display) and is a single Server Component.
+- Migrated routes render as **dynamic** (`ƒ`) because the DAL reads `cookies()`.
+
+### 8.8 Legacy gotcha — deterministic alert timestamps
+`scanAlerts`/`mkAlert` in `lib/db.ts` previously used `Math.random()` for alert timestamps. Because the Zustand store initializes on both the server render and client hydration of the (still-legacy) portal shell, the random sort order differed between the two, throwing a React hydration mismatch. Timestamps are now derived deterministically from the alert sequence.

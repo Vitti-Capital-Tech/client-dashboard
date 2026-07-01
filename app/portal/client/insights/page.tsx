@@ -1,14 +1,35 @@
-"use client";
+import { getActiveClientId } from "@/lib/session";
+import {
+  getPositions,
+  getSectors,
+  getNews,
+  getResearchReports,
+} from "@/lib/data/queries";
 
-import React from "react";
-import { useDatabaseStore } from "@/store/useDatabaseStore";
-import { clientPositions } from "@/lib/db";
+function newsTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-AU", {
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+    timeZone: "Australia/Sydney",
+  });
+}
 
-export default function ClientInsightsPage() {
-  const { db, clientId } = useDatabaseStore();
+// Server Component: sector momentum, news, and research from the DAL, with the
+// client's holdings highlighted.
+export default async function ClientInsightsPage() {
+  const clientId = await getActiveClientId();
+  const [positions, sectors, news, reports] = await Promise.all([
+    getPositions(clientId),
+    getSectors(),
+    getNews(),
+    getResearchReports(),
+  ]);
 
-  const holdings = clientPositions(db, clientId).map(p => p.code);
-  const maxMom = Math.max(...db.sectors.map(s => Math.abs(s.mom)));
+  const holdings = positions.map((p) => p.code);
+  const maxMom = Math.max(1, ...sectors.map((s) => Math.abs(s.momentum)));
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -24,40 +45,40 @@ export default function ClientInsightsPage() {
       {/* Sector Momentum */}
       <div className="space-y-2">
         <div className="font-mono text-[11px] tracking-wider uppercase text-mut">Sector momentum</div>
-        
+
         <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow space-y-4">
-          {db.sectors.map((s, idx) => {
-            const hasStock = s.benef.filter(code => holdings.includes(code));
-            const momPercent = Math.max(5, Math.round((Math.abs(s.mom) / maxMom) * 100));
-            const isNegative = s.mom < 0;
-            
+          {sectors.map((s, idx) => {
+            const hasStock = s.beneficiaries.filter(code => holdings.includes(code));
+            const momPercent = Math.max(5, Math.round((Math.abs(s.momentum) / maxMom) * 100));
+            const isNegative = s.momentum < 0;
+
             return (
-              <div key={idx} className={`${idx > 0 ? "border-t border-line pt-3.5" : ""} space-y-1.5`}>
+              <div key={s.name} className={`${idx > 0 ? "border-t border-line pt-3.5" : ""} space-y-1.5`}>
                 <div className="flex justify-between items-center text-xs">
                   <b className="text-sm font-semibold text-ink leading-tight">{s.name}</b>
                   <div className="flex items-center gap-2 font-mono font-bold text-xs select-none">
                     {/* Momentum Bar */}
                     <div className="w-20 h-1.5 bg-paper-2 rounded-full overflow-hidden flex justify-end">
-                      <div 
-                        style={{ width: `${momPercent}%` }} 
-                        className={`h-full rounded-full ${isNegative ? "bg-loss" : "bg-green"}`} 
+                      <div
+                        style={{ width: `${momPercent}%` }}
+                        className={`h-full rounded-full ${isNegative ? "bg-loss" : "bg-green"}`}
                       />
                     </div>
                     <span className={isNegative ? "text-loss-d" : "text-gain"}>
-                      {s.mom >= 0 ? "+" : ""}{s.mom.toFixed(1)}%
+                      {s.momentum >= 0 ? "+" : ""}{s.momentum.toFixed(1)}%
                     </span>
                   </div>
                 </div>
 
                 <div className="text-[12.5px] text-mut leading-relaxed">{s.drivers}</div>
-                
+
                 <div className="text-[11px] flex gap-2 items-center flex-wrap">
-                  {s.benef.length > 0 ? (
+                  {s.beneficiaries.length > 0 ? (
                     <span className="text-mut flex gap-2">
                       Names:{" "}
-                      {s.benef.map(code => (
-                        <span 
-                          key={code} 
+                      {s.beneficiaries.map(code => (
+                        <span
+                          key={code}
                           className={`code font-mono px-1 rounded-sm ${holdings.includes(code) ? "text-green-d font-bold" : ""}`}
                         >
                           {code} {holdings.includes(code) && "●"}
@@ -72,7 +93,7 @@ export default function ClientInsightsPage() {
                     <span className="pill bg-green-bg text-green-d text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto">
                       You hold {hasStock.length}
                     </span>
-                  ) : s.benef.length > 0 && s.mom > 2 ? (
+                  ) : s.beneficiaries.length > 0 && s.momentum > 2 ? (
                     <span className="pill bg-amber-bg text-amber-d text-[10px] font-bold px-2 py-0.5 rounded-full ml-auto">
                       Not in your book
                     </span>
@@ -94,17 +115,17 @@ export default function ClientInsightsPage() {
           </div>
 
           <div className="p-4.5 space-y-4">
-            {db.news.map((nw, idx) => (
-              <div key={idx} className={`${idx > 0 ? "border-t border-line pt-4" : ""} space-y-2`}>
+            {news.map((nw, idx) => (
+              <div key={nw.id} className={`${idx > 0 ? "border-t border-line pt-4" : ""} space-y-2`}>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${nw.dir === "up" ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"}`}>
+                  <span className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${nw.direction === "up" ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"}`}>
                     {nw.impact}
                   </span>
                   <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
-                    {nw.src} &middot; {nw.time}
+                    {nw.source} &middot; {newsTime(nw.ts)}
                   </span>
                 </div>
-                <div className="font-semibold text-[13.5px] leading-snug">{nw.head}</div>
+                <div className="font-semibold text-[13.5px] leading-snug">{nw.headline}</div>
                 <p className="text-xs text-mut leading-relaxed">
                   <b className="text-green-d">How to use it:</b> {nw.use}
                 </p>
@@ -131,11 +152,11 @@ export default function ClientInsightsPage() {
           <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
             <b className="text-sm font-semibold text-ink block">Research library</b>
             <div className="divide-y divide-line text-xs font-medium">
-              {db.reports.map((rp, idx) => (
-                <div key={idx} className="py-2.5 space-y-0.5">
+              {reports.map((rp) => (
+                <div key={rp.id} className="py-2.5 space-y-0.5">
                   <div className="font-semibold text-ink">{rp.title}</div>
                   <div className="text-mut text-[10.5px]">
-                    {rp.kind} &middot; {rp.date.toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {rp.pp} pp
+                    {rp.kind} &middot; {new Date(rp.published).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {rp.pages} pp
                   </div>
                 </div>
               ))}

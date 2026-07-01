@@ -1,14 +1,9 @@
-"use client";
+import { getAuditLog } from "@/lib/data/queries";
+import { ExportButton } from "./ExportButton";
 
-import React from "react";
-import { useDatabaseStore } from "@/store/useDatabaseStore";
-
-export default function StaffAuditLog() {
-  const { db } = useDatabaseStore();
-
-  const handleExportCSV = () => {
-    alert("CSV export completed. File downloaded: vitti_audit_log.csv");
-  };
+// Server Component: audit trail from the DAL (append-only audit_log table).
+export default async function StaffAuditLog() {
+  const audit = await getAuditLog(200);
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -21,12 +16,7 @@ export default function StaffAuditLog() {
             Every sign-in, placement bid, allocation publish, and security adjustment is recorded with user metadata.
           </p>
         </div>
-        <button
-          onClick={handleExportCSV}
-          className="btn ghost sm text-xs font-semibold py-2 px-4 border border-line rounded-[10px] bg-white hover:border-mut cursor-pointer transition-colors"
-        >
-          Export CSV
-        </button>
+        <ExportButton />
       </div>
 
       {/* Audit Logs Table */}
@@ -42,19 +32,19 @@ export default function StaffAuditLog() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f0ede5]">
-              {db.audit.length === 0 ? (
+              {audit.length === 0 ? (
                 <tr>
                   <td colSpan={4} className="text-center text-mut py-6">No audit records on file.</td>
                 </tr>
               ) : (
-                db.audit.map((e, idx) => (
-                  <tr key={idx} className="hover:bg-[#faf9f5]">
+                audit.map((e) => (
+                  <tr key={e.id} className="hover:bg-[#faf9f5]">
                     <td className="px-4.5 py-3 font-mono text-mut whitespace-nowrap text-[11.5px]">
                       {new Date(e.ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot;{" "}
                       {new Date(e.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                     </td>
                     <td className="px-4.5 py-3">
-                      <div className="font-semibold text-ink leading-tight">{e.user}</div>
+                      <div className="font-semibold text-ink leading-tight">{e.actor}</div>
                       <div className="text-[10px] text-mut uppercase font-semibold mt-0.5">{e.role}</div>
                     </td>
                     <td className="px-4.5 py-3 font-semibold text-ink">{e.action}</td>
