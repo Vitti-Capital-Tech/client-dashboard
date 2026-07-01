@@ -10,14 +10,21 @@ and the [production SQL schema](../db/schema.sql).
 ## 1. Where the project stands today
 
 - Complete **Next.js 16 / React 19** frontend — all 17 routes built, styled, and interactive.
-- State lives in an **in-memory Zustand store** ([`store/useDatabaseStore.ts`](../store/useDatabaseStore.ts))
-  seeded from a mock database ([`lib/db.ts`](../lib/db.ts)). It resets on every reload.
-- The production **PostgreSQL schema** ([`db/schema.sql`](../db/schema.sql)) is written but **not wired
-  into the app**.
-- Login is cosmetic (prefilled OTP), there is **no server, no persistence, no real auth, no live market
-  data, and no AI/news backend.**
+- **Persistence is live on Supabase.** The production **PostgreSQL schema** ([`db/schema.sql`](../db/schema.sql))
+  is applied as the first ordered migration (`supabase/migrations/`, seeded by `supabase/seed.sql`).
+  Every route is a Server Component reading a server-only data-access layer ([`lib/data/queries.ts`](../lib/data/queries.ts)),
+  and all mutations go through **server actions** ([`app/actions/`](../app/actions/)) that write to Supabase
+  and append to `audit_log`. State no longer resets on reload.
+- The legacy **in-memory Zustand store** ([`store/useDatabaseStore.ts`](../store/useDatabaseStore.ts)) seeded
+  from [`lib/db.ts`](../lib/db.ts) is off the data path — retained only as the reference implementation of the
+  domain logic the schema/DAL/actions were ported from.
+- **Still cosmetic / missing:** login is a prefilled OTP over an interim **cookie session** (no real auth,
+  no 2FA, no RLS yet), and there is **no live market data and no AI/news backend** — prices, alerts, and Ask
+  Vitti responses are seeded/keyword-based.
 
-"Fully functional" is therefore the **prototype → production gap** described below.
+"Fully functional" is therefore the **prototype → production gap** described below. Persistence (F2), the
+server-side bidding/settlement lifecycle (F3), and audit-log writes (F8) are now **done**; the remaining
+gaps are real auth, live data, scheduled jobs, realtime push, and the AI/news backend.
 
 ---
 
@@ -35,17 +42,17 @@ the Postgres our schema already targets. Only the market-data feed and Claude si
 
 ## 3. Functional requirements (the gaps)
 
-| # | Area | Prototype today | Production requirement |
-|---|------|-----------------|------------------------|
-| F1 | **Auth & sessions** | Fake login, role chosen in store | Real identity, email + **TOTP 2FA**, server sessions, role claims (`client` / `admin`), route protection |
-| F2 | **Persistence** | In-memory object, resets on reload | Wire `schema.sql` to a real Postgres; every read/mutation hits the DB |
-| F3 | **Bidding lifecycle** | `mutatePlaceBid` etc. mutate memory | Transactional server actions; concurrency-safe allocation scaling; server-side settlement engine |
-| F4 | **Market data** | Hardcoded `last` / `under` / indices | Live (or delayed/EOD) feed → `securities.last_price` and `market_indices` on a schedule |
-| F5 | **Alerts engine** | `scanAlerts()` runs once at store init | Scheduled server job scanning options/prices, writing `alerts`, pushing to clients |
-| F6 | **Ask Vitti AI** | Keyword matching in the browser | Claude API backend, grounded with the client's live portfolio context |
-| F7 | **Live news** | Static seed list | News source (news API **or** Claude web-search tool) + Claude to write the "how to use this" note |
-| F8 | **Audit log** | In-memory array | Append-only writes to the partitioned `audit_log` on every mutation |
-| F9 | **BPAY / payments** | `_paid` boolean toggle | Manual staff reconciliation workflow now; PSP integration later |
+| # | Area | Status | Production requirement |
+|---|------|--------|------------------------|
+| F1 | **Auth & sessions** | ⏳ Interim | *Now:* prefilled OTP + cookie session (`{role, clientId, viewClient}`). *Needed:* real identity, email + **TOTP 2FA**, server sessions, role claims (`client` / `admin`), route protection |
+| F2 | **Persistence** | ✅ Done | `schema.sql` applied to Supabase; every read hits the DAL and every mutation hits the DB via server actions |
+| F3 | **Bidding lifecycle** | ✅ Done (single-user) | Server actions (`placeBid`/`scaleBids`/`settlePlacement`) with server-side settlement engine. *Still needed:* transactional/concurrency-safe scaling under contention |
+| F4 | **Market data** | ❌ Open | Seeded `securities.last_price` / `market_indices`. *Needed:* live (or delayed/EOD) feed on a schedule |
+| F5 | **Alerts engine** | ⏳ Partial | `alerts` rows are materialized (seeded) and read via `getAlerts`; ack is a server action. *Needed:* scheduled server job that rescans options/prices and pushes to clients |
+| F6 | **Ask Vitti AI** | ❌ Open | Keyword matching over DAL shapes. *Needed:* Claude API backend, grounded with the client's live portfolio context |
+| F7 | **Live news** | ❌ Open | Static seed list. *Needed:* news source (news API **or** Claude web-search tool) + Claude to write the "how to use this" note |
+| F8 | **Audit log** | ✅ Done | Every server action appends to the partitioned `audit_log` |
+| F9 | **BPAY / payments** | ⏳ Interim | `notifyBpayPayment` sets the `paid` flag. *Needed:* manual staff reconciliation workflow; PSP integration later |
 
 ---
 
@@ -120,9 +127,9 @@ separate scope.
 
 ## 6. Suggested build order
 
-1. Stand up Supabase, apply [`db/schema.sql`](../db/schema.sql), add a data-access layer.
-2. Real auth + TOTP 2FA + Row-Level Security.
-3. Port the `mutate*` functions to server actions that write to the DB (audit on every write).
+1. ✅ Stand up Supabase, apply [`db/schema.sql`](../db/schema.sql), add a data-access layer.
+2. Real auth + TOTP 2FA + Row-Level Security. *(interim cookie session in place)*
+3. ✅ Port the `mutate*` functions to server actions that write to the DB (audit on every write).
 4. Market-data ingestion job + scheduled alert engine.
 5. Realtime push, then the Claude AI + news backend.
 6. Tests, observability, and deploy pipeline.

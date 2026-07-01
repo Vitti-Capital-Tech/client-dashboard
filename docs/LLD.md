@@ -151,7 +151,9 @@ export interface Database {
 
 ---
 
-## 2. Stateful Mutation & Store Data Flow
+## 2. Stateful Mutation & Store Data Flow (reference implementation)
+
+> **Status:** the runtime write path is now server actions over Supabase (§8.8); the Zustand flow below is retained as the reference implementation whose semantics those actions preserve.
 
 The following data flow chart illustrates how client actions and staff console updates propagate through the state lifecycle store reactively, mutating data states cleanly:
 
@@ -203,7 +205,9 @@ flowchart TD
 
 ---
 
-## 3. Stateful Database Mutation Functions
+## 3. Stateful Database Mutation Functions (reference implementation)
+> **Status:** superseded at runtime by the server actions in §8.8, which map one-for-one to the functions below. Kept here as the canonical spec of each mutation's semantics and audit output.
+
 Mutations in `lib/db.ts` are pure functions that accept the database instance, create shallow/deep copies as needed, apply adjustments, append an `AuditEntry` to the front of `db.audit`, and return a new `Database` state. Each is wrapped by a thin action in `useDatabaseStore` that injects `clientId`/`currentUserLabel` (see §6).
 
 ### 3.1 Placing and Withdrawing Bids
@@ -301,7 +305,9 @@ To ensure native responsiveness on real mobile and tablet devices, the unified p
 
 ---
 
-## 6. Zustand Store Contract (`store/useDatabaseStore.ts`)
+## 6. Zustand Store Contract (`store/useDatabaseStore.ts`) — legacy, off the data path
+> **Status:** no longer read or written by any portal route (its one surviving caller is `app/login/page.tsx`, kept in sync harmlessly alongside the real `signIn` action). Documented for reference; the runtime equivalents are the DAL (§8.3) for reads, server actions (§8.8) for writes, and the cookie session (§8.5) for session context.
+
 The store wraps `INITIAL_DATABASE` and exposes both the data and the session context, plus one action per mutation:
 
 | State | Type | Purpose |
@@ -317,7 +323,7 @@ The store wraps `INITIAL_DATABASE` and exposes both the data and the session con
 ---
 
 ## 7. Production SQL Schema (`db/schema.sql`)
-The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) that re-expresses the flat prototype objects as an integrity-constrained relational model. It is **not** wired into the running app — it documents the intended production persistence layer.
+The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) that re-expresses the flat prototype objects as an integrity-constrained relational model. It is now **applied to a live Supabase project** (as the first ordered migration under `supabase/migrations/`, seeded by `supabase/seed.sql`) and is the persistence layer every route reads and every server action writes (§8). The interface→table mapping below still documents the deliberate divergences from the prototype shape.
 
 ### 7.1 Interface → Table Mapping
 
@@ -378,18 +384,52 @@ Pure functions over DAL shapes — `posValue`, `posCost`, `posPL`, `portfolioVal
 
 ### 8.5 Session bridge (`lib/session.ts`, `app/actions/session.ts`)
 Interim replacement for the Zustand session, pending real auth:
-- **Read (`lib/session.ts`):** `getSession()` parses the `vitti_session` cookie `{ role, clientId, viewClient }`; `getActiveClientId()` returns `session.clientId` or falls back to the first seeded client (keeps pages renderable pre-login and during migration).
+- **Read (`lib/session.ts`):** `getSession()` parses the `vitti_session` cookie `{ role, clientId, viewClient }`; `getActiveClientId()` returns `session.clientId` or falls back to the first seeded client (keeps pages renderable pre-login). `getActor()` resolves the acting user for audit-log writes in server actions — staff act as the desk (`"S. Goyal (staff)"`), a client acts under their `display_name` looked up from the `clients` row — returning `{ role, clientId, actor }`.
 - **Write (`app/actions/session.ts`, `"use server"`):** `signIn(role, email)` resolves the client by `clients.email` (falling back to the first client for staff/unknown emails), writes the cookie, and returns the client `ref` so the login page can keep the legacy store in sync. `setViewClient(id)` (staff) and `signOut()` round it out.
 - **Email login:** `clients.email` is the login key (also the natural key for future Supabase Auth). Demo emails: `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`.
 
 ### 8.6 Static discovery config (`lib/data/discovery.ts`)
 `GOALS` and `THEMES` for the `/invest` page — the deliberately-not-persisted UI scaffolding (see §7.2). Client-safe constants, imported directly by `InvestClient`.
 
-### 8.7 Migration pattern: server page → client island
-Each migrated route is a thin **Server Component** `page.tsx` that resolves the active client (`getActiveClientId`), fetches via the DAL with `Promise.all`, and — for interactive pages — passes the data as props to a `"use client"` island that keeps state/handlers:
-- `markets/` → `AlertButton.tsx`; `positions/` → `PositionsClient.tsx` (tabs, donut, trade modal); `invest/` → `InvestClient.tsx` (plan builder, modals); `staff/clients/` → `ClientsTable.tsx` (row navigation).
-- `insights/` needs no island (pure display) and is a single Server Component.
-- Migrated routes render as **dynamic** (`ƒ`) because the DAL reads `cookies()`.
+### 8.7 Migration pattern: server page → client island (now applied to every route)
+Every route is a thin **Server Component** `page.tsx` that resolves the active client (`getActiveClientId`), fetches via the DAL with `Promise.all`, and — for interactive pages — passes the data as props to a `"use client"` island that keeps state/handlers and invokes server actions:
 
-### 8.8 Legacy gotcha — deterministic alert timestamps
+| Route | Island | Notable UI / actions |
+|-------|--------|----------------------|
+| `client/` (dashboard) | `DashboardClient.tsx` | portfolio overview, drawer `ackAlert` |
+| `client/markets/` | `AlertButton.tsx` | `addCustomAlert` |
+| `client/positions/` | `PositionsClient.tsx` | tabs, donut, trade modal |
+| `client/options/` | `OptionsClient.tsx` | moneyness/expiry views |
+| `client/placements/` | `PlacementsClient.tsx` | bidding workspace → `placeBid`/`withdrawBid`/`notifyBpayPayment` |
+| `client/watchlist/` | `WatchlistClient.tsx` | `addCustomAlert` |
+| `client/alerts/` | `AlertsClient.tsx` | `ackAlert`/`addCustomAlert` |
+| `client/askvitti/` | `AskVittiClient.tsx` | contextual AI chat over DAL shapes |
+| `client/insights/` | *(none — pure display)* | single Server Component |
+| `staff/` (overview) | `StaffOverviewClient.tsx` | book totals, register, `setViewClient` |
+| `staff/clients/` | `ClientsTable.tsx` | row navigation |
+| `staff/clients/[id]/` | `ClientDetailClient.tsx` | per-client desk, expiry rail |
+| `staff/options/` | `StaffOptionsClient.tsx` | firm-wide options |
+| `staff/placements/` | `StaffPlacementsClient.tsx` | `scaleBids`/`settlePlacement` |
+| `staff/alerts/` | `StaffAlertsClient.tsx` | `ackAlert`/`addCustomAlert` |
+| `staff/audit/` | `ExportButton.tsx` | audit table + CSV export |
+
+- The **portal layout** (`app/portal/layout.tsx`) follows the same split: a Server Component fetches shell/badge data and hands it to the `PortalShell.tsx` island (§ HLD 3.2).
+- All routes render as **dynamic** (`ƒ`) because the DAL reads `cookies()`.
+
+### 8.8 Server actions (the write path) — `app/actions/`
+`"use server"` functions that replace the legacy Zustand `mutate*` one-for-one. Each resolves `getActor()`, writes to Supabase, inserts an `audit_log` row, then `revalidatePath("/portal", "layout")`.
+
+| Server action (`app/actions/`) | Replaces (`lib/db.ts`) | Behaviour |
+|---------------------------------|------------------------|-----------|
+| `placeBid(placementId, amount)` | `mutatePlaceBid` | upsert the client's `bids` row; log `Placed bid`. |
+| `withdrawBid(placementId)` | `mutateWithdrawBid` | delete the client's bid; log `Withdrew bid`. |
+| `scaleBids(placementId, allocations)` | `mutateScaleBids` | write each `bids.alloc`; log `Updated allocations`. |
+| `settlePlacement(placementId)` | `mutateUpdatePlacementStage` (settle branch) | upsert placement code as a `security`, insert `positions` (`qty = round(alloc/price)`) and attaching `option_holdings` (ratio parsed from `opts`: `(1:1)→1`, `(1:3)→⅓`, else `0.5`; `strike = price×1.5`; 1-yr expiry; `listed = code≠"MRD"`); set stage `settled`; log `Change deal stage`. |
+| `notifyBpayPayment(placementId)` | `mutateClientBpayPayment` | set `bids.paid = true`; log `Notified payment`. |
+| `ackAlert(alertId)` | `mutateAckAlert` | set `acknowledged`/`acknowledged_at`/`acknowledged_by`. |
+| `addCustomAlert(clientId, code, threshold, direction)` | `mutateAddCustomAlert` | upsert `watchlist_items` threshold + insert a `price` `alerts` row; log `Created alert`. |
+
+> These are the runtime equivalents of §3 (`mutate*`); that section now documents the **reference** implementation the actions were ported from.
+
+### 8.9 Legacy gotcha — deterministic alert timestamps
 `scanAlerts`/`mkAlert` in `lib/db.ts` previously used `Math.random()` for alert timestamps. Because the Zustand store initializes on both the server render and client hydration of the (still-legacy) portal shell, the random sort order differed between the two, throwing a React hydration mismatch. Timestamps are now derived deterministically from the alert sequence.

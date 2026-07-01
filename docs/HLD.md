@@ -12,39 +12,43 @@ The objectives of the platform are:
 
 ## 2. Architecture Layout
 
-The platform is mid-migration from an in-memory prototype to a Supabase backend, so it currently runs **two data paths**: migrated routes are Server Components that read the data-access layer (DAL → Supabase), while not-yet-migrated routes still read the legacy Zustand store.
+The migration from the in-memory prototype to a Supabase backend is **complete**: every portal route is now a Server Component that reads the data-access layer (DAL → Supabase), and all state changes go through **server actions** that write to Supabase and append to `audit_log`. The legacy Zustand store (`lib/db.ts` + `store/useDatabaseStore.ts`) is no longer on any read path — it survives only as a vestigial write in the login page (§3.1) and remains checked in as the reference implementation of the domain logic the schema and DAL were derived from.
 
 ```mermaid
 graph TD
     Root["Root Layout (app/layout.tsx)"] --> Landing["Landing / role selector (app/page.tsx)"]
     Landing --> Login["Login (app/login/page.tsx)"]
     Login -->|"signIn(email) server action"| Cookie["Session cookie · {role, clientId, viewClient}"]
-    Login --> E["Portal Shell (app/portal/layout.tsx)"]
+    Login --> E["Portal Shell (app/portal/layout.tsx → PortalShell island)"]
 
     E --> F["Client Views (/portal/client)"]
     E --> G["Staff Views (/portal/staff)"]
 
-    subgraph "Data layer"
-        Cookie --> Session["lib/session.ts · getActiveClientId()"]
+    subgraph "Data layer (all routes)"
+        Cookie --> Session["lib/session.ts · getActiveClientId() / getActor()"]
         Session --> DAL["DAL · lib/data/queries.ts (server-only, React.cache)"]
         DAL --> Supa[("Supabase / PostgreSQL")]
-        Store["Zustand + lib/db.ts (legacy)"] -.->|"being phased out"| DAL
     end
 
-    F -->|"migrated: markets, positions, insights, invest"| DAL
-    F -->|"pending: home, options, watchlist, alerts, placements, askvitti"| Store
-    G -->|"migrated: clients, audit"| DAL
-    G -->|"pending: overview, clients/[id], options, placements, alerts"| Store
+    subgraph "Writes"
+        Actions["Server actions · app/actions/{placements,alerts,session}.ts"]
+        Actions -->|"insert/update + audit_log + revalidatePath"| Supa
+    end
+
+    F -->|"read"| DAL
+    G -->|"read"| DAL
+    F -->|"mutate (place/withdraw bid, ack/create alert, BPAY)"| Actions
+    G -->|"mutate (scale, settle, ack/create alert, setViewClient)"| Actions
 ```
 
-> Migrated interactive routes follow a **server page → client island** split: the Server Component fetches from the DAL and passes data as props to a `"use client"` island that keeps the interactivity (e.g. `positions/PositionsClient.tsx`, `invest/InvestClient.tsx`).
+> Every interactive route follows a **server page → client island** split: the Server Component resolves the active client (`getActiveClientId`), fetches from the DAL with `Promise.all`, and passes data as props to a `"use client"` island that keeps the interactivity and calls server actions (e.g. `positions/PositionsClient.tsx`, `placements/PlacementsClient.tsx`, `staff/placements/StaffPlacementsClient.tsx`). Pure-display routes (`insights/`) need no island.
 
 ---
 
 ## 3. High-Level Components
 
-### 3.1 Reactive State Store (`store/useDatabaseStore.ts`) — legacy, being phased out
-This store powered the original prototype and still backs routes not yet migrated to the DAL (and the portal shell). New work reads Supabase via the data-access layer (§3.1b); this section describes the legacy path:
+### 3.1 Reactive State Store (`store/useDatabaseStore.ts`) — legacy, off the data path
+This store powered the original prototype. It is **no longer read or written by any portal route** — all reads go through the DAL (§3.1b) and all writes through server actions (§3.1c). Its one surviving caller is `app/login/page.tsx`, which still calls `setRole`/`setClientId` alongside the real `signIn` server action; this is a harmless leftover that can be deleted once verified. The store and `lib/db.ts` stay in the tree as the canonical reference implementation of the domain logic (mutation semantics, alert engine, financial helpers) that the SQL schema, DAL, and server actions were ported from. This section documents that legacy path:
 - An initial database object (`INITIAL_DATABASE`) is loaded from `lib/db.ts`. At store-init the alerts engine (`scanAlerts`) and audit seeder (`seedAudits`) run once to populate `db.alerts` and `db.audit`.
 - The database is managed globally using a **Zustand** store (`useDatabaseStore`), which also tracks session context: `role` (`client | admin`), `clientId`, `viewClient` (the client a staff member is inspecting), and a derived `currentUserLabel` getter used to stamp audit entries.
 - Mutators (`mutatePlaceBid`, `mutateWithdrawBid`, `mutateScaleBids`, `mutateUpdatePlacementStage`, `mutateAckAlert`, `mutateAddCustomAlert`, `mutateClientBpayPayment`) copy the database and return updated versions with mutations (e.g., bid increments, allocation scales, custom price alerts, BPAY payment flags).
@@ -58,10 +62,16 @@ Migrated routes never touch Zustand — they read Supabase through a server-only
 - **DAL (`lib/data/queries.ts`):** one read function per entity (`getPositions`, `getPlacements`, `getSignals`, `getAuditLog`, …), each wrapped in `React.cache` for per-request deduping. It returns **denormalized, UI-ready shapes** — prices/names joined from `securities`, `dte` computed from `expiry_date` (anchored to a demo "today"), bids nested under placements.
 - **Compute (`lib/data/compute.ts`):** pure financial math (`posValue`, `posPL`, `portfolioValue`, `isITM`, `unlistedValue`) over DAL shapes; client-safe (type-only imports), so islands reuse it.
 - **Supabase clients (`lib/supabase/`):** a browser client and an **async** server client (this Next.js version's `cookies()` is async); types generated into `database.types.ts`.
-- **Session bridge (`lib/session.ts` + `app/actions/session.ts`):** login resolves the client by email and writes a cookie `{ role, clientId, viewClient }`; server components read `getActiveClientId()` (falling back to the first seeded client pre-login). This is the interim stand-in for real Supabase Auth + RLS, which will replace the cookie read with `getUser()`.
+- **Session bridge (`lib/session.ts` + `app/actions/session.ts`):** login resolves the client by email and writes a cookie `{ role, clientId, viewClient }`; server components read `getActiveClientId()` (falling back to the first seeded client pre-login) and server actions read `getActor()` to stamp the audit log. This is the interim stand-in for real Supabase Auth + RLS, which will replace the cookie read with `getUser()`.
 
-### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx`)
-The wrapper coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
+### 3.1c Server Actions (`app/actions/`) — the write path
+All mutations are `"use server"` functions that resolve the actor via `getActor()`, write directly to Supabase, insert an `audit_log` row, and call `revalidatePath("/portal", "layout")` so every open surface re-renders with fresh data. They replace the legacy Zustand `mutate*` functions one-for-one (see the LLD §9 mapping):
+- **`placements.ts`** — `placeBid`, `withdrawBid`, `scaleBids`, `settlePlacement`, `notifyBpayPayment`. `settlePlacement` carries the settlement engine: it upserts the placement code as a tradable `security`, issues `positions` for each allotted bid, and inserts attaching `option_holdings` (parsing the option ratio from `opts`).
+- **`alerts.ts`** — `ackAlert`, `addCustomAlert` (upserts the watchlist row + inserts a triggered `price` alert).
+- **`session.ts`** — `signIn`, `setViewClient`, `signOut` (cookie writes).
+
+### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
+The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
 - **Global Header (Topbar):** Live broker-feed status pill, illustrative search bar, active-user avatar, and the alerts toggle (with unread badge).
 - **Desktop Sidebar:** Persistent left panel navigation showing all routes, the workspace label, the signed-in user card, and sign-out.
 - **Mobile Bottom Bar:** Fixed bottom tab bar showing the primary (`tab: true`) routes.
@@ -76,17 +86,17 @@ The portal layout is fully responsive natively using CSS media queries (Tailwind
 
 ## 4. Key Architectural Flows
 
-> **Migration note:** the lifecycles below currently execute as **Zustand mutations** (`mutate*` in `lib/db.ts`). They are being ported to **server actions** that write to Supabase and append to the `audit_log` table; the state transitions and audit semantics stay the same.
+> **Migration note:** these lifecycles now execute as **server actions** (`app/actions/*`, §3.1c) that write to Supabase and insert `audit_log` rows, then `revalidatePath` the portal. The state transitions and audit semantics match the original Zustand `mutate*` implementation (retained as reference in `lib/db.ts`).
 
 ### 4.1 Bidding and Allocation Lifecycle
-1. **Bid Placement:** Client visits `/portal/client/placements`, uses the bidding workspace to calculate costs, and submits a bid. A `Placed bid` audit entry is created.
-2. **Book Close:** Staff member logs in, navigates to `/portal/staff/placements`, and changes the deal stage to "Closed".
-3. **Allocation Scaling:** Staff uses the slider or manual inputs to scale back client allocations and hits "Scale & Commit". This updates `bids[i].alloc` values.
-4. **Deal Settlement:** Staff transitions the deal stage to "Settled". The database automatically converts allocated bids into equity holdings (adding stocks to `db.positions` and attaching option sweeteners to `db.options`).
+1. **Bid Placement:** Client visits `/portal/client/placements`, uses the bidding workspace to calculate costs, and submits a bid → `placeBid` server action inserts/updates the `bids` row and writes a `Placed bid` audit entry.
+2. **Book Close:** Deals are seeded in the `closed` stage; staff work the closed book from `/portal/staff/placements`. (The open→closed transition is part of the data model but not yet wired to a UI control.)
+3. **Allocation Scaling:** On a closed deal, staff picks a scaling policy and hits "Publish allocations" → `scaleBids` writes each `bids[i].alloc` and logs `Updated allocations`.
+4. **Deal Settlement:** Staff hits "Confirm Settlement" → `settlePlacement` transitions the deal to `settled`, upserts the placement code as a `security`, and converts allotted bids into `positions` (plus attaching `option_holdings`), logging a `Change deal stage` entry.
 5. **Confirmation:** Client logs in, sees their dashboard performance updated, and views the placement status as "Allotment confirmed".
 
 ### 4.2 Expiry Alert Lifecycle
-1. **Options Scan:** The engine scans options regularly.
-2. **Alert Triggering:** If an option is within 30 days of expiry, or is in the money (ITM) and unlisted, it flags warnings.
-3. **Desk Notice:** A slide-out alert notification is rendered.
-4. **Acknowledgement:** Clicking "Ack" flags the alert as read, moving it down the priority list.
+1. **Options Scan:** The alert engine (originally `scanAlerts`) evaluates options; the resulting `alerts` rows are materialized in Supabase (seeded), and `getAlerts` reads them (scoped per-client for clients, firm-wide for staff).
+2. **Alert Triggering:** If an option is within 30 days of expiry, or is in the money (ITM) and unlisted, a warning row is present.
+3. **Desk Notice:** The `PortalShell` slide-out drawer (and the alerts pages) render the alerts, unacknowledged first.
+4. **Acknowledgement:** Clicking "Ack" calls the `ackAlert` server action, which sets `acknowledged`/`acknowledged_at`/`acknowledged_by` and revalidates the portal, moving it down the priority list.
