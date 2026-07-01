@@ -262,6 +262,16 @@ CREATE TABLE signals (
   updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
+-- Analyst recommendations strip (adviser-authored). One row per covered security;
+-- `name`/`sector` are NOT stored here — join securities (single source of truth).
+CREATE TABLE recommendations (
+  security_code  text PRIMARY KEY REFERENCES securities(code),
+  rating         text NOT NULL,                     -- e.g. 'Buy', 'Hold', 'Reduce'
+  target_price   numeric(18,4),                     -- was `tp`
+  move           text,                              -- performance note, e.g. '+12% since call'
+  updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE sectors (
   name           text PRIMARY KEY,
   momentum       numeric(8,4) NOT NULL,             -- was `mom`
@@ -304,6 +314,17 @@ CREATE TABLE research_reports (
   published   date NOT NULL,
   pages       smallint                              -- was `pp`
 );
+
+-- Free-text adviser research notes shown on the dashboard. The prototype held a
+-- single `note`; here it's a table of dated notes (newest surfaced in the UI).
+CREATE TABLE research_notes (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  title       text NOT NULL,
+  body        text NOT NULL,
+  published   timestamptz NOT NULL DEFAULT now(),   -- was `time`
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_research_notes_published ON research_notes(published DESC);
 
 -- ============================================================================
 -- Notes for production hardening (not DDL — checklist):

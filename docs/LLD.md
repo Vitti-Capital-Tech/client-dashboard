@@ -330,11 +330,14 @@ The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) tha
 | `Placement` + `Bid` | `placements` + `bids` | `disc → discount_pct`, `raise → raise_millions`, `min → min_bid`, `_paid → paid`. One bid per client per deal. |
 | `IndexData` | `market_indices` | `dp → decimal_places`, `chg` = % change. |
 | `Signal` / `Sector` / `News` | `signals` / `sectors` / `news` | `mom → momentum`, `benef → beneficiaries[]`, `use → use_note`. |
-| `InvestmentIdea` | `investment_ideas` | `conv → conviction (1–3 CHECK)`, `deal → placement_id` FK. |
+| `recos` | `recommendations` | `tp → target_price`; `name`/`sect` **not** stored — joined from `securities`. One reco per covered security. |
+| `note` (`ResearchNote`) | `research_notes` | `time → published`; promoted from a single object to a table of dated notes. |
+| `InvestmentIdea` | `investment_ideas` | `conv → conviction (1–3 CHECK)`, `deal → placement_id` FK. `last` not stored — joined from `securities`. |
 | `WatchItem` | `watchlist_items` | Threshold/direction columns; unlisted allowed (no FK). |
 | `Alert` | `alerts` | `kind`/`severity`/`direction` are enums; partial index on unacknowledged. |
 | `AuditEntry` | `audit_log` | **Append-only, month-partitioned**; UPDATE/DELETE blocked by trigger. |
 | `ResearchReport` | `research_reports` | `pp → pages`. |
+| `Goal` / `themes` | *(not persisted)* | Static UI discovery config (icons, labels, blurbs on `/invest`) — kept in app code, not the DB. See §7.2. |
 | *(prototype `Position.last`, `OptionHolding.under`)* | `securities` | Prices live **once** in the shared master table, not per holding. |
 
 ### 7.2 Deliberate Divergences
@@ -343,4 +346,5 @@ The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) tha
 - **Cash:** a hardcoded lookup in TS becomes a first-class `client_accounts` row (multi-account / multi-currency ready).
 - **Audit immutability:** an in-memory array in TS becomes an append-only, time-partitioned compliance table with a trigger that rejects mutation.
 - **Enums & integrity:** free-form strings (`type`, `kind`, `sev`, `dir`, `action`…) are promoted to Postgres enums and FK/UNIQUE/CHECK constraints. The `placement_type` enum also adds `'Rights'`, present in the data model but not enumerated in the TS union.
+- **Content persisted vs. UI config:** adviser-authored content in the `Database` aggregate is persisted — `recos → recommendations` and `note → research_notes` join the existing `signals`/`news`/`research_reports` content tables. In contrast, `goals` and `themes` are **not** persisted: they are static discovery scaffolding for the `/invest` page (fixed categories, icons, labels, blurbs) and remain in app code, since they are presentation config rather than mutable data.
 - **Production hardening (checklist, not DDL):** Row-Level Security per client, read-replica + Redis caching of shared market data, a connection pooler for serverless Next.js, and automated audit-partition rotation with cold-archive to S3.
