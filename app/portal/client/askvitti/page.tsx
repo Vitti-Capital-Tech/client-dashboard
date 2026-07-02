@@ -1,6 +1,7 @@
-import { getActiveClientId } from "@/lib/session";
+import { getActiveClientId, getActiveAccountId } from "@/lib/session";
 import {
   getClient,
+  getAccount,
   getPositions,
   getOptions,
   getPlacements,
@@ -8,19 +9,22 @@ import {
 import { portfolioValue, dailyPL } from "@/lib/data/compute";
 import { AskVittiClient } from "./AskVittiClient";
 
-// Server Component: resolves the active client from the session, fetches via the
-// DAL, then hands data to the interactive chat island.
+// Server Component: resolves the active client + account, fetches via the DAL,
+// then hands data to the interactive chat island. Holdings/cash are
+// account-scoped; the person's name and deal bids stay client-scoped.
 export default async function AskVittiPage() {
   const clientId = await getActiveClientId();
+  const accountId = await getActiveAccountId();
 
-  const [client, positions, options, placements] = await Promise.all([
+  const [client, account, positions, options, placements] = await Promise.all([
     getClient(clientId),
-    getPositions(clientId),
-    getOptions(clientId),
+    getAccount(accountId),
+    getPositions(accountId),
+    getOptions(accountId),
     getPlacements(),
   ]);
 
-  const pv = portfolioValue(positions, client?.cash ?? 0);
+  const pv = portfolioValue(positions, account?.cash ?? 0);
   const dpl = dailyPL(positions);
 
   const mrdBid =

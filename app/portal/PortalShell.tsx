@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
-import { signOut } from "@/app/actions/session";
+import { signOut, setActiveAccount } from "@/app/actions/session";
+
+type AccountOption = { id: string; label: string; accountType: string };
 
 /**
  * Interactive portal shell (client island). The layout Server Component fetches
@@ -30,6 +32,8 @@ export function PortalShell({
   alerts,
   clientLabels,
   pendingAllocCount,
+  accounts,
+  activeAccountId,
   children,
 }: {
   role: "client" | "admin";
@@ -38,18 +42,32 @@ export function PortalShell({
   alerts: AlertRow[];
   clientLabels: Record<string, string>;
   pendingAllocCount: number;
+  accounts: AccountOption[];
+  activeAccountId: string;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [isMoreOpen, setIsMoreOpen] = useState(false);
-  const [, startTransition] = useTransition();
+  const [isSwitching, startTransition] = useTransition();
 
   const handleSignOut = async () => {
     await signOut();
     router.push("/");
   };
+
+  // Client account switcher: persist the choice (server action revalidates the
+  // portal), then refresh so every page re-renders scoped to the new account.
+  const handleAccountChange = (id: string) => {
+    if (id === activeAccountId) return;
+    startTransition(async () => {
+      await setActiveAccount(id);
+      router.refresh();
+    });
+  };
+
+  const activeAccount = accounts.find((a) => a.id === activeAccountId);
 
   const navItems: { client: NavItem[]; admin: NavItem[] } = {
     client: [
@@ -206,6 +224,43 @@ export function PortalShell({
       />
 
       <div className="flex-1" />
+
+      {/* Account switcher (client, multi-account) */}
+      {role === "client" && accounts.length > 0 && (
+        accounts.length === 1 ? (
+          <span
+            className="hidden sm:inline-flex items-center gap-1.5 text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 px-3"
+            title={activeAccount?.accountType}
+          >
+            <svg className="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
+              <path d="M3 7h18v12H3zM3 10h18M7 15h4" />
+            </svg>
+            {activeAccount?.label}
+          </span>
+        ) : (
+          <label className="relative inline-flex items-center" title="Switch account">
+            <svg className="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] text-mut absolute left-2.5 pointer-events-none" viewBox="0 0 24 24">
+              <path d="M3 7h18v12H3zM3 10h18M7 15h4" />
+            </svg>
+            <select
+              value={activeAccountId}
+              onChange={(e) => handleAccountChange(e.target.value)}
+              disabled={isSwitching}
+              aria-label="Active account"
+              className="appearance-none cursor-pointer text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 pl-7.5 pr-7 hover:border-green focus:outline-none focus:border-green disabled:opacity-60"
+            >
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.label} · {a.accountType}
+                </option>
+              ))}
+            </select>
+            <svg className="w-3 h-3 stroke-current fill-none stroke-[2] text-mut absolute right-2.5 pointer-events-none" viewBox="0 0 24 24">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </label>
+        )
+      )}
 
       {/* Alerts toggle button */}
       <button

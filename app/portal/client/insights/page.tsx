@@ -1,4 +1,4 @@
-import { getActiveClientId } from "@/lib/session";
+import { getActiveAccountId } from "@/lib/session";
 import {
   getPositions,
   getSectors,
@@ -20,9 +20,9 @@ function newsTime(iso: string): string {
 // Server Component: sector momentum, news, and research from the DAL, with the
 // client's holdings highlighted.
 export default async function ClientInsightsPage() {
-  const clientId = await getActiveClientId();
+  const accountId = await getActiveAccountId();
   const [positions, sectors, news, reports] = await Promise.all([
-    getPositions(clientId),
+    getPositions(accountId),
     getSectors(),
     getNews(),
     getResearchReports(),

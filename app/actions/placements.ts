@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { getActor } from "@/lib/session";
+import { getActor, getActiveAccountId } from "@/lib/session";
 
 /**
  * Placement mutations (Stage 6). These replace the legacy Zustand mutators
@@ -37,12 +37,15 @@ export async function placeBid(placementId: string, amount: number) {
   const supabase = await createClient();
   const { actor, role, clientId } = await getActor();
   if (!clientId) throw new Error("No active client for bid");
+  const accountId = await getActiveAccountId();
+  if (!accountId) throw new Error("No active account for bid");
 
+  // A bid is per account (one client can bid from several accounts on one deal).
   const { data: existing } = await supabase
     .from("bids")
     .select("id")
     .eq("placement_id", placementId)
-    .eq("client_id", clientId)
+    .eq("account_id", accountId)
     .maybeSingle();
 
   if (existing) {
@@ -54,6 +57,7 @@ export async function placeBid(placementId: string, amount: number) {
   } else {
     const { error } = await supabase.from("bids").insert({
       placement_id: placementId,
+      account_id: accountId,
       client_id: clientId,
       amount,
       alloc: null,
@@ -79,12 +83,13 @@ export async function withdrawBid(placementId: string) {
   const supabase = await createClient();
   const { actor, role, clientId } = await getActor();
   if (!clientId) throw new Error("No active client for withdrawal");
+  const accountId = await getActiveAccountId();
 
   const { error } = await supabase
     .from("bids")
     .delete()
     .eq("placement_id", placementId)
-    .eq("client_id", clientId);
+    .eq("account_id", accountId);
   if (error) throw error;
 
   const code = await placementCode(supabase, placementId);
@@ -182,6 +187,7 @@ export async function settlePlacement(placementId: string) {
 
     const qty = Math.round(allocated / placement.price);
     const { error: posErr } = await supabase.from("positions").insert({
+      account_id: b.account_id,
       client_id: b.client_id,
       security_code: placement.code,
       qty,
@@ -191,6 +197,7 @@ export async function settlePlacement(placementId: string) {
 
     if (opts !== "None") {
       const { error: optErr } = await supabase.from("option_holdings").insert({
+        account_id: b.account_id,
         client_id: b.client_id,
         code: `${placement.code}O`,
         name: `${placement.name} options`,
@@ -228,12 +235,13 @@ export async function notifyBpayPayment(placementId: string) {
   const supabase = await createClient();
   const { actor, role, clientId } = await getActor();
   if (!clientId) throw new Error("No active client for payment");
+  const accountId = await getActiveAccountId();
 
   const { data: bid } = await supabase
     .from("bids")
     .select("id, alloc")
     .eq("placement_id", placementId)
-    .eq("client_id", clientId)
+    .eq("account_id", accountId)
     .maybeSingle();
   if (!bid) return;
 

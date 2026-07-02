@@ -364,7 +364,7 @@ The schema above is now wired into the running app for migrated routes. This sec
 ### 8.1 Next.js version specifics (this codebase)
 This is not a stock Next.js — two conventions differ from older docs and drive the code below (verified against `node_modules/next/dist/docs/`):
 - **`cookies()` is async** — must be `await cookies()`. The server Supabase client factory is therefore `async`.
-- **Middleware is "Proxy"** — session-refresh middleware lives in a root `proxy.ts` (`export function proxy`), not `middleware.ts`. It is added with real auth (not present yet).
+- **Middleware is "Proxy"** — session-refresh middleware lives in a root `proxy.ts` (`export function proxy`), not `middleware.ts`. It **now exists** (Stage 7): it wraps the request in a `@supabase/ssr` server client, calls `getUser()` to refresh the auth cookie, and returns the response carrying the refreshed `Set-Cookie` headers. Its `matcher` excludes `_next/static`, `_next/image`, and image assets. Runs on the Node runtime (Next 16 default for Proxy).
 
 ### 8.2 Supabase clients (`lib/supabase/`)
 - `client.ts` — `createBrowserClient<Database>` for Client Components.
@@ -382,11 +382,14 @@ Server-only (`import "server-only"`). One `React.cache`-wrapped read function pe
 ### 8.4 Compute helpers (`lib/data/compute.ts`)
 Pure functions over DAL shapes — `posValue`, `posCost`, `posPL`, `portfolioValue`, `totalPL`, `moneyness`, `isITM`, `intrinsic`, `unlistedValue`. Only type-only imports from `queries.ts`, so they are erased at compile time and safe to import into Client Components (islands reuse them).
 
-### 8.5 Session bridge (`lib/session.ts`, `app/actions/session.ts`)
-Interim replacement for the Zustand session, pending real auth:
-- **Read (`lib/session.ts`):** `getSession()` parses the `vitti_session` cookie `{ role, clientId, viewClient }`; `getActiveClientId()` returns `session.clientId` or falls back to the first seeded client (keeps pages renderable pre-login). `getActor()` resolves the acting user for audit-log writes in server actions — staff act as the desk (`"S. Goyal (staff)"`), a client acts under their `display_name` looked up from the `clients` row — returning `{ role, clientId, actor }`.
-- **Write (`app/actions/session.ts`, `"use server"`):** `signIn(role, email)` resolves the client by `clients.email` (falling back to the first client for staff/unknown emails), writes the cookie, and returns the client `ref` so the login page can keep the legacy store in sync. `setViewClient(id)` (staff) and `signOut()` round it out.
-- **Email login:** `clients.email` is the login key (also the natural key for future Supabase Auth). Demo emails: `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`.
+### 8.5 Session bridge (`lib/session.ts`, `app/actions/session.ts`) — real Supabase Auth
+As of Stage 7 the session is backed by **real Supabase Auth** (email + password); identity is a verified token, not a user-writable cookie.
+- **Read (`lib/session.ts`):** all reads go through a `React.cache`-wrapped `getAuth()` that calls `supabase.auth.getUser()`. `role` comes from `user.app_metadata.role` (`'admin' | 'client'`). `getActiveClientId()` resolves the client row by matching `user.email` to `clients.email` (staff → the `vitti_view` cookie's client, else the first seeded client). `getSession()` returns the same `{ role, clientId, viewClient }` shape for back-compat (now `null` when unauthenticated). `getActor()` stamps audit writes — staff act as `"S. Goyal (staff)"`, a client under their `display_name`.
+- **Write (`app/actions/session.ts`, `"use server"`):** `signInWithPassword(email, password)` calls `supabase.auth.signInWithPassword` (the `@supabase/ssr` server client sets the session cookies) and returns `{ ok, role }` / `{ ok: false, error }`. `signOut()` calls `supabase.auth.signOut()` and clears `vitti_view`. `setViewClient(id)` (staff only — guarded by `getActor().role`) writes the `vitti_view` cookie.
+- **`viewClient` cookie (`vitti_view`):** the only session data still in a cookie — it is UI state (which client a staff member is inspecting), not identity.
+- **Roles:** stamped into `app_metadata.role` when the auth user is created (see §8.10). Demo client emails: `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`; staff: `goyal.s@vitti.capital`. All demo users share the password `demo1234`.
+- **Route protection (Stage 8):** the root `proxy.ts` redirects unauthenticated `/portal/*` requests to `/login`; the portal layout re-checks (`getSession()` → `redirect`) as defense-in-depth; and `app/portal/staff/layout.tsx` bounces non-`admin` users out of the staff area. The pre-login "first client" fallback is now effectively dead for the portal (kept as a defensive default).
+- **Deferred:** real TOTP MFA — the login OTP screen is still cosmetic (`supabase.auth.mfa.*` is the next step).
 
 ### 8.6 Static discovery config (`lib/data/discovery.ts`)
 `GOALS` and `THEMES` for the `/invest` page — the deliberately-not-persisted UI scaffolding (see §7.2). Client-safe constants, imported directly by `InvestClient`.
@@ -433,3 +436,29 @@ Every route is a thin **Server Component** `page.tsx` that resolves the active c
 
 ### 8.9 Legacy gotcha — deterministic alert timestamps
 `scanAlerts`/`mkAlert` in `lib/db.ts` previously used `Math.random()` for alert timestamps. Because the Zustand store initializes on both the server render and client hydration of the (still-legacy) portal shell, the random sort order differed between the two, throwing a React hydration mismatch. Timestamps are now derived deterministically from the alert sequence.
+
+### 8.10 Auth-user seeding (`scripts/seed-auth-users.mjs`)
+Because the app is on a **hosted** Supabase project, demo auth users are created out-of-band by an idempotent Node script (not a SQL seed). It uses the Supabase **admin** client (`@supabase/supabase-js` with the service-role key) to `createUser`/`updateUserById` for the four demo clients + one staff account, stamping `app_metadata.role` and setting `email_confirm: true` and the shared password `demo1234`. Client emails **must** match `clients.email` so `getActiveClientId()` can resolve the client row from the authenticated email.
+- **Env:** `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (server-only; a placeholder line is in `.env.local`, filled from Supabase dashboard → Project Settings → API).
+- **Run:** `node --env-file=.env.local scripts/seed-auth-users.mjs` (safe to re-run — it updates existing users).
+
+### 8.11 Row-Level Security (`supabase/migrations/…_enable_rls.sql`)
+DB-level enforcement of "a client sees/writes only their own rows; staff see/write everything; shared reference data is readable by any signed-in user." Because the DAL and server actions use the **anon + user-session** server client (`lib/supabase/server.ts`), every read and write is subject to RLS. The `service_role` (seed script) bypasses it.
+- **Two helper functions** carry the interim email-based identity model, so the cut-over to `auth.uid()` linkage later touches only these:
+  - `is_staff()` → `auth.jwt()->'app_metadata'->>'role' = 'admin'`.
+  - `current_client_id()` → `clients.id` where `email = auth.jwt()->>'email'`; **`SECURITY DEFINER`** so it bypasses RLS on `clients` and avoids policy recursion.
+- **Per-table policies:**
+  - *Shared reference* (`securities`, `market_indices`, `placements`, `signals`, `sectors`, `news`, `investment_ideas`, `recommendations`, `research_reports`, `research_notes`): `SELECT` to all authenticated; **staff-only writes** on `securities`/`placements` (the two the settlement engine upserts).
+  - *Per-client* (`clients`, `client_accounts`, `positions`, `option_holdings`, `bids`, `watchlist_items`, `alerts`, `audit_log`): `is_staff() OR <owner>`, where `<owner>` is `client_id = current_client_id()` (or `email` for `clients`). `bids`/`watchlist_items`/`alerts` allow the owner full CRUD; `positions`/`option_holdings` are **insert-staff-only** (issued by settlement on the client's behalf); `audit_log` is insert-only (the append-only trigger blocks UPDATE/DELETE).
+- **Effect:** a spoofed cookie or a forgotten `.eq("client_id", …)` filter can no longer leak another client's rows — the database refuses. It also closes the old pre-login data-exposure (unauthenticated = `anon` role = no policy = deny).
+  > **Note (multi-account, §8.12):** `client_accounts` was replaced by `accounts`; its RLS policy moved to that table (`is_staff() OR client_id = current_client_id()`). Holdings policies are **unchanged** — see below.
+
+### 8.12 Multi-account model (`…_multi_account.sql`)
+A client (person/login) can hold **multiple investment accounts** (Personal, SMSF, Family Trust…). One account is viewed at a time.
+- **Schema:** new **`accounts`** table (`id`, `ref`, `client_id`→clients, `label`, `account_type`, `s708_expiry`, `cash_balance`, `currency`) replaces the 1:1 `client_accounts` and absorbs `account_type`/`s708_expiry` (dropped from `clients`) + cash. `positions`/`option_holdings`/`bids` gain an **`account_id`** FK; uniqueness moves to the account grain (`UNIQUE(account_id, security_code)`, `UNIQUE(placement_id, account_id)`).
+- **Deliberate denormalization:** holdings **keep `client_id`** (owning person, immutable) alongside `account_id`. So **RLS stays client-level and unchanged** — a client owns all their accounts, so "own rows" is already correct; the account is a *view filter*, not a security boundary. Staff "group by client" also keeps working.
+- **Session:** `getActiveAccountId()` (`lib/session.ts`) resolves the active client → honours the `vitti_account` cookie *only if the account belongs to them* → else their first account by `ref`. `setActiveAccount(id)` (`app/actions/session.ts`, verifies ownership) is the switcher's write path.
+- **Switcher UI:** the portal layout passes the client's accounts + active id to `PortalShell`, which renders an **account switcher in the topbar** (client role, multi-account only; single-account shows a static pill). Selecting an account calls `setActiveAccount` (revalidates `/portal`) then `router.refresh()`, so every page re-renders scoped to the chosen account.
+- **DAL:** `getAccounts(clientId?)` / `getAccount(id)` (new `AccountRow` carries `accountType`/`s708`/`cash`); `getPositions(accountId)` / `getOptions(accountId)` are **account-scoped** (client portal); `getClientPositions(clientId)` / `getClientOptions(clientId)` aggregate **across a client's accounts** (staff views). `ClientRow` slimmed to the person; `BidRow`/`Position`/`OptionRow` gain `accountId`.
+- **Server actions:** `placeBid`/`withdrawBid`/`notifyBpayPayment` act on the **active account's** bid; `settlePlacement` stamps issued `positions`/`option_holdings` with the **bid's `account_id`**.
+- **UI:** client holdings pages resolve `getActiveAccountId()` and the topbar switcher lets a client change account; staff overview/register aggregate across accounts (register shows an "N accounts" summary + earliest s708); the **staff client-detail view has a per-account filter** ("All accounts" + one pill per account) scoping holdings/options/bids/cash, with alerts staying person-level. **Still deferred:** `scaleBids` keyed per-account (today keyed per client — fine while a client bids once per deal), and `account_id` `NOT NULL` hardening.

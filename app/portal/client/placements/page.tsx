@@ -1,19 +1,21 @@
-import { getActiveClientId } from "@/lib/session";
-import { getPlacements, getClient } from "@/lib/data/queries";
+import { getActiveClientId, getActiveAccountId } from "@/lib/session";
+import { getPlacements, getAccount } from "@/lib/data/queries";
 import { PlacementsClient } from "./PlacementsClient";
 
-// Server Component: resolves the active client from the session, fetches via the
-// DAL, then hands data to the interactive client island.
+// Server Component: resolves the active client + account, fetches via the DAL,
+// then hands data to the interactive client island. The s708 certificate is an
+// account attribute; bids are shown per person (clientId).
 export default async function ClientPlacementsPage() {
   const clientId = await getActiveClientId();
+  const accountId = await getActiveAccountId();
 
-  const [placements, client] = await Promise.all([
+  const [placements, account] = await Promise.all([
     getPlacements(),
-    getClient(clientId),
+    getAccount(accountId),
   ]);
 
-  const s708Label = client?.s708Expiry
-    ? new Date(client.s708Expiry).toLocaleDateString("en-AU", {
+  const s708Label = account?.s708Expiry
+    ? new Date(account.s708Expiry).toLocaleDateString("en-AU", {
         month: "short",
         year: "numeric",
         timeZone: "UTC",

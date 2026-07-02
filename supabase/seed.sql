@@ -53,51 +53,57 @@ INSERT INTO market_indices (code, name, last, chg, decimal_places) VALUES
 -- ----------------------------------------------------------------------------
 -- Clients & accounts
 -- ----------------------------------------------------------------------------
-INSERT INTO clients (ref, email, display_name, initials, account_type, s708_expiry) VALUES
-  ('C1', 'james@halloran.com.au',     'James Halloran',          'JH', 'Individual · wholesale', '2027-03-01'),
-  ('C2', 'margaret.chen@outlook.com', 'Margaret Chen',           'MC', 'Individual · wholesale', '2026-08-01'),
-  ('C3', 'office@endeavourfo.com.au', 'Endeavour Family Office', 'EF', 'Family office',          '2028-01-01'),
-  ('C4', 'david.okafor@gmail.com',    'David Okafor',            'DO', 'SMSF · wholesale',       '2026-11-01');
+-- Clients are now just the person/login (account_type + s708 moved to accounts).
+INSERT INTO clients (ref, email, display_name, initials) VALUES
+  ('C1', 'james@halloran.com.au',     'James Halloran',          'JH'),
+  ('C2', 'margaret.chen@outlook.com', 'Margaret Chen',           'MC'),
+  ('C3', 'office@endeavourfo.com.au', 'Endeavour Family Office', 'EF'),
+  ('C4', 'david.okafor@gmail.com',    'David Okafor',            'DO');
 
-INSERT INTO client_accounts (client_id, cash_balance, currency) VALUES
-  ((SELECT id FROM clients WHERE ref='C1'), 128450.00, 'AUD'),
-  ((SELECT id FROM clients WHERE ref='C2'),  64200.00, 'AUD'),
-  ((SELECT id FROM clients WHERE ref='C3'), 540000.00, 'AUD'),
-  ((SELECT id FROM clients WHERE ref='C4'),  38900.00, 'AUD');
+-- Investment accounts. C1 (James) holds TWO accounts to exercise multi-account;
+-- the others hold one each. account_type + s708 + cash live here now.
+INSERT INTO accounts (ref, client_id, label, account_type, s708_expiry, cash_balance, currency) VALUES
+  ('A1', (SELECT id FROM clients WHERE ref='C1'), 'Personal',     'Individual · wholesale', '2027-03-01', 100000.00, 'AUD'),
+  ('A2', (SELECT id FROM clients WHERE ref='C1'), 'Halloran SMSF','SMSF · wholesale',       '2027-03-01',  28450.00, 'AUD'),
+  ('A3', (SELECT id FROM clients WHERE ref='C2'), 'Personal',     'Individual · wholesale', '2026-08-01',  64200.00, 'AUD'),
+  ('A4', (SELECT id FROM clients WHERE ref='C3'), 'Endeavour FO', 'Family office',          '2028-01-01', 540000.00, 'AUD'),
+  ('A5', (SELECT id FROM clients WHERE ref='C4'), 'Okafor SMSF',  'SMSF · wholesale',       '2026-11-01',  38900.00, 'AUD');
 
 -- ----------------------------------------------------------------------------
 -- Equity positions (name/sector/last join from securities)
 -- ----------------------------------------------------------------------------
-INSERT INTO positions (client_id, security_code, qty, avg_cost) VALUES
-  ((SELECT id FROM clients WHERE ref='C1'), 'BHP',  2100.0000,  38.4000),
-  ((SELECT id FROM clients WHERE ref='C1'), 'CSL',   240.0000, 285.0000),
-  ((SELECT id FROM clients WHERE ref='C1'), 'PLS', 21400.0000,   3.1000),
-  ((SELECT id FROM clients WHERE ref='C1'), 'WES',  1050.0000,  64.2000),
-  ((SELECT id FROM clients WHERE ref='C2'), 'CBA',   600.0000, 104.1000),
-  ((SELECT id FROM clients WHERE ref='C2'), 'BHP',  1400.0000,  41.1000),
-  ((SELECT id FROM clients WHERE ref='C2'), 'WDS',  2200.0000,  29.6000),
-  ((SELECT id FROM clients WHERE ref='C3'), 'BHP',  8200.0000,  36.9000),
-  ((SELECT id FROM clients WHERE ref='C3'), 'CSL',  1100.0000, 270.4000),
-  ((SELECT id FROM clients WHERE ref='C3'), 'MQG',   900.0000, 178.2000),
-  ((SELECT id FROM clients WHERE ref='C3'), 'PLS', 60000.0000,   3.5500),
-  ((SELECT id FROM clients WHERE ref='C4'), 'FMG',  3400.0000,  24.8000),
-  ((SELECT id FROM clients WHERE ref='C4'), 'CBA',   300.0000,  98.0000);
+-- account_id is the real scope; client_id kept (denormalized owner). C1's
+-- holdings are split across A1 (Personal) and A2 (SMSF).
+INSERT INTO positions (account_id, client_id, security_code, qty, avg_cost) VALUES
+  ((SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'), 'BHP',  2100.0000,  38.4000),
+  ((SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'), 'CSL',   240.0000, 285.0000),
+  ((SELECT id FROM accounts WHERE ref='A2'), (SELECT id FROM clients WHERE ref='C1'), 'PLS', 21400.0000,   3.1000),
+  ((SELECT id FROM accounts WHERE ref='A2'), (SELECT id FROM clients WHERE ref='C1'), 'WES',  1050.0000,  64.2000),
+  ((SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'), 'CBA',   600.0000, 104.1000),
+  ((SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'), 'BHP',  1400.0000,  41.1000),
+  ((SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'), 'WDS',  2200.0000,  29.6000),
+  ((SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'BHP',  8200.0000,  36.9000),
+  ((SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'CSL',  1100.0000, 270.4000),
+  ((SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'MQG',   900.0000, 178.2000),
+  ((SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'PLS', 60000.0000,   3.5500),
+  ((SELECT id FROM accounts WHERE ref='A5'), (SELECT id FROM clients WHERE ref='C4'), 'FMG',  3400.0000,  24.8000),
+  ((SELECT id FROM accounts WHERE ref='A5'), (SELECT id FROM clients WHERE ref='C4'), 'CBA',   300.0000,  98.0000);
 
 -- ----------------------------------------------------------------------------
 -- Option holdings (expiry_date = 2026-06-12 + dte; underlying price via securities)
 -- ----------------------------------------------------------------------------
 INSERT INTO option_holdings
-  (ref, client_id, code, name, listed, option_type, qty, strike, underlying_code, expiry_date, source, status) VALUES
-  ('O1',  (SELECT id FROM clients WHERE ref='C1'), 'VEXO', 'Vertex Gold options',        true,  'Call', 15000.0000,  0.4500, 'VEX', DATE '2026-06-12' + 202, 'SPP Apr 26',           'open'),
-  ('O2',  (SELECT id FROM clients WHERE ref='C1'), 'MRDO', 'Meridian Resources options', false, 'Call',     0.0000,  0.7500, 'MRD', DATE '2026-06-12' + 735, 'Placement attaching',  'pending'),
-  ('O3',  (SELECT id FROM clients WHERE ref='C1'), 'HLXO', 'Helios Energy options',      false, 'Call', 30000.0000,  2.5000, 'HLX', DATE '2026-06-12' + 657, 'Series B sweetener',   'open'),
-  ('O4',  (SELECT id FROM clients WHERE ref='C2'), 'NVXO', 'Novonix options',            true,  'Call', 40000.0000,  0.8000, 'NVX', DATE '2026-06-12' + 5,   'Rights issue',         'open'),
-  ('O5',  (SELECT id FROM clients WHERE ref='C2'), 'ZPCO', 'Zip Co options',             true,  'Call', 12000.0000,  1.4000, 'ZPC', DATE '2026-06-12' + 27,  'Listed market',        'open'),
-  ('O6',  (SELECT id FROM clients WHERE ref='C3'), 'AURO', 'Aurora Biotech options',     false, 'Call', 50000.0000,  1.0000, 'AUR', DATE '2026-06-12' + 3,   'Pre-IPO note',         'open'),
-  ('O7',  (SELECT id FROM clients WHERE ref='C3'), 'LTRO', 'Liontown options',           true,  'Call', 25000.0000,  1.2000, 'LTR', DATE '2026-06-12' + 88,  'Listed market',        'open'),
-  ('O8',  (SELECT id FROM clients WHERE ref='C4'), 'CXOO', 'Core Lithium options',       false, 'Call', 80000.0000,  0.1500, 'CXO', DATE '2026-06-12' + 1,   'Placement attaching',  'open'),
-  ('O9',  (SELECT id FROM clients WHERE ref='C4'), 'BRNO', 'Brainchip options',          true,  'Call', 30000.0000,  0.3000, 'BRN', DATE '2026-06-12' + 14,  'Listed market',        'open'),
-  ('O10', (SELECT id FROM clients WHERE ref='C1'), 'TLXO', 'Telix options (expired)',    true,  'Call', 10000.0000, 18.0000, 'TLX', DATE '2026-06-12' - 9,   'Listed market',        'expired');
+  (ref, account_id, client_id, code, name, listed, option_type, qty, strike, underlying_code, expiry_date, source, status) VALUES
+  ('O1',  (SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'), 'VEXO', 'Vertex Gold options',        true,  'Call', 15000.0000,  0.4500, 'VEX', DATE '2026-06-12' + 202, 'SPP Apr 26',           'open'),
+  ('O2',  (SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'), 'MRDO', 'Meridian Resources options', false, 'Call',     0.0000,  0.7500, 'MRD', DATE '2026-06-12' + 735, 'Placement attaching',  'pending'),
+  ('O3',  (SELECT id FROM accounts WHERE ref='A2'), (SELECT id FROM clients WHERE ref='C1'), 'HLXO', 'Helios Energy options',      false, 'Call', 30000.0000,  2.5000, 'HLX', DATE '2026-06-12' + 657, 'Series B sweetener',   'open'),
+  ('O4',  (SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'), 'NVXO', 'Novonix options',            true,  'Call', 40000.0000,  0.8000, 'NVX', DATE '2026-06-12' + 5,   'Rights issue',         'open'),
+  ('O5',  (SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'), 'ZPCO', 'Zip Co options',             true,  'Call', 12000.0000,  1.4000, 'ZPC', DATE '2026-06-12' + 27,  'Listed market',        'open'),
+  ('O6',  (SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'AURO', 'Aurora Biotech options',     false, 'Call', 50000.0000,  1.0000, 'AUR', DATE '2026-06-12' + 3,   'Pre-IPO note',         'open'),
+  ('O7',  (SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 'LTRO', 'Liontown options',           true,  'Call', 25000.0000,  1.2000, 'LTR', DATE '2026-06-12' + 88,  'Listed market',        'open'),
+  ('O8',  (SELECT id FROM accounts WHERE ref='A5'), (SELECT id FROM clients WHERE ref='C4'), 'CXOO', 'Core Lithium options',       false, 'Call', 80000.0000,  0.1500, 'CXO', DATE '2026-06-12' + 1,   'Placement attaching',  'open'),
+  ('O9',  (SELECT id FROM accounts WHERE ref='A5'), (SELECT id FROM clients WHERE ref='C4'), 'BRNO', 'Brainchip options',          true,  'Call', 30000.0000,  0.3000, 'BRN', DATE '2026-06-12' + 14,  'Listed market',        'open'),
+  ('O10', (SELECT id FROM accounts WHERE ref='A2'), (SELECT id FROM clients WHERE ref='C1'), 'TLXO', 'Telix options (expired)',    true,  'Call', 10000.0000, 18.0000, 'TLX', DATE '2026-06-12' - 9,   'Listed market',        'expired');
 
 -- ----------------------------------------------------------------------------
 -- Placements & bids
@@ -109,15 +115,15 @@ INSERT INTO placements
   ('P3', 'AUR', 'Aurora Biotech',     'Pre-IPO',   1.2000, NULL,   NULL,     25.00, 25000.00, '1 free option (1:1)', 'upcoming', DATE '2026-06-12' + 5,  DATE '2026-06-12' + 8,  DATE '2026-06-12' + 11, DATE '2026-06-12' + 12),
   ('P4', 'VEX', 'Vertex Gold',        'SPP',       0.4200, 0.5100, 17.6000,  3.00,  5000.00, '1 free option (1:3)', 'settled',  DATE '2026-06-12' - 40, DATE '2026-06-12' - 38, DATE '2026-06-12' - 35, DATE '2026-06-12' - 34);
 
-INSERT INTO bids (placement_id, client_id, amount, alloc, paid) VALUES
-  ((SELECT id FROM placements WHERE ref='P1'), (SELECT id FROM clients WHERE ref='C2'),  60000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P1'), (SELECT id FROM clients WHERE ref='C3'), 150000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM clients WHERE ref='C1'),  40000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM clients WHERE ref='C2'),  25000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM clients WHERE ref='C3'),  80000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM clients WHERE ref='C4'),  30000.00,     NULL, false),
-  ((SELECT id FROM placements WHERE ref='P4'), (SELECT id FROM clients WHERE ref='C1'),  15000.00, 15000.00, true),
-  ((SELECT id FROM placements WHERE ref='P4'), (SELECT id FROM clients WHERE ref='C3'),  20000.00, 20000.00, true);
+INSERT INTO bids (placement_id, account_id, client_id, amount, alloc, paid) VALUES
+  ((SELECT id FROM placements WHERE ref='P1'), (SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'),  60000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P1'), (SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'), 150000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'),  40000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM accounts WHERE ref='A3'), (SELECT id FROM clients WHERE ref='C2'),  25000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'),  80000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P2'), (SELECT id FROM accounts WHERE ref='A5'), (SELECT id FROM clients WHERE ref='C4'),  30000.00,     NULL, false),
+  ((SELECT id FROM placements WHERE ref='P4'), (SELECT id FROM accounts WHERE ref='A1'), (SELECT id FROM clients WHERE ref='C1'),  15000.00, 15000.00, true),
+  ((SELECT id FROM placements WHERE ref='P4'), (SELECT id FROM accounts WHERE ref='A4'), (SELECT id FROM clients WHERE ref='C3'),  20000.00, 20000.00, true);
 
 -- ----------------------------------------------------------------------------
 -- Watchlists (security_code has no FK — unlisted allowed)

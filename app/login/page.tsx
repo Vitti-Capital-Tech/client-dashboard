@@ -3,13 +3,11 @@
 import { useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useDatabaseStore } from "@/store/useDatabaseStore";
-import { signIn } from "@/app/actions/session";
+import { signInWithPassword } from "@/app/actions/session";
 
 function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { setRole, setClientId } = useDatabaseStore();
 
   const initialRole = (searchParams.get("role") as "client" | "admin") || "client";
   const [step, setStep] = useState<1 | 2>(1);
@@ -18,10 +16,13 @@ function LoginContent() {
   );
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const handleContinue = (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     setStep(2);
     // Autofocus first OTP input after state update
     setTimeout(() => {
@@ -52,15 +53,19 @@ function LoginContent() {
   };
 
   const handleVerify = async () => {
-    // Write the session cookie (new server components read it) — resolves the
-    // client from the entered email — AND keep the legacy store in sync (pages
-    // still on Zustand during the migration) using the returned ref.
-    setRole(initialRole);
-    const ref = await signIn(initialRole, email);
-    if (initialRole === "client" && ref) {
-      setClientId(ref);
+    // Real Supabase Auth: verify the password (the OTP screen above is a
+    // cosmetic 2FA placeholder — real TOTP MFA is a later step). The proxy then
+    // keeps the session fresh; server components read role/identity via getUser.
+    setSubmitting(true);
+    setError(null);
+    const result = await signInWithPassword(email, password);
+    if (!result.ok) {
+      setSubmitting(false);
+      setStep(1);
+      setError(result.error || "Incorrect email or password.");
+      return;
     }
-    router.push(initialRole === "admin" ? "/portal/staff" : "/portal/client");
+    router.push(result.role === "admin" ? "/portal/staff" : "/portal/client");
   };
 
   return (
@@ -144,6 +149,12 @@ function LoginContent() {
                 />
               </div>
 
+              {error && (
+                <p className="text-[12.5px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded-[9px] px-3 py-2">
+                  {error}
+                </p>
+              )}
+
               <button
                 type="submit"
                 className="w-full btn bg-navy text-white hover:bg-slate-800 rounded-[10px] py-3 text-[13.5px] font-semibold cursor-pointer select-none transition-colors mt-2"
@@ -162,11 +173,11 @@ function LoginContent() {
               <div className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed mt-4">
                 {initialRole === "admin" ? (
                   <>
-                    <b>Prototype:</b> continue to explore the Vitti staff console — the consolidated book across all clients.
+                    <b>Prototype:</b> staff console — sign in as <code>goyal.s@vitti.capital</code> with the demo password <code>demo1234</code>. Any 6-digit code works.
                   </>
                 ) : (
                   <>
-                    <b>Prototype:</b> sign in as any client — <code>james@halloran.com.au</code>, <code>margaret.chen@outlook.com</code>, <code>office@endeavourfo.com.au</code>, or <code>david.okafor@gmail.com</code>. Any password &amp; code works.
+                    <b>Prototype:</b> sign in as any client — <code>james@halloran.com.au</code>, <code>margaret.chen@outlook.com</code>, <code>office@endeavourfo.com.au</code>, or <code>david.okafor@gmail.com</code> — with the demo password <code>demo1234</code>. Any 6-digit code works.
                   </>
                 )}
               </div>
@@ -210,9 +221,10 @@ function LoginContent() {
 
               <button
                 onClick={handleVerify}
-                className="w-full btn bg-green text-[#08130e] hover:shadow-lg hover:shadow-green-bg rounded-[10px] py-3 text-[13.5px] font-semibold cursor-pointer transition-all"
+                disabled={submitting}
+                className="w-full btn bg-green text-[#08130e] hover:shadow-lg hover:shadow-green-bg rounded-[10px] py-3 text-[13.5px] font-semibold cursor-pointer transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Verify &amp; sign in
+                {submitting ? "Signing in…" : "Verify & sign in"}
               </button>
 
               <button

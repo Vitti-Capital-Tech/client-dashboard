@@ -18,14 +18,14 @@ The migration from the in-memory prototype to a Supabase backend is **complete**
 graph TD
     Root["Root Layout (app/layout.tsx)"] --> Landing["Landing / role selector (app/page.tsx)"]
     Landing --> Login["Login (app/login/page.tsx)"]
-    Login -->|"signIn(email) server action"| Cookie["Session cookie · {role, clientId, viewClient}"]
+    Login -->|"signInWithPassword() → Supabase Auth"| Auth["Supabase Auth · session cookie (refreshed by proxy.ts)"]
     Login --> E["Portal Shell (app/portal/layout.tsx → PortalShell island)"]
 
     E --> F["Client Views (/portal/client)"]
     E --> G["Staff Views (/portal/staff)"]
 
     subgraph "Data layer (all routes)"
-        Cookie --> Session["lib/session.ts · getActiveClientId() / getActor()"]
+        Auth --> Session["lib/session.ts · getUser() → getActiveClientId() / getActor()"]
         Session --> DAL["DAL · lib/data/queries.ts (server-only, React.cache)"]
         DAL --> Supa[("Supabase / PostgreSQL")]
     end
@@ -60,9 +60,11 @@ The portable PostgreSQL schema (`db/schema.sql`) is now **applied to a live Supa
 ### 3.1b Data-Access Layer & Session Bridge (`lib/data`, `lib/session`)
 Migrated routes never touch Zustand — they read Supabase through a server-only DAL:
 - **DAL (`lib/data/queries.ts`):** one read function per entity (`getPositions`, `getPlacements`, `getSignals`, `getAuditLog`, …), each wrapped in `React.cache` for per-request deduping. It returns **denormalized, UI-ready shapes** — prices/names joined from `securities`, `dte` computed from `expiry_date` (anchored to a demo "today"), bids nested under placements.
+- **Multi-account (LLD §8.12):** a client (person) can hold several **accounts**; holdings/cash/bids are account-scoped (`positions`/`option_holdings`/`bids` carry `account_id`). Client holdings reads are account-scoped (`getPositions(accountId)`), staff reads aggregate across a client's accounts (`getClientPositions(clientId)`), and `getActiveAccountId()` picks the active account (a topbar **account switcher** lets clients change it).
 - **Compute (`lib/data/compute.ts`):** pure financial math (`posValue`, `posPL`, `portfolioValue`, `isITM`, `unlistedValue`) over DAL shapes; client-safe (type-only imports), so islands reuse it.
 - **Supabase clients (`lib/supabase/`):** a browser client and an **async** server client (this Next.js version's `cookies()` is async); types generated into `database.types.ts`.
-- **Session bridge (`lib/session.ts` + `app/actions/session.ts`):** login resolves the client by email and writes a cookie `{ role, clientId, viewClient }`; server components read `getActiveClientId()` (falling back to the first seeded client pre-login) and server actions read `getActor()` to stamp the audit log. This is the interim stand-in for real Supabase Auth + RLS, which will replace the cookie read with `getUser()`.
+- **Session bridge (`lib/session.ts` + `app/actions/session.ts`):** now backed by **real Supabase Auth** (email + password). `signInWithPassword` verifies credentials; a root `proxy.ts` refreshes the session cookie on each request; server components read identity via `supabase.auth.getUser()` (`getActiveClientId`, `getActor`), with `role` coming from the user's `app_metadata.role`. The only cookie left is `vitti_view` (which client a staff member is inspecting — UI state).
+- **Authorization (Stage 8):** enforced at two layers — **route protection** (`proxy.ts` + portal layout redirect unauthenticated → `/login`; `staff/layout.tsx` blocks non-admins from the staff area) and **Postgres RLS** (LLD §8.11): every DAL read and server-action write runs under the user session, so the database itself guarantees a client only ever touches their own rows while staff (`is_staff()`) see all. Still deferred: real TOTP MFA (the login's OTP screen is cosmetic).
 
 ### 3.1c Server Actions (`app/actions/`) — the write path
 All mutations are `"use server"` functions that resolve the actor via `getActor()`, write directly to Supabase, insert an `audit_log` row, and call `revalidatePath("/portal", "layout")` so every open surface re-renders with fresh data. They replace the legacy Zustand `mutate*` functions one-for-one (see the LLD §9 mapping):

@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ClientRow,
+  AccountRow,
   Position,
   OptionRow,
   PlacementRow,
@@ -72,6 +73,7 @@ const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; 
 
 export function ClientDetailClient({
   client,
+  accounts,
   positions,
   options,
   clientBids,
@@ -79,6 +81,7 @@ export function ClientDetailClient({
   signalsMap,
 }: {
   client: ClientRow;
+  accounts: AccountRow[];
   positions: Position[];
   options: OptionRow[];
   clientBids: PlacementRow[];
@@ -87,14 +90,52 @@ export function ClientDetailClient({
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<"holdings" | "options" | "bids" | "alerts">("holdings");
+  // Account filter: "all" aggregates across the client's accounts, else scope
+  // to one account. Holdings/options/bids/cash follow this; alerts stay
+  // person-level.
+  const [acctFilter, setAcctFilter] = useState<string>("all");
 
   const cid = client.id;
-  const cash = client.cash;
-  const unlisted = unlistedValue(options);
+  const inAcct = (accountId: string | null) =>
+    acctFilter === "all" || accountId === acctFilter;
+
+  const visiblePositions = positions.filter((p) => inAcct(p.accountId));
+  const visibleOptions = options.filter((o) => inAcct(o.accountId));
+  // Flatten the client's bids (one row per bid — a client may bid from several
+  // accounts on one deal), then scope to the selected account.
+  const bidRows = clientBids
+    .flatMap((p) =>
+      p.bids
+        .filter((b) => b.clientId === cid)
+        .map((b) => ({ placement: p, bid: b })),
+    )
+    .filter((r) => inAcct(r.bid.accountId));
+
+  const cash =
+    acctFilter === "all"
+      ? accounts.reduce((sum, a) => sum + a.cash, 0)
+      : (accounts.find((a) => a.id === acctFilter)?.cash ?? 0);
+
+  const selected = accounts.find((a) => a.id === acctFilter);
+  const headerType =
+    acctFilter === "all"
+      ? accounts.length === 1
+        ? accounts[0]?.accountType ?? "—"
+        : `${accounts.length} accounts`
+      : (selected?.accountType ?? "—");
+  const headerS708 =
+    acctFilter === "all"
+      ? (accounts
+          .map((a) => a.s708Expiry)
+          .filter((d): d is string => !!d)
+          .sort()[0] ?? null)
+      : (selected?.s708Expiry ?? null);
+
+  const unlisted = unlistedValue(visibleOptions);
 
   let tv = 0;
   let tc = 0;
-  positions.forEach(p => {
+  visiblePositions.forEach(p => {
     tv += posValue(p);
     tc += posCost(p);
   });
@@ -139,7 +180,7 @@ export function ClientDetailClient({
           <div>
             <h1 className="font-disp font-medium text-2xl leading-none">{client.name}</h1>
             <div className="text-xs text-mut mt-1">
-              Structure: {client.accountType} &middot; s708 certificate expires {s708Label(client.s708Expiry)}
+              Structure: {headerType} &middot; s708 certificate expires {s708Label(headerS708)}
             </div>
           </div>
         </div>
@@ -157,6 +198,26 @@ export function ClientDetailClient({
           ))}
         </div>
       </div>
+
+      {/* Account filter (only when the client holds more than one account) */}
+      {accounts.length > 1 && (
+        <div className="flex items-center gap-2 flex-wrap select-none">
+          <span className="text-[11px] tracking-wider uppercase text-mut font-semibold mr-1">Account</span>
+          {[{ id: "all", label: "All accounts" }, ...accounts].map((a) => (
+            <button
+              key={a.id}
+              onClick={() => setAcctFilter(a.id)}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${
+                acctFilter === a.id
+                  ? "bg-navy text-white border-navy"
+                  : "bg-white text-mut border-line hover:border-navy hover:text-ink"
+              }`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-3 gap-4 select-none">
@@ -202,7 +263,7 @@ export function ClientDetailClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {positions.map(p => {
+                {visiblePositions.map(p => {
                   const pl = posPL(p);
                   const plp = pl / posCost(p) * 100;
                   const isUp = pl >= 0;
@@ -251,12 +312,12 @@ export function ClientDetailClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {options.length === 0 ? (
+                {visibleOptions.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center text-mut py-6">No option assets on record.</td>
                   </tr>
                 ) : (
-                  options.map(o => {
+                  visibleOptions.map(o => {
                     const isItmVal = isITM(o);
                     return (
                       <tr key={o.id} className="hover:bg-[#faf9f5]">
@@ -308,15 +369,14 @@ export function ClientDetailClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {clientBids.length === 0 ? (
+                {bidRows.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="text-center text-mut py-6">No bids recorded.</td>
                   </tr>
                 ) : (
-                  clientBids.map(p => {
-                    const bid = p.bids.find(b => b.clientId === cid)!;
+                  bidRows.map(({ placement: p, bid }) => {
                     return (
-                      <tr key={p.id} className="hover:bg-[#faf9f5]">
+                      <tr key={`${p.id}-${bid.accountId ?? "x"}`} className="hover:bg-[#faf9f5]">
                         <td className="px-4.5 py-3 font-bold"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span> &middot; {p.name}</td>
                         <td className="px-4.5 py-3 text-mut">{p.type}</td>
                         <td className="px-4.5 py-3 text-right font-mono">${bid.amount.toLocaleString("en-AU")}</td>

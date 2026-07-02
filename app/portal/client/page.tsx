@@ -1,6 +1,7 @@
-import { getActiveClientId } from "@/lib/session";
+import { getActiveClientId, getActiveAccountId } from "@/lib/session";
 import {
   getClient,
+  getAccount,
   getPositions,
   getOptions,
   getMarketIndices,
@@ -12,14 +13,16 @@ import {
 } from "@/lib/data/queries";
 import { DashboardClient } from "./DashboardClient";
 
-// Server Component: resolves the active client from the session, fetches via the
-// DAL, then hands raw data + clientId to the interactive client island (which
-// computes with the client-safe helpers, matching PositionsClient).
+// Server Component: resolves the active client + account from the session,
+// fetches via the DAL, then hands raw data to the interactive client island.
+// Holdings are account-scoped; alerts/bids stay person-scoped.
 export default async function ClientDashboardPage() {
   const clientId = await getActiveClientId();
+  const accountId = await getActiveAccountId();
 
   const [
     client,
+    account,
     positions,
     options,
     indices,
@@ -29,8 +32,9 @@ export default async function ClientDashboardPage() {
     signals,
   ] = await Promise.all([
     getClient(clientId),
-    getPositions(clientId),
-    getOptions(clientId),
+    getAccount(accountId),
+    getPositions(accountId),
+    getOptions(accountId),
     getMarketIndices(),
     getPlacements(),
     getResearchNotes(),
@@ -38,7 +42,7 @@ export default async function ClientDashboardPage() {
     getSignals(),
   ]);
 
-  const cash = client?.cash ?? 0;
+  const cash = account?.cash ?? 0;
 
   const signalMap: Record<string, SignalRow> = Object.fromEntries(
     signals.map((s) => [s.code, s]),

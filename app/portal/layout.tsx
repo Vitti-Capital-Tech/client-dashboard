@@ -1,8 +1,14 @@
 import React from "react";
-import { getSession, getActiveClientId } from "@/lib/session";
+import { redirect } from "next/navigation";
+import {
+  getSession,
+  getActiveClientId,
+  getActiveAccountId,
+} from "@/lib/session";
 import {
   getClient,
   getClients,
+  getAccounts,
   getAlerts,
   getPlacements,
 } from "@/lib/data/queries";
@@ -16,7 +22,9 @@ export default async function PortalLayout({
   children: React.ReactNode;
 }) {
   const session = await getSession();
-  const role = session?.role ?? "client";
+  // Defense-in-depth alongside the proxy: no session → back to login.
+  if (!session) redirect("/login");
+  const role = session.role;
   const activeClientId = await getActiveClientId();
 
   const [client, clients, alerts, placements] = await Promise.all([
@@ -39,6 +47,17 @@ export default async function PortalLayout({
     0,
   );
 
+  // Client account switcher (admins use the client-view flow, not this).
+  const [activeAccountId, accountRows] =
+    role === "admin"
+      ? ["", []]
+      : await Promise.all([getActiveAccountId(), getAccounts(activeClientId)]);
+  const accounts = accountRows.map((a) => ({
+    id: a.id,
+    label: a.label,
+    accountType: a.accountType,
+  }));
+
   return (
     <PortalShell
       role={role}
@@ -47,6 +66,8 @@ export default async function PortalLayout({
       alerts={alerts}
       clientLabels={clientLabels}
       pendingAllocCount={pendingAllocCount}
+      accounts={accounts}
+      activeAccountId={activeAccountId}
     >
       {children}
     </PortalShell>

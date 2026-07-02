@@ -18,13 +18,23 @@ and the [production SQL schema](../db/schema.sql).
 - The legacy **in-memory Zustand store** ([`store/useDatabaseStore.ts`](../store/useDatabaseStore.ts)) seeded
   from [`lib/db.ts`](../lib/db.ts) is off the data path — retained only as the reference implementation of the
   domain logic the schema/DAL/actions were ported from.
-- **Still cosmetic / missing:** login is a prefilled OTP over an interim **cookie session** (no real auth,
-  no 2FA, no RLS yet), and there is **no live market data and no AI/news backend** — prices, alerts, and Ask
-  Vitti responses are seeded/keyword-based.
+- **Auth is real (email + password).** Login uses **Supabase Auth** (`signInWithPassword`); a root `proxy.ts`
+  refreshes the session and server code reads identity via `getUser()`, with the staff/client role in
+  `app_metadata.role`. Demo users are seeded by [`scripts/seed-auth-users.mjs`](../scripts/seed-auth-users.mjs).
+- **Multi-account model.** A client (person/login) can hold **multiple investment accounts** (Personal, SMSF, …);
+  holdings/cash/bids are account-scoped (`accounts` table + `account_id` FKs), a client sees only their own
+  accounts, and staff see everyone's. Clients switch accounts via a topbar switcher; staff views aggregate
+  across a client's accounts. See LLD §8.12.
+- **Access control is enforced.** Route protection redirects unauthenticated `/portal` requests to `/login`
+  (proxy + layout), a staff-area layout blocks non-admins, and **Postgres RLS** guarantees a client can only
+  read/write their own rows (staff bypass via `app_metadata.role`) — see §5 and [the RLS migration](../supabase/migrations).
+- **Still cosmetic / missing:** the login **OTP screen is cosmetic** (no real TOTP 2FA yet), and there is
+  **no live market data and no AI/news backend** — prices, alerts, and Ask Vitti responses are seeded/keyword-based.
 
 "Fully functional" is therefore the **prototype → production gap** described below. Persistence (F2), the
-server-side bidding/settlement lifecycle (F3), and audit-log writes (F8) are now **done**; the remaining
-gaps are real auth, live data, scheduled jobs, realtime push, and the AI/news backend.
+server-side bidding/settlement lifecycle (F3), audit-log writes (F8), and **auth with route protection + RLS**
+(F1) are now **done**; the remaining gaps are TOTP 2FA, live data, scheduled jobs, realtime push, and the
+AI/news backend.
 
 ---
 
@@ -44,8 +54,8 @@ the Postgres our schema already targets. Only the market-data feed and Claude si
 
 | # | Area | Status | Production requirement |
 |---|------|--------|------------------------|
-| F1 | **Auth & sessions** | ⏳ Interim | *Now:* prefilled OTP + cookie session (`{role, clientId, viewClient}`). *Needed:* real identity, email + **TOTP 2FA**, server sessions, role claims (`client` / `admin`), route protection |
-| F2 | **Persistence** | ✅ Done | `schema.sql` applied to Supabase; every read hits the DAL and every mutation hits the DB via server actions |
+| F1 | **Auth & sessions** | ⏳ Partial | *Now:* **real Supabase Auth** (email + password), session refreshed by `proxy.ts`, identity via `getUser()`, role in `app_metadata.role`, **route protection** (proxy + layout redirects; staff-area role guard), and **RLS** (per-client enforcement — see F2/§5). *Still needed:* **TOTP 2FA** (login OTP screen is cosmetic) |
+| F2 | **Persistence** | ✅ Done | `schema.sql` applied to Supabase; every read hits the DAL and every mutation hits the DB via server actions — now under **RLS** (client-own rows; `is_staff()` bypass) |
 | F3 | **Bidding lifecycle** | ✅ Done (single-user) | Server actions (`placeBid`/`scaleBids`/`settlePlacement`) with server-side settlement engine. *Still needed:* transactional/concurrency-safe scaling under contention |
 | F4 | **Market data** | ❌ Open | Seeded `securities.last_price` / `market_indices`. *Needed:* live (or delayed/EOD) feed on a schedule |
 | F5 | **Alerts engine** | ⏳ Partial | `alerts` rows are materialized (seeded) and read via `getAlerts`; ack is a server action. *Needed:* scheduled server job that rescans options/prices and pushes to clients |
@@ -112,8 +122,8 @@ separate scope.
 
 - **API layer** — Next.js Route Handlers / Server Actions with a data-access layer replacing direct
   `lib/db.ts` reads.
-- **Security** — Row-Level Security (clients see only their own rows; staff bypass), input validation
-  (Zod), CSRF protection, rate limiting, secrets management.
+- **Security** — ✅ Row-Level Security (clients see only their own rows; staff bypass) + route protection.
+  Still to add: input validation (Zod), CSRF protection, rate limiting, secrets management.
 - **Connection pooling** — PgBouncer / platform pooler for serverless.
 - **Caching** — Redis / read replica for shared reference data.
 - **Observability** — structured logging, error tracking (Sentry), health checks.
@@ -128,7 +138,7 @@ separate scope.
 ## 6. Suggested build order
 
 1. ✅ Stand up Supabase, apply [`db/schema.sql`](../db/schema.sql), add a data-access layer.
-2. Real auth + TOTP 2FA + Row-Level Security. *(interim cookie session in place)*
+2. Real auth + TOTP 2FA + Row-Level Security. *(✅ email+password auth, route protection, and RLS done; real TOTP 2FA pending)*
 3. ✅ Port the `mutate*` functions to server actions that write to the DB (audit on every write).
 4. Market-data ingestion job + scheduled alert engine.
 5. Realtime push, then the Claude AI + news backend.

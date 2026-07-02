@@ -19,6 +19,9 @@ import type { Database } from "../supabase/database.types";
 type Enums<T extends keyof Database["public"]["Enums"]> =
   Database["public"]["Enums"][T];
 
+type Tables<T extends keyof Database["public"]["Tables"]> =
+  Database["public"]["Tables"][T]["Row"];
+
 // Demo "now" — the seed anchors option expiries to this date (lib/db.ts TODAY).
 // In production, swap this for `new Date()` so `dte` counts down live.
 const DEMO_TODAY = new Date("2026-06-12T00:00:00Z");
@@ -40,12 +43,21 @@ export type Security = {
   last: number | null;
 };
 
+// A client is now just the person/login. Account attributes (type, s708, cash)
+// live on AccountRow — a client can own several accounts.
 export type ClientRow = {
   id: string;
   ref: string | null;
   email: string | null;
   name: string;
   initials: string | null;
+};
+
+export type AccountRow = {
+  id: string;
+  ref: string | null;
+  clientId: string;
+  label: string; // 'Personal', 'SMSF', …
   accountType: string;
   s708Expiry: string | null;
   cash: number;
@@ -53,7 +65,8 @@ export type ClientRow = {
 };
 
 export type Position = {
-  clientId: string;
+  accountId: string | null;
+  clientId: string; // owning person (denormalized)
   code: string;
   name: string;
   sector: string | null;
@@ -65,7 +78,8 @@ export type Position = {
 export type OptionRow = {
   id: string;
   ref: string | null;
-  clientId: string;
+  accountId: string | null;
+  clientId: string; // owning person (denormalized)
   code: string;
   name: string;
   listed: boolean;
@@ -81,6 +95,7 @@ export type OptionRow = {
 
 export type BidRow = {
   placementId: string;
+  accountId: string | null;
   clientId: string;
   amount: number;
   alloc: number | null;
@@ -256,31 +271,18 @@ export const getMarketIndices = cache(async (): Promise<IndexRow[]> => {
 // ---------------------------------------------------------------------------
 export const getClients = cache(async (): Promise<ClientRow[]> => {
   const supabase = await createClient();
-  const [clientsRes, accountsRes] = await Promise.all([
-    supabase.from("clients").select("*").order("ref"),
-    supabase.from("client_accounts").select("*"),
-  ]);
-  if (clientsRes.error) throw clientsRes.error;
-  if (accountsRes.error) throw accountsRes.error;
-
-  const accountByClient = new Map(
-    (accountsRes.data ?? []).map((a) => [a.client_id, a]),
-  );
-
-  return clientsRes.data.map((c) => {
-    const account = accountByClient.get(c.id);
-    return {
-      id: c.id,
-      ref: c.ref,
-      email: c.email,
-      name: c.display_name,
-      initials: c.initials,
-      accountType: c.account_type,
-      s708Expiry: c.s708_expiry,
-      cash: account?.cash_balance ?? 0,
-      currency: account?.currency ?? "AUD",
-    };
-  });
+  const { data, error } = await supabase
+    .from("clients")
+    .select("*")
+    .order("ref");
+  if (error) throw error;
+  return data.map((c) => ({
+    id: c.id,
+    ref: c.ref,
+    email: c.email,
+    name: c.display_name,
+    initials: c.initials,
+  }));
 });
 
 export const getClient = cache(
@@ -290,7 +292,108 @@ export const getClient = cache(
   },
 );
 
+// Investment accounts, optionally scoped to one client (owner).
+export const getAccounts = cache(
+  async (clientId?: string): Promise<AccountRow[]> => {
+    const supabase = await createClient();
+    let query = supabase.from("accounts").select("*").order("ref");
+    if (clientId) query = query.eq("client_id", clientId);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data.map((a) => ({
+      id: a.id,
+      ref: a.ref,
+      clientId: a.client_id,
+      label: a.label,
+      accountType: a.account_type,
+      s708Expiry: a.s708_expiry,
+      cash: a.cash_balance,
+      currency: a.currency,
+    }));
+  },
+);
+
+export const getAccount = cache(
+  async (id: string): Promise<AccountRow | null> => {
+    const accounts = await getAccounts();
+    return accounts.find((a) => a.id === id) ?? null;
+  },
+);
+
+// Shared row mappers so account- and client-scoped getters return the same shape.
+function toPosition(
+  p: Tables<"positions">,
+  securityMap: Map<string, { name: string; sector: string | null; last: number | null }>,
+): Position {
+  const sec = securityMap.get(p.security_code);
+  return {
+    accountId: p.account_id,
+    clientId: p.client_id,
+    code: p.security_code,
+    name: sec?.name ?? p.security_code,
+    sector: sec?.sector ?? null,
+    qty: p.qty,
+    cost: p.avg_cost,
+    last: sec?.last ?? null,
+  };
+}
+
+function toOption(
+  o: Tables<"option_holdings">,
+  securityMap: Map<string, { last: number | null }>,
+): OptionRow {
+  return {
+    id: o.id,
+    ref: o.ref,
+    accountId: o.account_id,
+    clientId: o.client_id,
+    code: o.code,
+    name: o.name,
+    listed: o.listed,
+    type: o.option_type,
+    qty: o.qty,
+    strike: o.strike,
+    under: o.underlying_code
+      ? (securityMap.get(o.underlying_code)?.last ?? 0)
+      : 0,
+    dte: daysUntil(o.expiry_date),
+    expiryDate: o.expiry_date,
+    source: o.source,
+    status: o.status,
+  };
+}
+
+// Account-scoped (client portal shows one account at a time).
 export const getPositions = cache(
+  async (accountId: string): Promise<Position[]> => {
+    const supabase = await createClient();
+    const [{ data, error }, securityMap] = await Promise.all([
+      supabase.from("positions").select("*").eq("account_id", accountId),
+      getSecurityMap(),
+    ]);
+    if (error) throw error;
+    return data.map((p) => toPosition(p, securityMap));
+  },
+);
+
+export const getOptions = cache(
+  async (accountId: string): Promise<OptionRow[]> => {
+    const supabase = await createClient();
+    const [{ data, error }, securityMap] = await Promise.all([
+      supabase
+        .from("option_holdings")
+        .select("*")
+        .eq("account_id", accountId)
+        .order("ref"),
+      getSecurityMap(),
+    ]);
+    if (error) throw error;
+    return data.map((o) => toOption(o, securityMap));
+  },
+);
+
+// Client-scoped aggregation across all of a client's accounts (staff views).
+export const getClientPositions = cache(
   async (clientId: string): Promise<Position[]> => {
     const supabase = await createClient();
     const [{ data, error }, securityMap] = await Promise.all([
@@ -298,22 +401,11 @@ export const getPositions = cache(
       getSecurityMap(),
     ]);
     if (error) throw error;
-    return data.map((p) => {
-      const sec = securityMap.get(p.security_code);
-      return {
-        clientId: p.client_id,
-        code: p.security_code,
-        name: sec?.name ?? p.security_code,
-        sector: sec?.sector ?? null,
-        qty: p.qty,
-        cost: p.avg_cost,
-        last: sec?.last ?? null,
-      };
-    });
+    return data.map((p) => toPosition(p, securityMap));
   },
 );
 
-export const getOptions = cache(
+export const getClientOptions = cache(
   async (clientId: string): Promise<OptionRow[]> => {
     const supabase = await createClient();
     const [{ data, error }, securityMap] = await Promise.all([
@@ -325,24 +417,7 @@ export const getOptions = cache(
       getSecurityMap(),
     ]);
     if (error) throw error;
-    return data.map((o) => ({
-      id: o.id,
-      ref: o.ref,
-      clientId: o.client_id,
-      code: o.code,
-      name: o.name,
-      listed: o.listed,
-      type: o.option_type,
-      qty: o.qty,
-      strike: o.strike,
-      under: o.underlying_code
-        ? (securityMap.get(o.underlying_code)?.last ?? 0)
-        : 0,
-      dte: daysUntil(o.expiry_date),
-      expiryDate: o.expiry_date,
-      source: o.source,
-      status: o.status,
-    }));
+    return data.map((o) => toOption(o, securityMap));
   },
 );
 
@@ -363,6 +438,7 @@ export const getPlacements = cache(async (): Promise<PlacementRow[]> => {
     const list = bidsByPlacement.get(b.placement_id) ?? [];
     list.push({
       placementId: b.placement_id,
+      accountId: b.account_id,
       clientId: b.client_id,
       amount: b.amount,
       alloc: b.alloc,
