@@ -64,6 +64,21 @@ export type AccountRow = {
   currency: string;
 };
 
+export type MergeRequestRow = {
+  id: string;
+  clientId: string;
+  clientName: string; // resolved for staff display
+  sourceAccountId: string | null;
+  targetAccountId: string | null;
+  sourceLabel: string;
+  targetLabel: string;
+  note: string | null;
+  status: Enums<"merge_status">;
+  requestedAt: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+};
+
 export type Position = {
   accountId: string | null;
   clientId: string; // owning person (denormalized)
@@ -317,6 +332,36 @@ export const getAccount = cache(
   async (id: string): Promise<AccountRow | null> => {
     const accounts = await getAccounts();
     return accounts.find((a) => a.id === id) ?? null;
+  },
+);
+
+// Account merge requests. RLS scopes clients to their own; staff see all. The
+// client display name is joined in JS (getClients is likewise RLS-scoped).
+export const getMergeRequests = cache(
+  async (status?: Enums<"merge_status">): Promise<MergeRequestRow[]> => {
+    const supabase = await createClient();
+    let query = supabase
+      .from("account_merge_requests")
+      .select("*")
+      .order("requested_at", { ascending: false });
+    if (status) query = query.eq("status", status);
+    const [{ data, error }, clients] = await Promise.all([query, getClients()]);
+    if (error) throw error;
+    const nameById = new Map(clients.map((c) => [c.id, c.name]));
+    return data.map((r) => ({
+      id: r.id,
+      clientId: r.client_id,
+      clientName: nameById.get(r.client_id) ?? "",
+      sourceAccountId: r.source_account_id,
+      targetAccountId: r.target_account_id,
+      sourceLabel: r.source_label,
+      targetLabel: r.target_label,
+      note: r.note,
+      status: r.status,
+      requestedAt: r.requested_at,
+      decidedBy: r.decided_by,
+      decidedAt: r.decided_at,
+    }));
   },
 );
 

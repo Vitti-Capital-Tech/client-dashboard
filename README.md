@@ -70,7 +70,7 @@ client-dashboard/
 ├── supabase/
 │   ├── config.toml             # Supabase CLI project config
 │   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
-│   └── migrations/             # init schema · client-email · RLS · multi-account
+│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle
 ├── scripts/
 │   └── seed-auth-users.mjs     # Creates demo Supabase Auth users (roles in app_metadata)
 ├── db/
@@ -170,6 +170,7 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Route protection | ✅ `proxy.ts` + portal layout redirect unauthenticated → `/login`; `app/portal/staff/layout.tsx` blocks non-admins |
 | Row-Level Security | ✅ `supabase/migrations/…_enable_rls.sql` — client-own rows, `is_staff()` bypass, shared reference reads |
 | Multi-account model | ✅ `…_multi_account.sql` — `accounts` table; holdings/cash/bids gain `account_id`; client switches account via a topbar switcher, staff aggregate across accounts |
+| Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
 
 > **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Remaining hardening: real **TOTP 2FA**.

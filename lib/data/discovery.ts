@@ -21,3 +21,12 @@ export const GOALS: Goal[] = [
 ];
 
 export const THEMES: string[] = ["Blue chips", "Resources", "Pre-IPO & deals", "Income"];
+
+// Account types a client may choose when opening a new account (client-safe so
+// both the create form and the server-action validation can import it).
+export const ACCOUNT_TYPES = [
+  "Individual · wholesale",
+  "SMSF · wholesale",
+  "Trust · wholesale",
+  "Company · wholesale",
+] as const;

@@ -24,7 +24,9 @@ and the [production SQL schema](../db/schema.sql).
 - **Multi-account model.** A client (person/login) can hold **multiple investment accounts** (Personal, SMSF, …);
   holdings/cash/bids are account-scoped (`accounts` table + `account_id` FKs), a client sees only their own
   accounts, and staff see everyone's. Clients switch accounts via a topbar switcher; staff views aggregate
-  across a client's accounts. See LLD §8.12.
+  across a client's accounts. Clients can **self-serve open** a new account, and **request an account merge**
+  that requires **staff approval** before it executes (holdings/cash/bids move to the target, source closed).
+  See LLD §8.12–§8.13.
 - **Access control is enforced.** Route protection redirects unauthenticated `/portal` requests to `/login`
   (proxy + layout), a staff-area layout blocks non-admins, and **Postgres RLS** guarantees a client can only
   read/write their own rows (staff bypass via `app_metadata.role`) — see §5 and [the RLS migration](../supabase/migrations).

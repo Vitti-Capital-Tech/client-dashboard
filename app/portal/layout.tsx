@@ -11,6 +11,7 @@ import {
   getAccounts,
   getAlerts,
   getPlacements,
+  getMergeRequests,
 } from "@/lib/data/queries";
 import { PortalShell } from "./PortalShell";
 
@@ -58,6 +59,10 @@ export default async function PortalLayout({
     accountType: a.accountType,
   }));
 
+  // Staff badge: number of merge requests awaiting a decision.
+  const pendingMergeCount =
+    role === "admin" ? (await getMergeRequests("pending")).length : 0;
+
   return (
     <PortalShell
       role={role}
@@ -66,6 +71,7 @@ export default async function PortalLayout({
       alerts={alerts}
       clientLabels={clientLabels}
       pendingAllocCount={pendingAllocCount}
+      pendingMergeCount={pendingMergeCount}
       accounts={accounts}
       activeAccountId={activeAccountId}
     >
