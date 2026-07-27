@@ -131,14 +131,14 @@ npx supabase db push          # applies supabase/migrations/*
 ```
 After a schema change, regenerate types: `npx supabase gen types typescript --linked > lib/supabase/database.types.ts`.
 
-### 4.4 Auth users (demo login)
-Create the demo Supabase Auth users (four clients + one staff), stamping the workspace role into `app_metadata.role`:
+### 4.4 Auth user (staff login)
+Create the staff Supabase Auth user, stamping the workspace role into `app_metadata.role`:
 ```bash
 node --env-file=.env.local scripts/seed-auth-users.mjs
 ```
-Idempotent (re-running updates existing users). All demo accounts use the password **`demo1234`** — e.g. `james@halloran.com.au` (client) or `goyal.s@vitti.capital` (staff). The 6-digit OTP screen is cosmetic; any digits proceed.
+Idempotent (re-running updates the existing user). Sign in as **`goyal.s@vitti.capital`** / **`demo1234`**. The 6-digit OTP screen is cosmetic; any digits proceed.
 
-Demo logins (any password / 2FA code works): `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`.
+Only staff are seeded. Clients now come from the broker import (§4.5), which creates them **without an email** — so they cannot log in until one is attached to `clients.email`. This does not affect the admin workspace: `is_staff()` gives staff every account. To enable a client login, set that client's email and add them to `USERS` in the script with role `client`.
 
 ### 4.5 Broker data import (real client holdings)
 

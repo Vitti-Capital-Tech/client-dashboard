@@ -1,9 +1,13 @@
-// Seed Supabase Auth users for the demo (Stage 7).
+// Seed the Supabase Auth staff user.
 // ----------------------------------------------------------------------------
-// Creates one auth user per seeded client + one staff user, stamping the role
-// into app_metadata.role ('client' | 'admin') — which is what lib/session.ts
-// reads to decide the workspace. Idempotent: re-running updates existing users
-// (role + password) instead of erroring.
+// Stamps the workspace role into app_metadata.role ('admin'), which is what
+// lib/session.ts reads to decide the workspace. Idempotent: re-running updates
+// the existing user (role + password) instead of erroring.
+//
+// Only staff are seeded. Client logins now come from the broker import
+// (scripts/import-holdings.mjs), which creates clients WITHOUT an email —
+// so there is nothing to authenticate against until one is attached. Staff see
+// every account through is_staff(), so the admin workspace works regardless.
 //
 // Requires the SERVICE ROLE key (never ship this to the browser):
 //   NEXT_PUBLIC_SUPABASE_URL      — already in .env.local
@@ -27,15 +31,11 @@ if (!url || !serviceKey) {
 
 const DEMO_PASSWORD = "demo1234";
 
-// Client emails MUST match clients.email in the DB (see the add_client_email
-// migration) so lib/session.ts can resolve the client row from the auth email.
-const USERS = [
-  { email: "james@halloran.com.au", role: "client" },
-  { email: "margaret.chen@outlook.com", role: "client" },
-  { email: "office@endeavourfo.com.au", role: "client" },
-  { email: "david.okafor@gmail.com", role: "client" },
-  { email: "goyal.s@vitti.capital", role: "admin" },
-];
+// A client user's email MUST match clients.email in the DB (see the
+// add_client_email migration) so lib/session.ts can resolve the client row from
+// the auth email. Add entries here with role 'client' once real client logins
+// are issued.
+const USERS = [{ email: "goyal.s@vitti.capital", role: "admin" }];
 
 const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -82,7 +82,7 @@ async function main() {
     }
   }
 
-  console.log(`\nDone. All demo users use password: ${DEMO_PASSWORD}`);
+  console.log(`\nDone. Seeded users use password: ${DEMO_PASSWORD}`);
 }
 
 main().catch((err) => {
