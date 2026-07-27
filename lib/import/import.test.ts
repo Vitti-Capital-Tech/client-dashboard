@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { parseCsvRecords } from "./csv.ts";
 import { parentCode, parseTradeDate, num, initialsOf } from "./normalize.ts";
 import { parseTradeCsv, reduceTrades, type ParsedTrade } from "./trades.ts";
+import { reconcile, findDrift } from "./reconcile.ts";
 
 /**
  * Tests for the broker import pipeline. No test framework needed — Node's
@@ -244,6 +245,96 @@ test("reduce: replays chronologically regardless of file order", () => {
   );
   assert.deepEqual(reversed, forward);
   assert.equal(forward[0].shortHistory, false);
+});
+
+// ---------------------------------------------------------------------------
+// Reconciliation
+// ---------------------------------------------------------------------------
+
+function reconcileCsv(...rows: string[]) {
+  const { trades } = parseTradeCsv([HEADER, ...rows].join("\n"));
+  return reconcile(trades, reduceTrades(trades));
+}
+
+test("reconcile: an exact unit match under another ticker is proposed", () => {
+  // The real JBY → BKB rename: bought 4,681 under one code, sold under another.
+  const [e] = reconcileCsv(
+    row("1", "BUY", "JBY", "10/11/25", "4681", "3339.89"),
+    row("2", "SELL", "BKB", "16/12/25", "4681", "3634.80"),
+  );
+  assert.equal(e.kind, "probable-ticker-change");
+  assert.equal(e.parent, "BKB");
+  assert.equal(e.suggestion?.fromParent, "JBY");
+  assert.equal(e.suggestion?.value, 3339.89);
+  assert.equal(e.reportedRealized, 3634.8);
+  assert.equal(e.correctedRealized, 294.91);
+});
+
+test("reconcile: no candidate means a genuine pre-window purchase", () => {
+  const [e] = reconcileCsv(row("1", "SELL", "EUR", "22/09/25", "115385", "10397.08"));
+  assert.equal(e.kind, "missing-opening-balance");
+  assert.equal(e.suggestion, null);
+  assert.equal(e.correctedRealized, null);
+});
+
+test("reconcile: a buy dated AFTER the sale is not a rename", () => {
+  const [e] = reconcileCsv(
+    row("1", "SELL", "BKB", "16/12/25", "4681", "3634.80"),
+    row("2", "BUY", "JBY", "20/12/25", "4681", "3339.89"),
+  );
+  assert.equal(e.kind, "missing-opening-balance");
+  assert.equal(e.suggestion, null);
+});
+
+test("reconcile: two equally plausible candidates are left to a human", () => {
+  const found = reconcileCsv(
+    row("1", "BUY", "AAA", "01/10/25", "4681", "1000"),
+    row("2", "BUY", "CCC", "02/10/25", "4681", "2000"),
+    row("3", "SELL", "BKB", "16/12/25", "4681", "3634.80"),
+  );
+  assert.equal(found[0].suggestion, null, "ambiguity must not become a guess");
+});
+
+test("reconcile: options are reported but never auto-matched", () => {
+  const csv = [
+    HEADER,
+    // Same unit count, but the buy is an instalment option — exercise or
+    // conversion, not a rename. Matching them would invent a tax event.
+    "1,114716,BUY,ACWXX,ACTINOGEN,INSTOPLAC,03/02/26,VIZ,71429,0.042,3000.02,0,0,0,3000.02,0,SETTLED",
+    "2,114716,SELL,ZZZXX,OTHER CO,INSTPLAC,01/03/26,VIZ,71429,0.05,3600,0,0,0,3600,0,SETTLED",
+  ].join("\n");
+  const { trades } = parseTradeCsv(csv);
+  const [e] = reconcile(trades, reduceTrades(trades));
+  assert.equal(e.isOption, true);
+  assert.equal(e.kind, "unsold-option");
+  assert.equal(e.suggestion, null);
+});
+
+test("reconcile: a clean ledger produces no exceptions", () => {
+  const found = reconcileCsv(
+    row("1", "BUY", "LDX", "01/02/26", "1000", "2000"),
+    row("2", "SELL", "LDX", "01/03/26", "1000", "2500"),
+  );
+  assert.deepEqual(found, []);
+});
+
+test("findDrift: ledger open units must agree with the snapshot", () => {
+  const { trades } = parseTradeCsv(
+    [HEADER, row("1", "BUY", "ACW", "01/02/26", "71429", "3000.02")].join("\n"),
+  );
+  const rollups = reduceTrades(trades);
+
+  assert.deepEqual(
+    findDrift(rollups, new Map([["114716::ACW", 71429]])),
+    [],
+    "matching units are not drift",
+  );
+
+  const [d] = findDrift(rollups, new Map());
+  assert.equal(d.parent, "ACW");
+  assert.equal(d.ledgerOpenUnits, 71429);
+  assert.equal(d.snapshotUnits, 0);
+  assert.equal(d.strandedCost, 3000.02);
 });
 
 test("reduce: accounts are kept separate", () => {

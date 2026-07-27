@@ -27,9 +27,52 @@ import {
 } from "./_import-common.mjs";
 import { parseTradeCsv, reduceTrades, SETTLED } from "../lib/import/trades.ts";
 import { extractSecurities } from "../lib/import/holdings.ts";
+import { reconcile, findDrift } from "../lib/import/reconcile.ts";
 
 const USAGE =
   "Usage: node --env-file=.env.local scripts/import-trades.mjs <trades.csv> [--dry-run]";
+
+/**
+ * Print the worklist of trades whose cost basis could not be established, with
+ * the missing buy value suggested wherever the ledger itself contains it.
+ */
+function printExceptions(exceptions) {
+  if (exceptions.length === 0) return;
+
+  console.log(
+    `\n  ── ${exceptions.length} transaction(s) need a cost basis ─────────────────────`,
+  );
+
+  for (const e of exceptions) {
+    const head =
+      `  ${e.accountRef}  ${e.parent.padEnd(5)} ` +
+      `sold ${e.unitsSold.toLocaleString("en-AU").padStart(9)} units ` +
+      `for ${fmtMoney(e.proceeds).padStart(11)}`;
+
+    if (e.kind === "probable-ticker-change") {
+      const s = e.suggestion;
+      console.log(`${head}   ← TICKER CHANGE?`);
+      console.log(
+        `      bought as ${s.rawSecurity} on ${s.tradeDate} for ${fmtMoney(s.value)} ` +
+          `(cnote ${s.cnote}, same ${s.units.toLocaleString("en-AU")} units)`,
+      );
+      console.log(
+        `      realised ${fmtMoney(e.reportedRealized)} → ${fmtMoney(e.correctedRealized)} if adopted`,
+      );
+    } else if (e.kind === "unsold-option") {
+      console.log(`${head}   ← OPTION, not auto-matched`);
+    } else {
+      console.log(`${head}   ← no buy in ledger; needs an earlier statement`);
+    }
+  }
+
+  const overstated = exceptions.reduce((s, e) => s + (e.suggestion?.value ?? 0), 0);
+  if (overstated > 0) {
+    console.log(
+      `\n  Adopting every suggestion above would reduce realised P&L by ${fmtMoney(overstated)}.`,
+    );
+  }
+}
 
 const { file, dryRun } = parseArgs(USAGE);
 const sourceFile = file.split(/[\\/]/).pop();
@@ -88,6 +131,7 @@ if (dryRun) {
     );
   }
   console.log(`\n  TOTAL REALIZED: ${fmtMoney(total)}`);
+  printExceptions(reconcile(trades, preview));
   process.exit(0);
 }
 
@@ -273,7 +317,6 @@ await upsertChunked(
 
 const totalRealized = rollups.reduce((s, r) => s + r.realizedPl, 0);
 const partials = rollups.filter((r) => r.hasPartial).length;
-const shorts = rollups.filter((r) => r.shortHistory);
 
 console.log(`  realized:   ${rollups.length} rollup rows rebuilt`);
 console.log(`\n  Total realized P&L: ${fmtMoney(totalRealized)}`);
@@ -282,12 +325,48 @@ if (partials > 0) {
     `  ${partials} position(s) closed partially — valued at weighted-average cost.`,
   );
 }
-if (shorts.length > 0) {
+
+// ---------------------------------------------------------------------------
+// 6. Reconciliation — the worklist of everything that needs a human
+// ---------------------------------------------------------------------------
+printExceptions(reconcile(trades, rollups));
+
+// Ledger-vs-snapshot drift. `positions` is the broker's statement of what is
+// actually held; where the replayed ledger disagrees, one of the two is
+// incomplete and the P&L split between realised and unrealised is wrong.
+const { data: heldRows, error: heldErr } = await supabase
+  .from("positions")
+  .select("account_id, qty, securities(code, parent_code)")
+  .in("account_id", accountIds);
+if (heldErr) throw heldErr;
+
+const snapshotUnits = new Map();
+for (const p of heldRows) {
+  const parent = p.securities?.parent_code ?? p.securities?.code;
+  if (!parent) continue;
+  const key = `${refById.get(p.account_id)}::${parent}`;
+  snapshotUnits.set(key, (snapshotUnits.get(key) ?? 0) + Number(p.qty));
+}
+
+const drift = findDrift(rollups, snapshotUnits);
+if (drift.length > 0) {
   console.log(
-    `  ⚠ ${shorts.length} position(s) sold units the ledger never saw bought ` +
-      `(${shorts.map((r) => r.parent).join(", ")}).\n` +
-      "    Their proceeds are counted with ZERO cost basis, so realized P&L is\n" +
-      "    overstated until an opening balance or earlier export is loaded.",
+    `\n  ── ${drift.length} position(s) where the ledger and the snapshot disagree ──`,
+  );
+  for (const d of drift) {
+    console.log(
+      `  ${d.accountRef}  ${d.parent.padEnd(5)} ` +
+        `ledger ${d.ledgerOpenUnits.toLocaleString("en-AU").padStart(9)} units, ` +
+        `snapshot ${d.snapshotUnits.toLocaleString("en-AU").padStart(9)}` +
+        (d.strandedCost > 0
+          ? `   ${fmtMoney(d.strandedCost)} of cost stranded on a position that is no longer held`
+          : ""),
+    );
+  }
+  console.log(
+    "\n    Either the snapshot predates these trades, or the holding was closed\n" +
+      "    by something the ledger does not record (lapse, conversion, transfer).",
   );
 }
+
 console.log("\nDone. Trade ledger imported.");
