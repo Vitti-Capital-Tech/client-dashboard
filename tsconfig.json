@@ -11,6 +11,10 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // lib/import/* is imported both by the Next app and by the plain-Node CLI
+    // importers in scripts/. Node's native type stripping resolves ESM strictly,
+    // so those modules must import each other with an explicit `.ts` extension.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [

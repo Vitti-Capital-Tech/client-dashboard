@@ -140,13 +140,47 @@ Idempotent (re-running updates existing users). All demo accounts use the passwo
 
 Demo logins (any password / 2FA code works): `james@halloran.com.au`, `margaret.chen@outlook.com`, `office@endeavourfo.com.au`, `david.okafor@gmail.com`.
 
-### 4.4 Run Development Server
+### 4.5 Broker data import (real client holdings)
+
+Two CSV exports feed the platform, and they answer different questions. Import the **holdings snapshot first** — it creates the clients, accounts and securities that the trade ledger then references.
+
+```bash
+# 1. Holdings snapshot — current units, average cost and market price.
+#    Full replace of `positions` for every account in the file.
+npm run import:holdings -- ClientHoldingsallaccounts-<stamp>.csv
+
+# 2. Trade ledger (contract notes) — realised P&L.
+#    Upserted by contract note, then `realized_pnl` is rebuilt.
+npm run import:trades -- <contract-notes>.csv
+```
+
+Add `--dry-run` to either to print the parsed totals and a P&L preview **without writing anything**. Both are idempotent — re-running the same file converges to the same rows.
+
+| Stage | Owns | Grain |
+|---|---|---|
+| `import-holdings.mjs` | `clients`, `accounts`, `securities`, `positions` | account × security code |
+| `import-trades.mjs` | `trades`, `realized_pnl` | account × **parent** code |
+
+**Security codes.** ASX ordinaries are exactly three characters and may contain digits (`ADN`, `AT4`, `PC2`); derivatives extend that root (`EOSXX`, `ADNOD`, `PC2ZZ`). The parent is the **first three characters** — never a literal `XX` strip, which would mangle real codes like `LDX`. Each raw code keeps its own `securities` row (an option and its ordinary trade at different prices, so their units are not additive); `securities.parent_code` links them, and the UI rolls up by `COALESCE(parent_code, code)`.
+
+**Cost basis** is weighted average, which is exact for a full close and for any sale out of a single-price parcel. A partial sale from a parcel accumulated at several prices sets `realized_pnl.has_partial` so the UI marks it approximate; parcel-level FIFO would be needed for CGT-grade figures.
+
+**Known data gap.** If the ledger starts mid-history it will contain sales of units it never saw bought. Those rows set `realized_pnl.short_history`, their proceeds are counted against **zero cost**, and both the importer and `/portal/staff/holdings` say so out loud. Load an earlier trade export or an opening balance to correct it.
+
+Only `SETTLED` trades reach the P&L reducer. `CANCELLED` / `REVERSAL` / `REVERSED` rows are still stored for the audit trail.
+
+Run the pipeline's unit tests (Node's built-in runner, no framework):
+```bash
+npm test
+```
+
+### 4.6 Run Development Server
 ```bash
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000).
 
-### 4.5 Production Build & Verification
+### 4.7 Production Build & Verification
 ```bash
 npm run lint
 npm run build
@@ -171,6 +205,10 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Row-Level Security | ✅ `supabase/migrations/…_enable_rls.sql` — client-own rows, `is_staff()` bypass, shared reference reads |
 | Multi-account model | ✅ `…_multi_account.sql` — `accounts` table; holdings/cash/bids gain `account_id`; client switches account via a topbar switcher, staff aggregate across accounts |
 | Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
+| Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/` (21 unit tests) |
+| Staff holdings register | ✅ `/portal/staff/holdings` — firm-wide cost base, market value, unrealised + realised P&L, expandable to company then instrument, with data-quality flags |
+| Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
+| Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
 
 > **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Remaining hardening: real **TOTP 2FA**.

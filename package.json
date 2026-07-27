@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test \"lib/**/*.test.ts\"",
+    "import:holdings": "node --env-file=.env.local scripts/import-holdings.mjs",
+    "import:trades": "node --env-file=.env.local scripts/import-trades.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

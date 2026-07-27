@@ -41,6 +41,10 @@ export type Security = {
   sector: string | null;
   listed: boolean;
   last: number | null;
+  // Derivatives (options, instalment receipts) point at their ordinary ASX
+  // code; `null` means this row IS the ordinary. See the trade-ledger migration.
+  parent: string | null;
+  securityClass: string | null; // 'Ordinary' | 'Options' | 'Allocation Interest'
 };
 
 // A client is now just the person/login. Account attributes (type, s708, cash)
@@ -56,12 +60,16 @@ export type ClientRow = {
 export type AccountRow = {
   id: string;
   ref: string | null;
+  externalRef: string | null; // broker account number, e.g. '114716'
   clientId: string;
   label: string; // 'Personal', 'SMSF', …
   accountType: string;
   s708Expiry: string | null;
   cash: number;
   currency: string;
+  adviserCode: string | null;
+  adviserName: string | null;
+  status: string | null; // broker account status, e.g. 'ACTIVE'
 };
 
 export type MergeRequestRow = {
@@ -260,10 +268,12 @@ export const getSecurities = cache(async (): Promise<Security[]> => {
     sector: r.sector,
     listed: r.listed,
     last: r.last_price,
+    parent: r.parent_code,
+    securityClass: r.security_class,
   }));
 });
 
-const getSecurityMap = cache(async (): Promise<Map<string, Security>> => {
+export const getSecurityMap = cache(async (): Promise<Map<string, Security>> => {
   const securities = await getSecurities();
   return new Map(securities.map((s) => [s.code, s]));
 });
@@ -311,19 +321,29 @@ export const getClient = cache(
 export const getAccounts = cache(
   async (clientId?: string): Promise<AccountRow[]> => {
     const supabase = await createClient();
-    let query = supabase.from("accounts").select("*").order("ref");
+    // Imported broker accounts have no legacy `ref`, so fall back to the label
+    // to keep the order stable rather than arbitrary.
+    let query = supabase
+      .from("accounts")
+      .select("*")
+      .order("ref", { nullsFirst: false })
+      .order("label");
     if (clientId) query = query.eq("client_id", clientId);
     const { data, error } = await query;
     if (error) throw error;
     return data.map((a) => ({
       id: a.id,
       ref: a.ref,
+      externalRef: a.external_ref,
       clientId: a.client_id,
       label: a.label,
       accountType: a.account_type,
       s708Expiry: a.s708_expiry,
       cash: a.cash_balance,
       currency: a.currency,
+      adviserCode: a.adviser_code,
+      adviserName: a.adviser_name,
+      status: a.status,
     }));
   },
 );

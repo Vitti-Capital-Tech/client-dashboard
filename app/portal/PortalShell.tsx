@@ -88,6 +88,7 @@ export function PortalShell({
     admin: [
       { k: "overview", label: "Overview", path: "/portal/staff", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
       { k: "clients", label: "Clients", path: "/portal/staff/clients", icon: "M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM3 21c0-3.9 4-7 9-7s9 3.1 9 7", tab: true },
+      { k: "holdings", label: "Holdings", path: "/portal/staff/holdings", icon: "M4 20V10m5 10V4m5 16v-7m5 7V8", tab: true },
       { k: "placements", label: "Placements", path: "/portal/staff/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true, badge: "pendingAlloc" },
       { k: "options", label: "Options", path: "/portal/staff/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: true },
       { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0", tab: false, badge: "alerts" },
