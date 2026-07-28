@@ -10,8 +10,26 @@ import type {
   PlacementRow,
   AlertRow,
   SignalRow,
+  TradeRow,
 } from "@/lib/data/queries";
+import { rollUpRealized, type RealizedRow } from "@/lib/data/compute";
+import {
+  buildOrderHistoryCsv,
+  orderHistoryFilename,
+} from "@/lib/export/order-history";
+import { RealizedPnlChart } from "./RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
+
+/**
+ * Money to the cent, thousands-separated. These are settled cash amounts from
+ * contract notes, so cents are never rounded away — a $3,634.80 sale must not
+ * read as $3,635.
+ */
+const money2 = (n: number): string =>
+  n.toLocaleString("en-AU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 
 function s708Label(iso: string | null): string {
   if (!iso) return "—";
@@ -79,6 +97,8 @@ export function ClientDetailClient({
   clientBids,
   alerts,
   signalsMap,
+  trades,
+  realized,
 }: {
   client: ClientRow;
   accounts: AccountRow[];
@@ -87,9 +107,13 @@ export function ClientDetailClient({
   clientBids: PlacementRow[];
   alerts: AlertRow[];
   signalsMap: Record<string, SignalRow>;
+  trades: TradeRow[];
+  realized: RealizedRow[];
 }) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"holdings" | "options" | "bids" | "alerts">("holdings");
+  const [activeTab, setActiveTab] = useState<
+    "holdings" | "order history" | "options" | "bids" | "alerts"
+  >("holdings");
   // Account filter: "all" aggregates across the client's accounts, else scope
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
@@ -101,6 +125,98 @@ export function ClientDetailClient({
 
   const visiblePositions = positions.filter((p) => inAcct(p.accountId));
   const visibleOptions = options.filter((o) => inAcct(o.accountId));
+
+  // Order history follows the same account filter. Already newest-first from
+  // the DAL, so no re-sort here.
+  const visibleTrades = trades.filter((t) => inAcct(t.accountId));
+  // Realised P&L arrives at account grain so it honours the same filter as the
+  // table above it — otherwise the chart and the rows would disagree.
+  const realizedMap = rollUpRealized(realized.filter((r) => inAcct(r.accountId)));
+  const chartRows = [...realizedMap.entries()].map(([parent, r]) => ({
+    parent,
+    ...r,
+  }));
+
+  // Settled trades are the only ones that moved money; the rest are shown for
+  // completeness but excluded from every total below.
+  const settledTrades = visibleTrades.filter((t) => t.status === "SETTLED");
+  const boughtTotal = settledTrades
+    .filter((t) => t.side === "BUY")
+    .reduce((s, t) => s + t.value, 0);
+  const soldTotal = settledTrades
+    .filter((t) => t.side === "SELL")
+    .reduce((s, t) => s + t.value, 0);
+  const feesTotal = settledTrades.reduce(
+    (s, t) => s + t.brokerage + t.otherCharges + t.gst,
+    0,
+  );
+  const realizedTotal = [...realizedMap.values()].reduce(
+    (s, r) => s + r.realizedPl,
+    0,
+  );
+
+  // Group the ledger by parent ticker so each company's trades sit together
+  // under its realised result — the same tickers, in the same order, as the
+  // chart above. Reading down the table then answers "why is that bar that
+  // size", which a flat chronological list cannot.
+  const tradeGroups = (() => {
+    const byParent = new Map<string, { name: string; trades: TradeRow[] }>();
+    for (const t of visibleTrades) {
+      const g = byParent.get(t.parent);
+      if (g) g.trades.push(t);
+      else byParent.set(t.parent, { name: t.name, trades: [t] });
+    }
+
+    return [...byParent.entries()]
+      .map(([parent, g]) => ({
+        parent,
+        name: g.name,
+        // Oldest first within a company: the buy that established the cost
+        // basis should be read before the sale that closed it.
+        trades: [...g.trades].sort((a, b) =>
+          a.tradeDate === b.tradeDate
+            ? a.cnote.localeCompare(b.cnote)
+            : a.tradeDate.localeCompare(b.tradeDate),
+        ),
+        realized: realizedMap.get(parent) ?? null,
+      }))
+      .sort((a, b) => {
+        // Companies with a realised result lead, ranked exactly as the chart
+        // ranks them. Still-open positions follow, most recent first.
+        const ar = a.realized?.unitsSold ? a.realized.realizedPl : null;
+        const br = b.realized?.unitsSold ? b.realized.realizedPl : null;
+        if (ar !== null && br !== null) return br - ar;
+        if (ar !== null) return -1;
+        if (br !== null) return 1;
+        return b.trades[b.trades.length - 1].tradeDate.localeCompare(
+          a.trades[a.trades.length - 1].tradeDate,
+        );
+      });
+  })();
+  // Export exactly what is on screen: the same groups, same order, same account
+  // filter. A CSV that disagrees with the table it sits under is worse than no
+  // CSV at all.
+  const exportCsv = () => {
+    const csv = buildOrderHistoryCsv(tradeGroups);
+    const name = orderHistoryFilename(
+      client.name,
+      acctFilter === "all" ? null : (accounts.find((a) => a.id === acctFilter)?.label ?? null),
+      new Date().toISOString().slice(0, 10),
+    );
+
+    // A BOM makes Excel read the file as UTF-8 rather than the local codepage,
+    // which otherwise mangles non-ASCII company names.
+    const blob = new Blob(["﻿", csv], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Flatten the client's bids (one row per bid — a client may bid from several
   // accounts on one deal), then scope to the selected account.
   const bidRows = clientBids
@@ -187,7 +303,7 @@ export function ClientDetailClient({
 
         {/* Tab Selection */}
         <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
-          {(["holdings", "options", "bids", "alerts"] as const).map(t => (
+          {(["holdings", "order history", "options", "bids", "alerts"] as const).map(t => (
             <button
               key={t}
               onClick={() => setActiveTab(t)}
@@ -223,18 +339,18 @@ export function ClientDetailClient({
       <div className="grid grid-cols-3 gap-4 select-none">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Asset value</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(totalAssets).toLocaleString("en-AU")}</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">${money2(totalAssets)}</div>
           <div className="text-xs text-mut mt-1">Positions + cash + unlisted carry</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost invested</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(tc).toLocaleString("en-AU")}</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">${money2(tc)}</div>
           <div className="text-xs text-mut mt-1">net cost base</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Client P&amp;L</div>
           <div className={`font-disp font-medium text-2xl mt-1 ${tpl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {tpl >= 0 ? "+" : ""}${Math.round(tpl).toLocaleString("en-AU")}
+            {tpl >= 0 ? "+" : ""}${money2(tpl)}
           </div>
           <div className={`text-xs mt-1 font-mono ${tpl >= 0 ? "text-gain" : "text-loss-d"}`}>
             {tpl >= 0 ? "+" : ""}{tplp.toFixed(1)}%
@@ -265,7 +381,10 @@ export function ClientDetailClient({
               <tbody className="divide-y divide-[#f0ede5]">
                 {visiblePositions.map(p => {
                   const pl = posPL(p);
-                  const plp = pl / posCost(p) * 100;
+                  const cost = posCost(p);
+                  // Free-carried options (placement attachers) have a zero cost
+                  // base, so a percentage return is undefined — not infinite.
+                  const plp = cost === 0 ? null : (pl / cost) * 100;
                   const isUp = pl >= 0;
                   const sg = signalsMap[p.code];
                   return (
@@ -275,10 +394,12 @@ export function ClientDetailClient({
                       <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
                       <td className="px-4.5 py-3 text-right font-mono">${p.cost.toFixed(2)}</td>
                       <td className="px-4.5 py-3 text-right font-mono">${(p.last ?? 0).toFixed(2)}</td>
-                      <td className="px-4.5 py-3 text-right font-mono font-semibold">${Math.round(posValue(p)).toLocaleString("en-AU")}</td>
+                      <td className="px-4.5 py-3 text-right font-mono font-semibold">${money2(posValue(p))}</td>
                       <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
-                        ${Math.round(pl).toLocaleString("en-AU")}
-                        <div className="text-[10px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
+                        ${money2(pl)}
+                        {plp !== null && (
+                          <div className="text-[10px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
+                        )}
                       </td>
                       <td className="px-4.5 py-3 text-center">
                         {getActionPill(sg ? sg.action : "Hold")}
@@ -288,6 +409,204 @@ export function ClientDetailClient({
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "order history" && (
+        <div className="space-y-3">
+          {/* Ledger totals. Realised P&L is NOT sold − bought: most of what was
+              bought is still held, so the two are not comparable. It comes from
+              the replayed cost basis in realized_pnl. */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+            {[
+              { label: "Bought", value: boughtTotal, tone: "" },
+              { label: "Sold", value: soldTotal, tone: "" },
+              { label: "Brokerage + GST", value: feesTotal, tone: "" },
+              {
+                label: "Realised P&L",
+                value: realizedTotal,
+                tone: realizedTotal >= 0 ? "text-gain" : "text-loss-d",
+              },
+            ].map((k) => (
+              <div
+                key={k.label}
+                className="bg-white border border-line rounded-[14px] shadow-shadow px-4 py-3"
+              >
+                <div className="font-mono text-[10px] tracking-wider uppercase text-mut">
+                  {k.label}
+                </div>
+                <div className={`font-mono text-[17px] mt-1 tabular-nums ${k.tone}`}>
+                  {k.value < 0 ? "-$" : "$"}
+                  {money2(Math.abs(k.value))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <RealizedPnlChart rows={chartRows} />
+
+          <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+            <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-baseline justify-between">
+              <b className="text-sm font-semibold text-ink">Order history</b>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-mut">
+                  {settledTrades.length} settled
+                  {visibleTrades.length !== settledTrades.length &&
+                    ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed`}
+                </span>
+                <button
+                  onClick={exportCsv}
+                  disabled={tradeGroups.length === 0}
+                  className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-xs font-medium">
+                <thead>
+                  <tr className="border-b border-line text-mut select-none">
+                    <th className="px-4.5 py-2.5">Date</th>
+                    <th className="px-4.5 py-2.5">Type</th>
+                    <th className="px-4.5 py-2.5">Code</th>
+                    <th className="px-4.5 py-2.5">Stock</th>
+                    <th className="px-4.5 py-2.5 text-right">Units</th>
+                    <th className="px-4.5 py-2.5 text-right">Avg price</th>
+                    <th className="px-4.5 py-2.5 text-right">Brokerage</th>
+                    <th className="px-4.5 py-2.5 text-right">Value</th>
+                    <th className="px-4.5 py-2.5 text-center">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tradeGroups.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="px-4.5 py-10 text-center text-mut">
+                        No contract notes imported for this client.
+                      </td>
+                    </tr>
+                  ) : (
+                    tradeGroups.map((g) => {
+                      const rz = g.realized;
+                      const sold = (rz?.unitsSold ?? 0) > 0;
+                      const pl = rz?.realizedPl ?? 0;
+
+                      return (
+                        <React.Fragment key={g.parent}>
+                          {/* Company header — carries the realised result that
+                              the bar above is showing. */}
+                          <tr className="border-t border-line bg-[#faf9f5]">
+                            <td colSpan={4} className="px-4.5 py-2.5">
+                              <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink">
+                                {g.parent}
+                              </span>
+                              <span className="ml-2 text-mut">{g.name}</span>
+                              {rz?.shortHistory && (
+                                <span
+                                  title="No purchase for these units exists in the ledger, so the sale is booked against zero cost and this realised figure is overstated. Needs an opening balance or an earlier statement."
+                                  className="ml-1.5 rounded-full bg-loss-bg px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-loss-d cursor-help"
+                                >
+                                  no cost basis
+                                </span>
+                              )}
+                            </td>
+                            <td
+                              colSpan={4}
+                              className="px-4.5 py-2.5 text-right text-[11px] text-mut"
+                            >
+                              {g.trades.length} trade
+                              {g.trades.length === 1 ? "" : "s"}
+                              {sold && (
+                                <>
+                                  {" · "}
+                                  {rz!.unitsSold.toLocaleString("en-AU")} units sold
+                                  {" · realised "}
+                                  <b
+                                    className={`font-mono text-[12px] ${pl >= 0 ? "text-gain" : "text-loss-d"}`}
+                                  >
+                                    {pl < 0 ? "-" : "+"}${money2(Math.abs(pl))}
+                                  </b>
+                                </>
+                              )}
+                              {!sold && " · still open"}
+                            </td>
+                            <td className="px-4.5 py-2.5" />
+                          </tr>
+
+                          {g.trades.map((t) => {
+                            const settled = t.status === "SETTLED";
+                            const isBuy = t.side === "BUY";
+
+                            return (
+                              <tr
+                                key={t.id}
+                                className={`border-t border-[#f0ede5] hover:bg-[#faf9f5] ${settled ? "" : "opacity-45"}`}
+                              >
+                                <td className="px-4.5 py-3 pl-7 font-mono text-mut whitespace-nowrap">
+                                  {new Date(
+                                    `${t.tradeDate}T00:00:00Z`,
+                                  ).toLocaleDateString("en-AU", {
+                                    day: "2-digit",
+                                    month: "short",
+                                    year: "2-digit",
+                                    timeZone: "UTC",
+                                  })}
+                                </td>
+                                <td className="px-4.5 py-3">
+                                  <span
+                                    className={`rounded-[5px] px-1.5 py-0.5 text-[10.5px] font-bold ${isBuy ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"}`}
+                                  >
+                                    {t.side}
+                                  </span>
+                                </td>
+                                <td className="px-4.5 py-3">
+                                  {/* Within a group the parent is the header, so
+                                      only a differing traded code is worth ink. */}
+                                  {t.code === g.parent ? (
+                                    <span className="text-mut-d">—</span>
+                                  ) : (
+                                    <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">
+                                      {t.code}
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="px-4.5 py-3 text-mut">
+                                  {t.instrument ?? "—"}
+                                </td>
+                                <td className="px-4.5 py-3 text-right font-mono">
+                                  {t.units.toLocaleString("en-AU")}
+                                </td>
+                                <td className="px-4.5 py-3 text-right font-mono">
+                                  ${t.avgPrice.toFixed(t.avgPrice < 1 ? 4 : 2)}
+                                </td>
+                                <td className="px-4.5 py-3 text-right font-mono text-mut">
+                                  {t.brokerage + t.otherCharges + t.gst === 0
+                                    ? "—"
+                                    : `$${(t.brokerage + t.otherCharges + t.gst).toFixed(2)}`}
+                                </td>
+                                <td
+                                  className={`px-4.5 py-3 text-right font-mono font-semibold ${isBuy ? "text-ink" : "text-gain"}`}
+                                >
+                                  {isBuy ? "-" : "+"}${money2(t.value)}
+                                </td>
+                                <td className="px-4.5 py-3 text-center">
+                                  <span
+                                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${settled ? "bg-paper-2 text-mut" : "bg-amber-bg text-amber-d"}`}
+                                  >
+                                    {t.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

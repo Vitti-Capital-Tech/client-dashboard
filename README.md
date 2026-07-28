@@ -2,14 +2,16 @@
 
 Vitti Capital is a production-grade, stateful Next.js App Router application written in TypeScript and styled with Tailwind CSS v4. It mirrors the exact visual style and dual-workspace architecture of the single-file prototype (`vitti-capital-platform.html`).
 
-> **Migration status:** the app has been moved from a purely in-memory prototype (Zustand + `lib/db.ts`) to a **Supabase (PostgreSQL) backend**. All portal routes now render as Server Components reading live data through the data-access layer, every state mutation is a Server Action writing to Supabase + `audit_log`, and the portal shell reads the session-cookie bridge. The legacy Zustand store is no longer imported by any route. The one remaining stage is real authentication (Supabase Auth + RLS) to replace the interim session cookie — see the [migration status](#5-supabase-migration-status).
+> **Migration status:** the app has been moved from a purely in-memory prototype (Zustand + `lib/db.ts`) to a **Supabase (PostgreSQL) backend**. All portal routes render as Server Components reading live data through the data-access layer, every state mutation is a Server Action writing to Supabase + `audit_log`, and access is enforced by real Supabase Auth plus Postgres RLS. The legacy Zustand store is no longer imported by any route.
+>
+> **Holdings are no longer demo data.** Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by an offline pipeline (§4.5) that derives realised P&L from the trade history. Where it cannot substantiate a figure it says so rather than guessing: see the [migration status](#5-supabase-migration-status).
 
 ---
 
 ## 1. Document Directory
 Detailed design information is available under the `docs` folder:
-* **[High-Level Design (HLD)](docs/HLD.md):** Platform structure, the Supabase persistence + data-access layer, the session bridge, dual-workspace flows, and responsive layout.
-* **[Low-Level Design (LLD)](docs/LLD.md):** Data interfaces, the production SQL schema + interface→table mapping, the DAL / session / compute modules, state-mutation algorithms, and UI-chart math.
+* **[High-Level Design (HLD)](docs/HLD.md):** Platform structure, the Supabase persistence + data-access layer, the session bridge, the broker batch-ingress pipeline, dual-workspace flows, and responsive layout.
+* **[Low-Level Design (LLD)](docs/LLD.md):** Data interfaces, the production SQL schema + interface→table mapping, the DAL / session / compute modules, state-mutation algorithms, the broker import pipeline and cost-basis reducer (§8.14–8.15), and UI-chart math.
 * **[Requirements](docs/REQUIREMENTS.md):** Prototype → production requirements, chosen providers, and behaviour flow charts.
 * **[Production SQL Schema](db/schema.sql):** Portable PostgreSQL DDL (Supabase / Neon / Aurora); also applied as the first Supabase migration.
 
@@ -48,7 +50,9 @@ client-dashboard/
 │       └── staff/              # Staff/Adviser views
 │           ├── page.tsx        #   ✅ Overview / desk summary + StaffOverviewClient.tsx (island)
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
-│           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed detail island)
+│           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed island:
+│           │                   #      holdings · order history · options · bids · alerts)
+│           │                   #      + RealizedPnlChart.tsx (diverging bar chart, SVG, no deps)
 │           ├── placements/     #   ✅ page.tsx (server) + StaffPlacementsClient.tsx (scaling & settlement island)
 │           ├── options/        #   ✅ page.tsx (server) + StaffOptionsClient.tsx (firm-wide monitor island)
 │           ├── alerts/         #   ✅ page.tsx (server) + StaffAlertsClient.tsx (island)
@@ -61,18 +65,32 @@ client-dashboard/
 │   │   ├── client.ts           # Browser Supabase client (@supabase/ssr)
 │   │   ├── server.ts           # Server Supabase client (async cookies)
 │   │   └── database.types.ts   # Generated DB types (supabase gen types)
-│   └── data/
-│       ├── queries.ts          # Data-access layer (read side) — server-only
-│       ├── compute.ts          # Pure financial helpers over DAL shapes (client-safe): posValue, dailyPL, isITM, …
-│       └── discovery.ts        # Static /invest goal + theme config (not persisted)
+│   ├── data/
+│   │   ├── queries.ts          # Data-access layer (read side) — server-only
+│   │   ├── compute.ts          # Pure financial helpers, client-safe: posValue, dailyPL, isITM, rollUpRealized
+│   │   ├── holdings.ts         # Realised-P&L reads (server-only)
+│   │   └── discovery.ts        # Static /invest goal + theme config (not persisted)
+│   ├── import/                 # Broker CSV pipeline — pure, dependency-free, shared by Next + CLI
+│   │   ├── csv.ts              #   RFC 4180 reader (broker files quote their commas properly)
+│   │   ├── normalize.ts        #   Ticker parent codes, DAY-FIRST dates, money coercion
+│   │   ├── holdings.ts         #   Holdings-snapshot parser + account/security extraction
+│   │   ├── trades.ts           #   Trade-ledger parser + the realised-P&L reducer
+│   │   ├── reconcile.ts        #   Missing-cost-basis worklist + ticker-change suggestions
+│   │   └── import.test.ts      #   28 tests (node --test)
+│   └── export/
+│       ├── order-history.ts    # Order-history CSV builder (SUMMARY/TRADE grains)
+│       └── order-history.test.ts
 ├── store/
 │   └── useDatabaseStore.ts     # Legacy Zustand store — no longer imported by any route (pending removal)
 ├── supabase/
 │   ├── config.toml             # Supabase CLI project config
 │   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
-│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle
+│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle · trade-ledger
 ├── scripts/
-│   └── seed-auth-users.mjs     # Creates demo Supabase Auth users (roles in app_metadata)
+│   ├── seed-auth-users.mjs     # Creates the staff Supabase Auth user (role in app_metadata)
+│   ├── _import-common.mjs      # Shared importer plumbing (service-role client, chunked upserts)
+│   ├── import-holdings.mjs     # Holdings snapshot → clients / accounts / securities / positions
+│   └── import-trades.mjs       # Trade ledger → trades / realized_pnl + reconciliation report
 ├── db/
 │   └── schema.sql              # Canonical schema reference (= the first migration)
 ├── docs/
@@ -98,6 +116,9 @@ client-dashboard/
 - **Data-access layer:** `lib/data/queries.ts` — server-only read functions returning denormalized, UI-ready shapes (prices/names joined from `securities`, `dte` computed from `expiry_date`), each wrapped in `React.cache`. Pure financial math lives in `lib/data/compute.ts`.
 - **Mutations:** all state changes are **Server Actions** (`app/actions/placements.ts`, `app/actions/alerts.ts`) that write to Supabase, append an `audit_log` entry, and `revalidatePath("/portal", "layout")` so the UI reflects the new state. Islands call them from event handlers.
 - **Auth & session:** **real Supabase Auth** (email + password). `signInWithPassword` (`app/actions/session.ts`) verifies credentials; the root `proxy.ts` refreshes the session cookie each request; `lib/session.ts` reads identity via `supabase.auth.getUser()` (`getActiveClientId` / `getActor`), with the workspace role in `app_metadata.role`. Only `vitti_view` (staff's inspected client) remains a cookie. Deferred: RLS, route protection, and real TOTP MFA (the login OTP screen is cosmetic).
+- **Broker data pipeline:** two CSV exports (holdings snapshot + contract-note ledger) are imported by plain-Node CLIs in `scripts/`, with all parsing and P&L logic in `lib/import/` — pure, dependency-free modules the Next server and the CLIs both load. Node 24 strips their types natively, which is why they import each other with an explicit `.ts` extension (`allowImportingTsExtensions`). See §4.5.
+- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts"`. 35 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, and CSV export grain separation.
+- **Charts:** hand-written SVG, no charting library — a diverging bar chart for realised P&L (`RealizedPnlChart.tsx`). The `--color-gain`/`--color-loss` pair was validated for colour-vision deficiency and lands in the ΔE 6–8 floor band, so polarity is carried by **bar direction and signed value labels** as well as hue.
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
 - **Fonts:** `Fraunces` (serif accent headers), `Hanken Grotesk` (clean sans body text), and `IBM Plex Mono` (financial figures and metrics).
 - **Legacy state engine:** the in-memory **Zustand** store (`useDatabaseStore.ts`) and `lib/db.ts` are fully superseded by the DAL + Server Actions and are no longer imported by any route (pending removal).
@@ -115,7 +136,7 @@ npm install --legacy-peer-deps
 ```
 
 ### 4.2 Environment
-Create `.env.local` from your Supabase project (Dashboard → Project Settings → API). The `SERVICE_ROLE` key is **server-only** — it is used solely by the auth-seed script (§4.4) and must never reach the browser:
+Create `.env.local` from your Supabase project (Dashboard → Project Settings → API). The `SERVICE_ROLE` key is **server-only** — it is used solely by the CLI scripts in `scripts/` (auth seeding §4.4, broker imports §4.5), which need to bypass RLS, and must never reach the browser:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
@@ -165,7 +186,7 @@ Add `--dry-run` to either to print the parsed totals and a P&L preview **without
 
 **Cost basis** is weighted average, which is exact for a full close and for any sale out of a single-price parcel. A partial sale from a parcel accumulated at several prices sets `realized_pnl.has_partial` so the UI marks it approximate; parcel-level FIFO would be needed for CGT-grade figures.
 
-**Known data gap.** If the ledger starts mid-history it will contain sales of units it never saw bought. Those rows set `realized_pnl.short_history`, their proceeds are counted against **zero cost**, and both the importer and `/portal/staff/holdings` say so out loud. Load an earlier trade export or an opening balance to correct it.
+**Known data gap.** If the ledger starts mid-history it will contain sales of units it never saw bought. Those rows set `realized_pnl.short_history`, their proceeds are counted against **zero cost**, and both the importer and the client's Order History tab say so out loud. The importer also proposes a fix where it can: an orphaned sale whose unit count exactly matches an unsold buy under another ticker is almost always a **ticker change**, and it is reported with the buy value to adopt. Anything else needs an earlier trade export or an opening balance.
 
 Only `SETTLED` trades reach the P&L reducer. `CANCELLED` / `REVERSAL` / `REVERSED` rows are still stored for the audit trail.
 
@@ -200,15 +221,16 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Migrated routes — staff | ✅ overview, clients, clients/[id], placements, options, alerts, audit |
 | Mutations → server actions | ✅ `app/actions/placements.ts` (placeBid, withdrawBid, scaleBids, settlePlacement, notifyBpayPayment) · `app/actions/alerts.ts` (ackAlert, addCustomAlert) |
 | Portal layout on DAL/session | ✅ server `layout.tsx` fetches session + badges + alerts; interactivity in `PortalShell.tsx` (ack + sign-out call server actions) |
-| Real auth — email + password | ✅ Supabase Auth (`signInWithPassword`) + root `proxy.ts` session refresh + `app_metadata.role`; demo users via `scripts/seed-auth-users.mjs` |
+| Real auth — email + password | ✅ Supabase Auth (`signInWithPassword`) + root `proxy.ts` session refresh + `app_metadata.role`; staff user via `scripts/seed-auth-users.mjs` (clients arrive emailless from the broker import, so their logins are not seeded) |
 | Route protection | ✅ `proxy.ts` + portal layout redirect unauthenticated → `/login`; `app/portal/staff/layout.tsx` blocks non-admins |
 | Row-Level Security | ✅ `supabase/migrations/…_enable_rls.sql` — client-own rows, `is_staff()` bypass, shared reference reads |
 | Multi-account model | ✅ `…_multi_account.sql` — `accounts` table; holdings/cash/bids gain `account_id`; client switches account via a topbar switcher, staff aggregate across accounts |
 | Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
-| Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/` (21 unit tests) |
-| Staff holdings register | ✅ `/portal/staff/holdings` — firm-wide cost base, market value, unrealised + realised P&L, expandable to company then instrument, with data-quality flags |
+| Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/`; a reconciliation report flags every sale with no cost basis and proposes a ticker-change match where the ledger itself contains one |
+| Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — contract-note ledger grouped by company under its realised result, plus a diverging bar chart ranking companies by realised P&L. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
+| Order history CSV export | ✅ `lib/export/order-history.ts` — exports the visible groups at both grains, tagged `SUMMARY` / `TRADE` in a leading column so a SUM never mixes them; money to the cent and each realised figure carries its cost-basis caveat |
 | Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
 
-> **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Remaining hardening: real **TOTP 2FA**.
+> **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Real client holdings and realised P&L now arrive through an offline broker-CSV pipeline (§4.5). Remaining hardening: real **TOTP 2FA**, a live price feed, and parcel-level cost basis.

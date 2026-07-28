@@ -6,8 +6,10 @@ import {
   getPlacements,
   getAlerts,
   getSignals,
+  getClientTrades,
   type PlacementRow,
 } from "@/lib/data/queries";
+import { getClientRealized } from "@/lib/data/holdings";
 import { ClientDetailClient } from "./ClientDetailClient";
 
 // Server Component: single client register view. Fetches the client and all of
@@ -25,7 +27,7 @@ export default async function Page({
     return <div className="text-mut text-center py-10">Client not found on registry.</div>;
   }
 
-  const [accounts, positions, options, placements, alerts, signals] =
+  const [accounts, positions, options, placements, alerts, signals, trades, realized] =
     await Promise.all([
       getAccounts(id),
       getClientPositions(id),
@@ -33,6 +35,8 @@ export default async function Page({
       getPlacements(),
       getAlerts(id),
       getSignals(),
+      getClientTrades(id),
+      getClientRealized(id),
     ]);
 
   const clientBids: PlacementRow[] = placements.filter((p) =>
@@ -52,6 +56,8 @@ export default async function Page({
       clientBids={clientBids}
       alerts={alerts}
       signalsMap={signalsMap}
+      trades={trades}
+      realized={realized}
     />
   );
 }

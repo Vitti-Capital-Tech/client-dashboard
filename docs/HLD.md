@@ -6,6 +6,7 @@ The Vitti Capital Platform is a structured, production-ready Next.js application
 The objectives of the platform are:
 - **High Fidelity UI:** Mirroring the aesthetic language of the original mock-up, including custom typography (Fraunces, Hanken Grotesk, IBM Plex Mono), HSL colors (navy, green, paper, etc.), custom option expiry urgency rails, and moneyness bars.
 - **Simulated Real-World Functions:** Stateful operations for bidding on open capital raises, scaling allocations, acknowledging system/custom notifications, monitoring option expiration, and viewing transactional audit logs.
+- **Real Broker Data:** holdings and P&L are no longer simulated. Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by an offline pipeline (§3.1d) that derives realised P&L from the trade history and reports, rather than silently patches, anything it cannot substantiate.
 - **Dual-role Workspaces:** Dynamic interfaces tailored to **Clients** (portfolio valuation, placing placement bids, options overview, AI assistant) and **Staff/Advisers** (adviser registry, scaling back raises, updating deal stages, auditing trails).
 
 ---
@@ -35,11 +36,19 @@ graph TD
         Actions -->|"insert/update + audit_log + revalidatePath"| Supa
     end
 
+    subgraph "Batch ingress (offline, out-of-band)"
+        CSV[["Broker CSV exports<br/>holdings snapshot · contract notes"]]
+        CSV --> Imp["CLI importers · scripts/import-{holdings,trades}.mjs<br/>pure logic in lib/import/"]
+        Imp -->|"service_role · bypasses RLS"| Supa
+    end
+
     F -->|"read"| DAL
     G -->|"read"| DAL
     F -->|"mutate (place/withdraw bid, ack/create alert, BPAY)"| Actions
     G -->|"mutate (scale, settle, ack/create alert, setViewClient)"| Actions
 ```
+
+> **Two write paths, deliberately separate.** Server actions handle *transactional* change originated by a person in the app. The broker importers handle *bulk reconciliation* against an external system of record — they run offline, as `service_role`, and rebuild derived tables wholesale. Real client holdings enter the platform only through the second path; nothing in the UI writes `positions` or `trades`.
 
 > Every interactive route follows a **server page → client island** split: the Server Component resolves the active client (`getActiveClientId`), fetches from the DAL with `Promise.all`, and passes data as props to a `"use client"` island that keeps the interactivity and calls server actions (e.g. `positions/PositionsClient.tsx`, `placements/PlacementsClient.tsx`, `staff/placements/StaffPlacementsClient.tsx`). Pure-display routes (`insights/`) need no island.
 
@@ -67,11 +76,26 @@ Migrated routes never touch Zustand — they read Supabase through a server-only
 - **Authorization (Stage 8):** enforced at two layers — **route protection** (`proxy.ts` + portal layout redirect unauthenticated → `/login`; `staff/layout.tsx` blocks non-admins from the staff area) and **Postgres RLS** (LLD §8.11): every DAL read and server-action write runs under the user session, so the database itself guarantees a client only ever touches their own rows while staff (`is_staff()`) see all. Still deferred: real TOTP MFA (the login's OTP screen is cosmetic).
 
 ### 3.1c Server Actions (`app/actions/`) — the write path
-All mutations are `"use server"` functions that resolve the actor via `getActor()`, write directly to Supabase, insert an `audit_log` row, and call `revalidatePath("/portal", "layout")` so every open surface re-renders with fresh data. They replace the legacy Zustand `mutate*` functions one-for-one (see the LLD §9 mapping):
+All mutations are `"use server"` functions that resolve the actor via `getActor()`, write directly to Supabase, insert an `audit_log` row, and call `revalidatePath("/portal", "layout")` so every open surface re-renders with fresh data. They replace the legacy Zustand `mutate*` functions one-for-one (see the LLD §8.8 mapping):
 - **`placements.ts`** — `placeBid`, `withdrawBid`, `scaleBids`, `settlePlacement`, `notifyBpayPayment`. `settlePlacement` carries the settlement engine: it upserts the placement code as a tradable `security`, issues `positions` for each allotted bid, and inserts attaching `option_holdings` (parsing the option ratio from `opts`).
 - **`alerts.ts`** — `ackAlert`, `addCustomAlert` (upserts the watchlist row + inserts a triggered `price` alert).
 - **`session.ts`** — `signInWithPassword`, `setViewClient`, `setActiveAccount`, `signOut` (cookie/session writes).
 - **`accounts.ts`** — `createAccount` (client self-service), `requestAccountMerge` (client → pending request), `decideAccountMerge` (staff approve/reject; approval runs the merge — see LLD §8.13).
+
+### 3.1d Broker Data Pipeline (`lib/import/`, `scripts/import-*.mjs`) — the batch ingress
+
+Real client holdings come from two broker CSV exports that answer different questions, and are therefore modelled as two sources rather than merged into one:
+
+| Export | Answers | Owns |
+|---|---|---|
+| **Holdings snapshot** | "what is held right now" — units, average cost, **market price** | `clients`, `accounts`, `securities`, `positions` |
+| **Trade ledger** (contract notes) | "how we got here" — BUY/SELL, units, net value | `trades`, and the derived `realized_pnl` |
+
+Neither can do the other's job: a snapshot cannot express what was made on units already sold, and a ledger that starts mid-history cannot value what is still held. Keeping both, each owning its own tables, means neither has to lie.
+
+- **All logic is pure and shared.** Parsing, ticker normalization, the cost-basis reducer and reconciliation live in `lib/import/` with no I/O, no `server-only`, and no dependencies — so the same code is unit-tested, runs in the CLIs today, and could back a staff upload UI tomorrow without a rewrite.
+- **Idempotent by construction.** The snapshot import is a full replace scoped to the accounts in the file; the ledger upserts on `(cnote, raw_security, side)`. Re-running any export converges to the same rows.
+- **Derived tables are never hand-edited.** `realized_pnl` is dropped and rebuilt by replaying each affected account's whole stored ledger — not just the rows in the file — so a partial export still yields correct cumulative figures.
 
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
@@ -104,7 +128,14 @@ The portal layout is fully responsive natively using CSS media queries (Tailwind
 3. **Desk Notice:** The `PortalShell` slide-out drawer (and the alerts pages) render the alerts, unacknowledged first.
 4. **Acknowledgement:** Clicking "Ack" calls the `ackAlert` server action, which sets `acknowledged`/`acknowledged_at`/`acknowledged_by` and revalidates the portal, moving it down the priority list.
 
-### 4.3 Account Lifecycle (create + approved merge)
+### 4.3 Broker Reconciliation Lifecycle (holdings + realised P&L)
+1. **Snapshot import:** `scripts/import-holdings.mjs` parses the holdings export, upserts every `securities` code (linking derivatives to their ordinary via `parent_code`), creates a client + account per broker account number, and **fully replaces** `positions` for those accounts. Market Price lands in `securities.last_price` — currently the platform's only price source.
+2. **Ledger import:** `scripts/import-trades.mjs` upserts contract notes into `trades` by note number. Non-settled rows (`CANCELLED` / `REVERSAL` / `REVERSED`) are stored for the audit trail but never reach P&L.
+3. **Replay:** the reducer walks each account's settled ledger chronologically, grouped by **parent** ticker so a placement bought as `EOSXX` and sold as `EOS` nets as the one round trip it was. Cost basis is weighted average; because the broker's `Value` column is already net of brokerage and GST, realised P&L is fee-inclusive without extra arithmetic. Results are written to `realized_pnl`.
+4. **Reconciliation:** the importer reports what it could not establish — sales with no matching purchase, and ledger open-units that disagree with the snapshot. Where an orphaned sale's unit count exactly matches an unsold buy under **another ticker** it proposes a **ticker change** with the buy value to adopt (the real `JBY → BKB` case); ambiguous or option-to-ordinary matches are never auto-proposed.
+5. **Surfacing:** `/portal/staff/clients/[id]` → **Order history** renders the ledger grouped by company under its realised result, with a diverging bar chart ranking companies and every unbacked figure flagged. The flags travel into the CSV export too, so a provisional number never reaches a spreadsheet without its caveat. (See LLD §8.14–8.15.)
+
+### 4.4 Account Lifecycle (create + approved merge)
 1. **Open account:** A client visits `/portal/client/accounts` and creates a new account (`createAccount`) — it appears immediately in their switcher (empty, s708 "verification pending").
 2. **Request merge:** The client requests merging one account into another (`requestAccountMerge`) → a `pending` `account_merge_requests` row; **no data moves yet**.
 3. **Desk review:** Staff see the request at `/portal/staff/merge-requests` (with a nav badge) and **Approve** or **Reject** (`decideAccountMerge`).

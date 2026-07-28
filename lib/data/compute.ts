@@ -71,3 +71,64 @@ export function unlistedValue(options: OptionRow[]): number {
     0,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Realized P&L (from the trade ledger)
+// ---------------------------------------------------------------------------
+// These live here rather than in lib/data/holdings.ts because that module is
+// `server-only` and Client Components need to re-aggregate realized rows when
+// the account filter changes.
+
+/** Realized side of a holding, replayed from the settled trade ledger. */
+export type RealizedSummary = {
+  realizedPl: number;
+  proceeds: number;
+  costOfSold: number;
+  unitsSold: number;
+  fees: number;
+  tradeCount: number;
+  firstTrade: string | null;
+  lastTrade: string | null;
+  /** WAC was an approximation here (partial close of a mixed-price parcel). */
+  hasPartial: boolean;
+  /** Sold units the ledger never saw bought — realized P&L is overstated. */
+  shortHistory: boolean;
+};
+
+/** Realized P&L at its natural grain: one row per account × parent code. */
+export type RealizedRow = RealizedSummary & {
+  accountId: string;
+  parent: string;
+};
+
+/** Collapse account-grain rows to one entry per company. */
+export function rollUpRealized(
+  rows: RealizedRow[],
+): Map<string, RealizedSummary> {
+  const byParent = new Map<string, RealizedSummary>();
+
+  for (const r of rows) {
+    const prev = byParent.get(r.parent);
+    byParent.set(r.parent, {
+      realizedPl: (prev?.realizedPl ?? 0) + r.realizedPl,
+      proceeds: (prev?.proceeds ?? 0) + r.proceeds,
+      costOfSold: (prev?.costOfSold ?? 0) + r.costOfSold,
+      unitsSold: (prev?.unitsSold ?? 0) + r.unitsSold,
+      fees: (prev?.fees ?? 0) + r.fees,
+      tradeCount: (prev?.tradeCount ?? 0) + r.tradeCount,
+      // Rows arrive unordered, so take the true extremes, not the first seen.
+      firstTrade:
+        !prev?.firstTrade || (r.firstTrade && r.firstTrade < prev.firstTrade)
+          ? r.firstTrade
+          : prev.firstTrade,
+      lastTrade:
+        !prev?.lastTrade || (r.lastTrade && r.lastTrade > prev.lastTrade)
+          ? r.lastTrade
+          : prev.lastTrade,
+      hasPartial: (prev?.hasPartial ?? false) || r.hasPartial,
+      shortHistory: (prev?.shortHistory ?? false) || r.shortHistory,
+    });
+  }
+
+  return byParent;
+}

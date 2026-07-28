@@ -252,6 +252,33 @@ export type AuditRow = {
   clientId: string | null;
 };
 
+/**
+ * One contract-note line from the broker trade ledger. `value` is the NET cash
+ * flow (BUY adds fees, SELL deducts them), which is why P&L math never has to
+ * touch brokerage or GST separately.
+ */
+export type TradeRow = {
+  id: string;
+  cnote: string;
+  accountId: string;
+  clientId: string;
+  code: string; // as traded, e.g. 'EOSXX'
+  parent: string; // rollup code, e.g. 'EOS'
+  name: string; // joined from securities
+  instrument: string | null; // FPO | INSTPLAC | IPO | PLACEMENT…
+  side: Enums<"trade_side">;
+  tradeDate: string;
+  units: number;
+  avgPrice: number;
+  consideration: number;
+  brokerage: number;
+  otherCharges: number;
+  gst: number;
+  value: number;
+  adviser: string | null;
+  status: string; // SETTLED | CANCELLED | REVERSAL | REVERSED
+};
+
 // ---------------------------------------------------------------------------
 // Market master data
 // ---------------------------------------------------------------------------
@@ -483,6 +510,50 @@ export const getClientOptions = cache(
     ]);
     if (error) throw error;
     return data.map((o) => toOption(o, securityMap));
+  },
+);
+
+/**
+ * A client's full contract-note history, newest first, across all of their
+ * accounts. Non-settled rows (CANCELLED / REVERSAL / REVERSED) are included
+ * deliberately — they never reach P&L, but omitting them from the order history
+ * would hide contract notes the broker actually issued.
+ */
+export const getClientTrades = cache(
+  async (clientId: string): Promise<TradeRow[]> => {
+    const supabase = await createClient();
+    const [{ data, error }, securityMap] = await Promise.all([
+      supabase
+        .from("trades")
+        .select("*")
+        .eq("client_id", clientId)
+        .order("trade_date", { ascending: false })
+        .order("cnote", { ascending: false }),
+      getSecurityMap(),
+    ]);
+    if (error) throw error;
+
+    return data.map((t) => ({
+      id: t.id,
+      cnote: t.cnote,
+      accountId: t.account_id,
+      clientId: t.client_id,
+      code: t.security_code,
+      parent: t.parent_code,
+      name: securityMap.get(t.security_code)?.name ?? t.security_code,
+      instrument: t.instrument,
+      side: t.side,
+      tradeDate: t.trade_date,
+      units: t.units,
+      avgPrice: t.avg_price,
+      consideration: t.consideration,
+      brokerage: t.brokerage,
+      otherCharges: t.other_charges,
+      gst: t.gst,
+      value: t.value,
+      adviser: t.adviser,
+      status: t.status,
+    }));
   },
 );
 
