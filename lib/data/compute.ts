@@ -1,4 +1,9 @@
-import type { Position, OptionRow } from "./queries";
+import type { Position, OptionRow, TradeRow } from "./queries";
+import {
+  replayLedger,
+  type SellAttribution,
+} from "../import/trades.ts";
+import { money } from "../import/normalize.ts";
 
 /**
  * Pure financial helpers over DAL shapes. No server-only imports (types are
@@ -103,6 +108,171 @@ export type RealizedRow = RealizedSummary & {
   accountId: string;
   parent: string;
 };
+
+// ---------------------------------------------------------------------------
+// Realized P&L over time
+// ---------------------------------------------------------------------------
+
+/** One period on the P&L-over-time chart. */
+export type RealizedPeriod = {
+  /** `YYYY-MM` — sorts lexicographically, which is also chronologically. */
+  key: string;
+  label: string; // 'Mar 26'
+  realizedPl: number;
+  proceeds: number;
+  costOfSold: number;
+  saleCount: number;
+  /** Companies that contributed, largest absolute result first. */
+  contributors: { parent: string; realizedPl: number; noCostBasis: boolean }[];
+  /** At least one sale in this period drew on no cost basis. */
+  hasUncosted: boolean;
+};
+
+/**
+ * Attribute realised P&L to the individual sales that produced it, by replaying
+ * the DAL's trade rows through the **same** cost-basis walk the importer uses.
+ * One implementation, so the dated chart and the stored `realized_pnl` totals
+ * cannot drift apart.
+ *
+ * Pass trades already scoped to one account — the account dimension is dropped
+ * here (`scope: ""`) because the caller has filtered.
+ */
+export function attributeSells(trades: TradeRow[]): SellAttribution[] {
+  return replayLedger(
+    trades.map((t) => ({
+      scope: "",
+      parent: t.parent,
+      cnote: t.cnote,
+      side: t.side,
+      tradeDate: t.tradeDate,
+      units: t.units,
+      value: t.value,
+      status: t.status,
+      fees: t.brokerage + t.otherCharges + t.gst,
+    })),
+  ).sells;
+}
+
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function monthLabel(key: string): string {
+  const [y, m] = key.split("-");
+  return `${MONTHS[Number(m) - 1]} ${y.slice(2)}`;
+}
+
+/**
+ * Bucket realised P&L by calendar month.
+ *
+ * The per-ticker rollup in `realized_pnl` cannot answer "how much did we make
+ * in March" — it has no dates on the money. This replays the ledger to
+ * attribute each realised dollar to the sale that produced it, then groups by
+ * month.
+ *
+ * **Empty months are filled in.** A time axis that silently skips the months
+ * nothing happened in compresses the gaps and makes activity look steadier
+ * than it was.
+ */
+export function realizedByMonth(
+  sells: SellAttribution[],
+  /**
+   * Per-ticker P&L corrections from the summary table, so the chart totals
+   * agree with it. An override is a company-level figure with no date of its
+   * own, so its delta is spread across that company's sale months **pro-rata
+   * by units sold** — which is exactly where the corrected cost would have
+   * landed had it been in the ledger. A company with no sales gets no chart
+   * impact at all: correcting an unsold position changes unrealised P&L, and
+   * nothing unrealised belongs on a realised chart.
+   */
+  deltaByTicker: Map<string, number> = new Map(),
+): RealizedPeriod[] {
+  if (sells.length === 0) return [];
+
+  if (deltaByTicker.size > 0) {
+    const soldByTicker = new Map<string, number>();
+    for (const s of sells) {
+      soldByTicker.set(s.parent, (soldByTicker.get(s.parent) ?? 0) + s.units);
+    }
+    sells = sells.map((s) => {
+      const delta = deltaByTicker.get(s.parent);
+      const totalUnits = soldByTicker.get(s.parent) ?? 0;
+      if (!delta || totalUnits <= 0) return s;
+      return { ...s, realizedPl: s.realizedPl + delta * (s.units / totalUnits) };
+    });
+  }
+
+  const byKey = new Map<string, RealizedPeriod>();
+
+  for (const s of sells) {
+    const key = s.tradeDate.slice(0, 7); // YYYY-MM
+    let p = byKey.get(key);
+    if (!p) {
+      p = {
+        key,
+        label: monthLabel(key),
+        realizedPl: 0,
+        proceeds: 0,
+        costOfSold: 0,
+        saleCount: 0,
+        contributors: [],
+        hasUncosted: false,
+      };
+      byKey.set(key, p);
+    }
+
+    p.realizedPl += s.realizedPl;
+    p.proceeds += s.proceeds;
+    p.costOfSold += s.costOfSold;
+    p.saleCount += 1;
+    p.hasUncosted = p.hasUncosted || s.noCostBasis;
+
+    // Several sales of one company in a month read as one contributor.
+    const existing = p.contributors.find((c) => c.parent === s.parent);
+    if (existing) {
+      existing.realizedPl += s.realizedPl;
+      existing.noCostBasis = existing.noCostBasis || s.noCostBasis;
+    } else {
+      p.contributors.push({
+        parent: s.parent,
+        realizedPl: s.realizedPl,
+        noCostBasis: s.noCostBasis,
+      });
+    }
+  }
+
+  const keys = [...byKey.keys()].sort();
+  const out: RealizedPeriod[] = [];
+
+  // Walk every month from first to last, inserting the quiet ones.
+  const [startY, startM] = keys[0].split("-").map(Number);
+  const [endY, endM] = keys[keys.length - 1].split("-").map(Number);
+
+  for (let y = startY, m = startM; y < endY || (y === endY && m <= endM); ) {
+    const key = `${y}-${String(m).padStart(2, "0")}`;
+    out.push(
+      byKey.get(key) ?? {
+        key,
+        label: monthLabel(key),
+        realizedPl: 0,
+        proceeds: 0,
+        costOfSold: 0,
+        saleCount: 0,
+        contributors: [],
+        hasUncosted: false,
+      },
+    );
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+
+  for (const p of out) {
+    p.realizedPl = money(p.realizedPl);
+    p.proceeds = money(p.proceeds);
+    p.costOfSold = money(p.costOfSold);
+    p.contributors.sort((a, b) => Math.abs(b.realizedPl) - Math.abs(a.realizedPl));
+  }
+
+  return out;
+}
 
 /** Collapse account-grain rows to one entry per company. */
 export function rollUpRealized(

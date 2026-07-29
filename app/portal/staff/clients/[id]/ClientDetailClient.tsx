@@ -12,14 +12,24 @@ import type {
   SignalRow,
   TradeRow,
 } from "@/lib/data/queries";
-import { rollUpRealized, type RealizedRow } from "@/lib/data/compute";
+import type { PnlOverrideRow } from "@/lib/data/holdings";
+import {
+  rollUpRealized,
+  attributeSells,
+  realizedByMonth,
+  type RealizedRow,
+} from "@/lib/data/compute";
 import {
   buildPnlSummary,
   buildPnlSummaryCsv,
+  grandTotal,
   pnlSummaryFilename,
+  SUMMARY_HEADERS,
   type HeldPosition,
+  type PnlOverride,
 } from "@/lib/export/order-history";
 import { buildPnlSummaryXlsx } from "@/app/actions/exports";
+import { PnlRow } from "./PnlRow";
 import { RealizedPnlChart } from "./RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
 
@@ -102,6 +112,7 @@ export function ClientDetailClient({
   signalsMap,
   trades,
   realized,
+  overrides,
 }: {
   client: ClientRow;
   accounts: AccountRow[];
@@ -112,6 +123,7 @@ export function ClientDetailClient({
   signalsMap: Record<string, SignalRow>;
   trades: TradeRow[];
   realized: RealizedRow[];
+  overrides: PnlOverrideRow[];
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<
@@ -121,6 +133,8 @@ export function ClientDetailClient({
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
   const [acctFilter, setAcctFilter] = useState<string>("all");
+  // Which summary row has its inline editor open, by ticker.
+  const [editing, setEditing] = useState<string | null>(null);
 
   const cid = client.id;
   const inAcct = (accountId: string | null) =>
@@ -135,10 +149,6 @@ export function ClientDetailClient({
   // Realised P&L arrives at account grain so it honours the same filter as the
   // table above it — otherwise the chart and the rows would disagree.
   const realizedMap = rollUpRealized(realized.filter((r) => inAcct(r.accountId)));
-  const chartRows = [...realizedMap.entries()].map(([parent, r]) => ({
-    parent,
-    ...r,
-  }));
 
   // Settled trades are the only ones that moved money; the rest are shown for
   // completeness but excluded from every total below.
@@ -158,10 +168,8 @@ export function ClientDetailClient({
     0,
   );
 
-  // Group the ledger by parent ticker so each company's trades sit together
-  // under its realised result — the same tickers, in the same order, as the
-  // chart above. Reading down the table then answers "why is that bar that
-  // size", which a flat chronological list cannot.
+  // Group the ledger by parent ticker. This feeds the P&L summary that the
+  // table and both exports render — one company per row.
   const tradeGroups = (() => {
     const byParent = new Map<string, { name: string; trades: TradeRow[] }>();
     for (const t of visibleTrades) {
@@ -216,6 +224,33 @@ export function ClientDetailClient({
     return m;
   })();
 
+  // ONE array drives the table, the CSV and the .xlsx. That is what makes the
+  // three impossible to disagree — they are renderings of the same rows, not
+  // three separate assemblies of the same idea.
+  const overrideMap = new Map<string, PnlOverride>(
+    overrides
+      .filter((o) => inAcct(o.accountId))
+      .map((o) => [o.parent, { ...o, parent: o.parent }]),
+  );
+  const summaryRows = buildPnlSummary(tradeGroups, heldByParent, overrideMap);
+
+  const summaryTotal = grandTotal(summaryRows);
+
+  // The chart needs realised P&L WITH dates on it, which the per-ticker rollup
+  // cannot supply. Replaying the visible ledger through the same cost-basis
+  // walk the importer uses gives per-sale attribution, which then buckets by
+  // month — so the chart and the table are two views of one number.
+  //
+  // Desk edits carry no date of their own, so each corrected company's delta is
+  // handed to the bucketer to spread across that company's sale months. Without
+  // it an edited row would move the table's total and leave the chart behind.
+  const chartDeltas = new Map(
+    summaryRows
+      .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
+      .map((r) => [r.ticker, r.pnl - r.computed.pnl]),
+  );
+  const chartPeriods = realizedByMonth(attributeSells(visibleTrades), chartDeltas);
+
   /** Export honours the account filter, so the file always matches the screen. */
   const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -241,10 +276,8 @@ export function ClientDetailClient({
       ext,
     );
 
-  const summaryRows = () => buildPnlSummary(tradeGroups, heldByParent);
-
   const exportCsv = () =>
-    download(buildPnlSummaryCsv(summaryRows()), exportName("csv"), "text/csv");
+    download(buildPnlSummaryCsv(summaryRows), exportName("csv"), "text/csv");
 
   // The workbook is built by a server action (ExcelJS stays out of the client
   // bundle), so this one is async and the button reflects that.
@@ -253,7 +286,7 @@ export function ClientDetailClient({
     setExporting(true);
     try {
       const base64 = await buildPnlSummaryXlsx(
-        summaryRows(),
+        summaryRows,
         `${client.name} — P&L summary`,
       );
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -495,17 +528,21 @@ export function ClientDetailClient({
             ))}
           </div>
 
-          <RealizedPnlChart rows={chartRows} />
+          <RealizedPnlChart periods={chartPeriods} />
 
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
             <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-baseline justify-between">
-              <b className="text-sm font-semibold text-ink">Order history</b>
-              <div className="flex items-center gap-3">
-                <span className="text-[11px] text-mut">
-                  {settledTrades.length} settled
+              <div>
+                <b className="text-sm font-semibold text-ink">P&amp;L by company</b>
+                <div className="text-[11px] text-mut mt-0.5">
+                  {summaryRows.length} companies from {settledTrades.length} settled
+                  trade{settledTrades.length === 1 ? "" : "s"}
                   {visibleTrades.length !== settledTrades.length &&
-                    ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed`}
-                </span>
+                    ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed excluded`}
+                  {" · exports match this table exactly"}
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
                 {/* CSV for data, Excel for the colour-coded copy — plain CSV
                     cannot carry a fill. */}
                 <button
@@ -531,141 +568,66 @@ export function ClientDetailClient({
               <table className="w-full border-collapse text-left text-xs font-medium">
                 <thead>
                   <tr className="border-b border-line text-mut select-none">
-                    <th className="px-4.5 py-2.5">Date</th>
-                    <th className="px-4.5 py-2.5">Type</th>
-                    <th className="px-4.5 py-2.5">Code</th>
-                    <th className="px-4.5 py-2.5">Stock</th>
-                    <th className="px-4.5 py-2.5 text-right">Units</th>
-                    <th className="px-4.5 py-2.5 text-right">Avg price</th>
-                    <th className="px-4.5 py-2.5 text-right">Brokerage</th>
-                    <th className="px-4.5 py-2.5 text-right">Value</th>
-                    <th className="px-4.5 py-2.5 text-center">Status</th>
+                    {SUMMARY_HEADERS.map((h, i) => (
+                      <th
+                        key={h}
+                        className={`px-4.5 py-2.5 ${i >= 2 && i <= 6 ? "text-right" : i === 7 ? "text-center" : ""}`}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                    <th className="px-4.5 py-2.5" />
                   </tr>
                 </thead>
                 <tbody>
-                  {tradeGroups.length === 0 ? (
+                  {summaryRows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-4.5 py-10 text-center text-mut">
+                      <td colSpan={10} className="px-4.5 py-10 text-center text-mut">
                         No contract notes imported for this client.
                       </td>
                     </tr>
                   ) : (
-                    tradeGroups.map((g) => {
-                      const rz = g.realized;
-                      const sold = (rz?.unitsSold ?? 0) > 0;
-                      const pl = rz?.realizedPl ?? 0;
+                    <>
+                      {summaryRows.map((r) => (
+                        <PnlRow
+                          // Remount when the editor opens or closes, so its
+                          // inputs always re-seed from the values currently in
+                          // force rather than whatever was typed last time.
+                          key={`${r.ticker}:${editing === r.ticker}`}
+                          row={r}
+                          editing={editing === r.ticker}
+                          onEdit={() => setEditing(r.ticker)}
+                          onClose={() => setEditing(null)}
+                          accountId={acctFilter === "all" ? null : acctFilter}
+                          clientId={cid}
+                          money2={money2}
+                        />
+                      ))}
 
-                      return (
-                        <React.Fragment key={g.parent}>
-                          {/* Company header — carries the realised result that
-                              the bar above is showing. */}
-                          <tr className="border-t border-line bg-[#faf9f5]">
-                            <td colSpan={4} className="px-4.5 py-2.5">
-                              <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink">
-                                {g.parent}
-                              </span>
-                              <span className="ml-2 text-mut">{g.name}</span>
-                              {rz?.shortHistory && (
-                                <span
-                                  title="No purchase for these units exists in the ledger, so the sale is booked against zero cost and this realised figure is overstated. Needs an opening balance or an earlier statement."
-                                  className="ml-1.5 rounded-full bg-loss-bg px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-loss-d cursor-help"
-                                >
-                                  no cost basis
-                                </span>
-                              )}
-                            </td>
-                            <td
-                              colSpan={4}
-                              className="px-4.5 py-2.5 text-right text-[11px] text-mut"
-                            >
-                              {g.trades.length} trade
-                              {g.trades.length === 1 ? "" : "s"}
-                              {sold && (
-                                <>
-                                  {" · "}
-                                  {rz!.unitsSold.toLocaleString("en-AU")} units sold
-                                  {" · realised "}
-                                  <b
-                                    className={`font-mono text-[12px] ${pl >= 0 ? "text-gain" : "text-loss-d"}`}
-                                  >
-                                    {pl < 0 ? "-" : "+"}${money2(Math.abs(pl))}
-                                  </b>
-                                </>
-                              )}
-                              {!sold && " · still open"}
-                            </td>
-                            <td className="px-4.5 py-2.5" />
-                          </tr>
-
-                          {g.trades.map((t) => {
-                            const settled = t.status === "SETTLED";
-                            const isBuy = t.side === "BUY";
-
-                            return (
-                              <tr
-                                key={t.id}
-                                className={`border-t border-[#f0ede5] hover:bg-[#faf9f5] ${settled ? "" : "opacity-45"}`}
-                              >
-                                <td className="px-4.5 py-3 pl-7 font-mono text-mut whitespace-nowrap">
-                                  {new Date(
-                                    `${t.tradeDate}T00:00:00Z`,
-                                  ).toLocaleDateString("en-AU", {
-                                    day: "2-digit",
-                                    month: "short",
-                                    year: "2-digit",
-                                    timeZone: "UTC",
-                                  })}
-                                </td>
-                                <td className="px-4.5 py-3">
-                                  <span
-                                    className={`rounded-[5px] px-1.5 py-0.5 text-[10.5px] font-bold ${isBuy ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"}`}
-                                  >
-                                    {t.side}
-                                  </span>
-                                </td>
-                                <td className="px-4.5 py-3">
-                                  {/* Within a group the parent is the header, so
-                                      only a differing traded code is worth ink. */}
-                                  {t.code === g.parent ? (
-                                    <span className="text-mut-d">—</span>
-                                  ) : (
-                                    <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">
-                                      {t.code}
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-4.5 py-3 text-mut">
-                                  {t.instrument ?? "—"}
-                                </td>
-                                <td className="px-4.5 py-3 text-right font-mono">
-                                  {t.units.toLocaleString("en-AU")}
-                                </td>
-                                <td className="px-4.5 py-3 text-right font-mono">
-                                  ${t.avgPrice.toFixed(t.avgPrice < 1 ? 4 : 2)}
-                                </td>
-                                <td className="px-4.5 py-3 text-right font-mono text-mut">
-                                  {t.brokerage + t.otherCharges + t.gst === 0
-                                    ? "—"
-                                    : `$${(t.brokerage + t.otherCharges + t.gst).toFixed(2)}`}
-                                </td>
-                                <td
-                                  className={`px-4.5 py-3 text-right font-mono font-semibold ${isBuy ? "text-ink" : "text-gain"}`}
-                                >
-                                  {isBuy ? "-" : "+"}${money2(t.value)}
-                                </td>
-                                <td className="px-4.5 py-3 text-center">
-                                  <span
-                                    className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${settled ? "bg-paper-2 text-mut" : "bg-amber-bg text-amber-d"}`}
-                                  >
-                                    {t.status}
-                                  </span>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </React.Fragment>
-                      );
-                    })
+                      {/* Grand Total — the same three columns the exports sum.
+                          Quantities are not totalled: units of different
+                          companies are not the same thing. */}
+                      <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
+                        <td className="px-4.5 py-3" colSpan={2}>
+                          Grand Total
+                        </td>
+                        <td className="px-4.5 py-3" />
+                        <td className="px-4.5 py-3" />
+                        <td className="px-4.5 py-3 text-right font-mono">
+                          ${money2(summaryTotal.buyPrice)}
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono">
+                          ${money2(summaryTotal.sellOrCurrent)}
+                        </td>
+                        <td
+                          className={`px-4.5 py-3 text-right font-mono ${summaryTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                        >
+                          {summaryTotal.pnl < 0 ? "-" : ""}$
+                          {money2(Math.abs(summaryTotal.pnl))}
+                        </td>
+                        <td className="px-4.5 py-3" colSpan={3} />
+                      </tr>
+                    </>
                   )}
                 </tbody>
               </table>

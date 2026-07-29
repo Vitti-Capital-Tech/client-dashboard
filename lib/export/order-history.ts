@@ -40,9 +40,37 @@ export type HeldPosition = {
   hasPrice: boolean;
 };
 
+/**
+ * A desk correction to one row's inputs. Every field is optional and `null`
+ * means "keep the computed value", so an override patches the derivation
+ * rather than replacing it — clearing a field puts it back on the ledger.
+ */
+export type PnlOverride = {
+  parent: string;
+  buyQty: number | null;
+  sellQty: number | null;
+  buyPrice: number | null;
+  sellOrCurrent: number | null;
+  note: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+/** Which fields on a row came from an override rather than the sources. */
+export type OverriddenFields = {
+  buyQty: boolean;
+  sellQty: boolean;
+  buyPrice: boolean;
+  sellOrCurrent: boolean;
+};
+
 export type PnlSummaryRow = {
   ticker: string;
   name: string;
+  /** Units the LEDGER saw bought/sold, unless overridden. Zero on a holding
+   *  that predates the export window — `type` is what explains that. */
+  buyQty: number;
+  sellQty: number;
   buyPrice: number;
   sellOrCurrent: number;
   pnl: number;
@@ -50,6 +78,19 @@ export type PnlSummaryRow = {
   type: string;
   /** Something does not add up — the row needs a human before it is trusted. */
   flagged: boolean;
+
+  /** True if any field on this row was set by hand. */
+  edited: boolean;
+  overridden: OverriddenFields;
+  note: string | null;
+  /** What the sources said, kept so the UI can show what was changed from. */
+  computed: {
+    buyQty: number;
+    sellQty: number;
+    buyPrice: number;
+    sellOrCurrent: number;
+    pnl: number;
+  };
 };
 
 /**
@@ -93,12 +134,27 @@ function classify(
     : { type: "Full exit", flagged: false };
 }
 
-/** Build one summary row per company across both sources. */
+/**
+ * Build one summary row per company across both sources, then apply any desk
+ * overrides on top.
+ *
+ * P&L is never taken from an override — it stays `sell − buy`, recomputed from
+ * whichever values are in force. That is what keeps a hand-edited row internally
+ * consistent instead of letting someone type a total that its own columns
+ * contradict.
+ */
 export function buildPnlSummary(
   groups: ExportGroup[],
   held: Map<string, HeldPosition>,
+  overrides: Map<string, PnlOverride> = new Map(),
 ): PnlSummaryRow[] {
-  const tickers = new Set<string>([...groups.map((g) => g.parent), ...held.keys()]);
+  const tickers = new Set<string>([
+    ...groups.map((g) => g.parent),
+    ...held.keys(),
+    // An override can exist for a company that has since dropped out of both
+    // sources; it must not silently vanish along with them.
+    ...overrides.keys(),
+  ]);
   const nameOf = new Map(groups.map((g) => [g.parent, g.name]));
 
   const rows: PnlSummaryRow[] = [];
@@ -106,26 +162,59 @@ export function buildPnlSummary(
   for (const ticker of tickers) {
     const rz = groups.find((g) => g.parent === ticker)?.realized ?? null;
     const h = held.get(ticker);
+    const o = overrides.get(ticker);
 
-    const buyPrice = (rz?.costOfSold ?? 0) + (h?.costBase ?? 0);
-    const sellOrCurrent = (rz?.proceeds ?? 0) + (h?.marketValue ?? 0);
-    const { type, flagged } = classify(
-      rz?.unitsBought ?? 0,
-      rz?.unitsSold ?? 0,
-      h?.qty ?? 0,
-    );
+    const computed = {
+      buyQty: rz?.unitsBought ?? 0,
+      sellQty: rz?.unitsSold ?? 0,
+      buyPrice: (rz?.costOfSold ?? 0) + (h?.costBase ?? 0),
+      sellOrCurrent: (rz?.proceeds ?? 0) + (h?.marketValue ?? 0),
+      pnl: 0,
+    };
+    computed.pnl = computed.sellOrCurrent - computed.buyPrice;
+
+    const overridden: OverriddenFields = {
+      buyQty: o?.buyQty != null,
+      sellQty: o?.sellQty != null,
+      buyPrice: o?.buyPrice != null,
+      sellOrCurrent: o?.sellOrCurrent != null,
+    };
+    const edited =
+      overridden.buyQty ||
+      overridden.sellQty ||
+      overridden.buyPrice ||
+      overridden.sellOrCurrent;
+
+    const buyQty = o?.buyQty ?? computed.buyQty;
+    const sellQty = o?.sellQty ?? computed.sellQty;
+    const buyPrice = o?.buyPrice ?? computed.buyPrice;
+    const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
+
+    // Classify against the values actually in force — correcting the quantities
+    // is precisely how a `CHECK - …` row becomes a clean `Full exit`.
+    const { type, flagged } = classify(buyQty, sellQty, h?.qty ?? 0);
+
+    const withPrice = h && !h.hasPrice ? `${type} (no market price)` : type;
 
     rows.push({
       ticker,
       name: nameOf.get(ticker) ?? ticker,
+      buyQty,
+      sellQty,
       buyPrice,
       sellOrCurrent,
       pnl: sellOrCurrent - buyPrice,
       openPosition: (h?.qty ?? 0) > 0,
       // A held position with no snapshot price cannot be valued, so its "P&L"
       // would read as a total loss. Say so instead.
-      type: h && !h.hasPrice ? `${type} (no market price)` : type,
+      type: edited ? `${withPrice} (edited)` : withPrice,
+      // An edited row is no longer a pure derivation. That is not an error, but
+      // it is a fact the reader is entitled to, so it never travels silently.
       flagged: flagged || (!!h && !h.hasPrice),
+      edited,
+      overridden,
+      note: o?.note ?? null,
+      computed,
     });
   }
 
@@ -145,9 +234,12 @@ export function grandTotal(rows: PnlSummaryRow[]) {
 // CSV
 // ---------------------------------------------------------------------------
 
-const HEADERS = [
+/** Shared by the CSV, the .xlsx and the on-screen table, so all three agree. */
+export const SUMMARY_HEADERS = [
   "Row Labels",
   "Company",
+  "Buy Qty",
+  "Sell Qty",
   "Buy Price",
   "Sell Price / Current Price",
   "PnL",
@@ -178,11 +270,13 @@ export function buildPnlSummaryCsv(rows: PnlSummaryRow[]): string {
   const total = grandTotal(rows);
 
   const lines = [
-    HEADERS.join(","),
+    SUMMARY_HEADERS.join(","),
     ...rows.map((r) =>
       [
         r.ticker,
         r.name,
+        r.buyQty,
+        r.sellQty,
         n2(r.buyPrice),
         n2(r.sellOrCurrent),
         n2(r.pnl),
@@ -192,7 +286,19 @@ export function buildPnlSummaryCsv(rows: PnlSummaryRow[]): string {
         .map(csvField)
         .join(","),
     ),
-    ["Grand Total", "", n2(total.buyPrice), n2(total.sellOrCurrent), n2(total.pnl), "", ""]
+    // Quantities are deliberately NOT totalled — units of different companies
+    // are not the same thing, so a sum of them would be meaningless.
+    [
+      "Grand Total",
+      "",
+      "",
+      "",
+      n2(total.buyPrice),
+      n2(total.sellOrCurrent),
+      n2(total.pnl),
+      "",
+      "",
+    ]
       .map(csvField)
       .join(","),
   ];

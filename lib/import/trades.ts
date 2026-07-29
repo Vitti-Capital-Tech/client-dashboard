@@ -140,25 +140,71 @@ export type PnlRollup = {
 };
 
 /**
- * Replay settled trades into a per-(account, parent code) P&L rollup.
+ * ── The cost-basis replay ────────────────────────────────────────────────
  *
- * Grouping is by PARENT code, so a placement bought as EOSXX and sold as EOS
- * nets out as the one round trip it really was.
+ * Settled trades are grouped by PARENT code, so a placement bought as EOSXX
+ * and sold as EOS nets out as the one round trip it really was.
  *
- * Cost basis is weighted average. For a SELL that closes the whole open
- * parcel — the only case in the current data — WAC is exact: the realized
- * result is simply proceeds minus everything paid for those units. Sells that
- * close only part of a parcel are still valued, but flagged `hasPartial` so the
- * UI can mark them approximate until parcel-level FIFO matching lands.
+ * Cost basis is weighted average. For a SELL that closes the whole open parcel
+ * WAC is exact: the realized result is simply proceeds minus everything paid
+ * for those units. Sells that close only part of a parcel assembled at several
+ * prices are still valued, but flagged `hasPartial` so the UI can mark them
+ * approximate until parcel-level FIFO matching lands.
  *
  * `value` is already net of brokerage and GST (BUY adds fees, SELL deducts
  * them), so realized P&L is fee-inclusive without any extra arithmetic.
  */
-export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
-  const settled = trades
-    .filter((t) => t.status === SETTLED)
+
+/**
+ * The minimal shape the cost-basis replay needs. Both `ParsedTrade` (from the
+ * CSV) and the DAL's `TradeRow` (from the database) map onto it, so the ledger
+ * is walked by ONE implementation no matter which side is asking.
+ */
+export type LedgerLine = {
+  /** Rollup scope — the account. Pass "" when the caller already filtered. */
+  scope: string;
+  parent: string;
+  cnote: string;
+  side: TradeSide;
+  tradeDate: string;
+  units: number;
+  value: number;
+  status: string;
+  fees: number;
+};
+
+/**
+ * What one SELL actually realised, with the cost the replay attributed to it.
+ * The per-ticker rollup cannot answer "how much did we make in March" — this
+ * can, because every realised dollar keeps the date it was realised on.
+ */
+export type SellAttribution = {
+  scope: string;
+  parent: string;
+  cnote: string;
+  tradeDate: string;
+  units: number;
+  proceeds: number;
+  costOfSold: number;
+  realizedPl: number;
+  /** This sale drew on no cost basis, so its "profit" is really just proceeds. */
+  noCostBasis: boolean;
+};
+
+/**
+ * Walk the settled ledger once, producing both the per-ticker rollup and the
+ * per-sale attribution. Keeping them in a single pass is what guarantees the
+ * date-bucketed chart and the ticker table can never disagree: they are two
+ * views of the same arithmetic, not two implementations of it.
+ */
+export function replayLedger(lines: LedgerLine[]): {
+  rollups: PnlRollup[];
+  sells: SellAttribution[];
+} {
+  const settled = lines
     // Chronological, then by contract note so same-day trades replay in a
-    // stable order — the reducer is order-dependent and must be deterministic.
+    // stable order — the walk is order-dependent and must be deterministic.
+    .filter((t) => t.status === SETTLED)
     .sort((a, b) =>
       a.tradeDate === b.tradeDate
         ? a.cnote.localeCompare(b.cnote)
@@ -166,6 +212,7 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
     );
 
   const byKey = new Map<string, PnlRollup>();
+  const sells: SellAttribution[] = [];
   // Per-key set of distinct per-unit costs making up the CURRENTLY open parcel.
   // Weighted-average cost is exact whenever a sell closes the whole parcel, and
   // also whenever the parcel came from a single price — it is only ever an
@@ -175,11 +222,11 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
   const openCosts = new Map<string, Set<number>>();
 
   for (const t of settled) {
-    const key = `${t.accountRef}::${t.parent}`;
+    const key = `${t.scope}::${t.parent}`;
     let r = byKey.get(key);
     if (!r) {
       r = {
-        accountRef: t.accountRef,
+        accountRef: t.scope,
         parent: t.parent,
         unitsBought: 0,
         unitsSold: 0,
@@ -201,7 +248,7 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
 
     r.tradeCount += 1;
     r.lastTrade = t.tradeDate;
-    r.fees += t.brokerage + t.otherCharges + t.gst;
+    r.fees += t.fees;
 
     let costs = openCosts.get(key);
     if (!costs) {
@@ -225,14 +272,20 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
     r.proceeds += t.value;
 
     let costOut = 0;
+    let noCostBasis = false;
+
     if (r.openUnits <= 0) {
       // Sold something the ledger never saw bought: the export starts mid
       // history. Proceeds are real, cost basis is unknown — record zero cost
       // and flag it rather than inventing a number.
       r.shortHistory = true;
+      noCostBasis = true;
     } else {
       const closing = Math.min(t.units, r.openUnits);
-      if (closing < t.units) r.shortHistory = true;
+      if (closing < t.units) {
+        r.shortHistory = true;
+        noCostBasis = true; // part of this sale is uncosted
+      }
       // Approximate only if this leaves units open AND the parcel was built at
       // more than one price — otherwise WAC is the exact answer.
       if (closing < r.openUnits && costs.size > 1) r.hasPartial = true;
@@ -251,6 +304,18 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
 
     r.costOfSold += costOut;
     r.realizedPl += t.value - costOut;
+
+    sells.push({
+      scope: t.scope,
+      parent: t.parent,
+      cnote: t.cnote,
+      tradeDate: t.tradeDate,
+      units: t.units,
+      proceeds: money(t.value),
+      costOfSold: money(costOut),
+      realizedPl: money(t.value - costOut),
+      noCostBasis,
+    });
   }
 
   for (const r of byKey.values()) {
@@ -262,8 +327,28 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
     r.fees = money(r.fees);
   }
 
-  return [...byKey.values()].sort(
+  const rollups = [...byKey.values()].sort(
     (a, b) =>
       a.accountRef.localeCompare(b.accountRef) || a.parent.localeCompare(b.parent),
   );
+
+  return { rollups, sells };
 }
+
+/** Per-ticker rollup from parsed CSV rows — the importers' entry point. */
+export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
+  return replayLedger(
+    trades.map((t) => ({
+      scope: t.accountRef,
+      parent: t.parent,
+      cnote: t.cnote,
+      side: t.side,
+      tradeDate: t.tradeDate,
+      units: t.units,
+      value: t.value,
+      status: t.status,
+      fees: t.brokerage + t.otherCharges + t.gst,
+    })),
+  ).rollups;
+}
+

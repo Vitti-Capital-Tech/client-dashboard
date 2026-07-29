@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 
 import { parseCsvRecords } from "./csv.ts";
 import { parentCode, parseTradeDate, num, initialsOf } from "./normalize.ts";
-import { parseTradeCsv, reduceTrades, type ParsedTrade } from "./trades.ts";
+import {
+  parseTradeCsv,
+  reduceTrades,
+  replayLedger,
+  type ParsedTrade,
+} from "./trades.ts";
 import { reconcile, findDrift } from "./reconcile.ts";
 
 /**
@@ -245,6 +250,69 @@ test("reduce: replays chronologically regardless of file order", () => {
   );
   assert.deepEqual(reversed, forward);
   assert.equal(forward[0].shortHistory, false);
+});
+
+// ---------------------------------------------------------------------------
+// Per-sale attribution (what the dated chart is built on)
+// ---------------------------------------------------------------------------
+
+function sellsOf(...rows: string[]) {
+  const { trades } = parseTradeCsv([HEADER, ...rows].join("\n"));
+  return replayLedger(
+    trades.map((t) => ({
+      scope: t.accountRef,
+      parent: t.parent,
+      cnote: t.cnote,
+      side: t.side,
+      tradeDate: t.tradeDate,
+      units: t.units,
+      value: t.value,
+      status: t.status,
+      fees: t.brokerage + t.otherCharges + t.gst,
+    })),
+  ).sells;
+}
+
+test("attribution: each sale keeps the date its money was realised on", () => {
+  const sells = sellsOf(
+    row("1", "BUY", "LDX", "01/02/26", "1000", "2000"),
+    row("2", "SELL", "LDX", "15/03/26", "400", "1000"),
+    row("3", "SELL", "LDX", "20/05/26", "600", "1800"),
+  );
+
+  assert.equal(sells.length, 2, "only sales realise anything");
+  assert.deepEqual(
+    sells.map((s) => s.tradeDate),
+    ["2026-03-15", "2026-05-20"],
+  );
+  // WAC is $2/unit: 400 units cost $800, 600 cost $1,200.
+  assert.equal(sells[0].costOfSold, 800);
+  assert.equal(sells[0].realizedPl, 200);
+  assert.equal(sells[1].costOfSold, 1200);
+  assert.equal(sells[1].realizedPl, 600);
+});
+
+test("attribution: per-sale results sum to the rollup they came from", () => {
+  // The single-pass replay is what guarantees this — the dated chart and the
+  // stored per-ticker total are two views of one calculation, not two of them.
+  const rows = [
+    row("1", "BUY", "BM1", "22/10/25", "12403", "6311.50"),
+    row("2", "SELL", "BM1", "10/11/25", "6000", "3340.00"),
+    row("3", "SELL", "BM1", "19/01/26", "6403", "5652.70"),
+  ];
+  const { trades } = parseTradeCsv([HEADER, ...rows].join("\n"));
+  const [rollup] = reduceTrades(trades);
+  const sells = sellsOf(...rows);
+
+  const summed = sells.reduce((s, x) => s + x.realizedPl, 0);
+  assert.equal(Number(summed.toFixed(2)), rollup.realizedPl);
+  assert.equal(rollup.realizedPl, 2681.2);
+});
+
+test("attribution: an uncosted sale is flagged on the sale itself", () => {
+  const sells = sellsOf(row("1", "SELL", "EUR", "22/09/25", "115385", "10397.08"));
+  assert.equal(sells[0].noCostBasis, true);
+  assert.equal(sells[0].costOfSold, 0);
 });
 
 // ---------------------------------------------------------------------------

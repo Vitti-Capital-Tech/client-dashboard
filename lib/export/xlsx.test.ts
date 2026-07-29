@@ -73,6 +73,8 @@ test("xlsx: it is a real workbook with the expected sheet and headers", async ()
   assert.deepEqual((ws.getRow(1).values as unknown[]).slice(1), [
     "Row Labels",
     "Company",
+    "Buy Qty",
+    "Sell Qty",
     "Buy Price",
     "Sell Price / Current Price",
     "PnL",
@@ -109,7 +111,7 @@ test("xlsx: money cells are numbers, not text, and carry a 2dp format", async ()
   const { ws, rows } = await readBack();
 
   for (let i = 0; i < rows.length; i++) {
-    for (const col of [3, 4, 5]) {
+    for (const col of [5, 6, 7]) {
       const cell = ws.getRow(i + 2).getCell(col);
       assert.equal(
         typeof cell.value,
@@ -126,10 +128,10 @@ test("xlsx: the Grand Total row sums the body and is visually separated", async 
   const totalRow = ws.getRow(rows.length + 2);
 
   assert.equal(totalRow.getCell(1).value, "Grand Total");
-  assert.equal(totalRow.getCell(3).value, rows.reduce((s, r) => s + r.buyPrice, 0));
-  assert.equal(totalRow.getCell(4).value, rows.reduce((s, r) => s + r.sellOrCurrent, 0));
+  assert.equal(totalRow.getCell(5).value, rows.reduce((s, r) => s + r.buyPrice, 0));
+  assert.equal(totalRow.getCell(6).value, rows.reduce((s, r) => s + r.sellOrCurrent, 0));
   assert.equal(
-    Number((totalRow.getCell(5).value as number).toFixed(2)),
+    Number((totalRow.getCell(7).value as number).toFixed(2)),
     Number(rows.reduce((s, r) => s + r.pnl, 0).toFixed(2)),
   );
   assert.equal(totalRow.getCell(1).font?.bold, true);
@@ -142,7 +144,7 @@ test("xlsx: the autofilter covers the data rows but never the total", async () =
   const af = ws.autoFilter as unknown as string;
   assert.equal(
     af,
-    `A1:G${rows.length + 1}`,
+    `A1:I${rows.length + 1}`,
     "the Grand Total row must stay outside the filter so it cannot be sorted into the middle",
   );
 });
@@ -150,5 +152,5 @@ test("xlsx: the autofilter covers the data rows but never the total", async () =
 test("xlsx: an empty export still produces a valid workbook", async () => {
   const { ws } = await readBack([]);
   assert.equal(ws.getRow(2).getCell(1).value, "Grand Total");
-  assert.equal(ws.getRow(2).getCell(3).value, 0);
+  assert.equal(ws.getRow(2).getCell(5).value, 0);
 });

@@ -783,6 +783,70 @@ export type Database = {
           },
         ]
       }
+      pnl_overrides: {
+        Row: {
+          account_id: string
+          buy_price: number | null
+          buy_qty: number | null
+          client_id: string
+          created_at: string
+          note: string | null
+          parent_code: string
+          sell_price: number | null
+          sell_qty: number | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          account_id: string
+          buy_price?: number | null
+          buy_qty?: number | null
+          client_id: string
+          created_at?: string
+          note?: string | null
+          parent_code: string
+          sell_price?: number | null
+          sell_qty?: number | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          account_id?: string
+          buy_price?: number | null
+          buy_qty?: number | null
+          client_id?: string
+          created_at?: string
+          note?: string | null
+          parent_code?: string
+          sell_price?: number | null
+          sell_qty?: number | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pnl_overrides_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pnl_overrides_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pnl_overrides_parent_code_fkey"
+            columns: ["parent_code"]
+            isOneToOne: false
+            referencedRelation: "securities"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
       realized_pnl: {
         Row: {
           account_id: string

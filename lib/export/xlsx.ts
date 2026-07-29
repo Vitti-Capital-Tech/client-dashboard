@@ -20,6 +20,7 @@ const FILL_TOTAL = "FFE7E4DC";
 const FILL_HEADER = "FF1D202F";
 const INK_FLAG = "FFB8442B";
 const MONEY = "#,##0.00";
+const QTY = "#,##0";
 
 export const XLSX_FILLS = { FILL_OPEN, FILL_CLOSED, FILL_TOTAL, INK_FLAG };
 
@@ -37,6 +38,8 @@ export async function buildPnlSummaryWorkbook(
   ws.columns = [
     { header: "Row Labels", key: "ticker", width: 12 },
     { header: "Company", key: "name", width: 34 },
+    { header: "Buy Qty", key: "buyQty", width: 12, style: { numFmt: QTY } },
+    { header: "Sell Qty", key: "sellQty", width: 12, style: { numFmt: QTY } },
     { header: "Buy Price", key: "buy", width: 15, style: { numFmt: MONEY } },
     {
       header: "Sell Price / Current Price",
@@ -58,6 +61,8 @@ export async function buildPnlSummaryWorkbook(
     const row = ws.addRow({
       ticker: r.ticker,
       name: r.name,
+      buyQty: r.buyQty,
+      sellQty: r.sellQty,
       // Real numbers, never strings — otherwise the Grand Total and any pivot
       // the desk builds on top of this would silently not add up.
       buy: r.buyPrice,
@@ -78,6 +83,8 @@ export async function buildPnlSummaryWorkbook(
   }
 
   const total = grandTotal(rows);
+  // Quantities are deliberately not totalled — units of different companies
+  // are not the same thing, so a sum of them would be meaningless.
   const totalRow = ws.addRow({
     ticker: "Grand Total",
     buy: total.buyPrice,
@@ -93,7 +100,7 @@ export async function buildPnlSummaryWorkbook(
   // Filter the data rows only — the total must never sort into the middle.
   ws.autoFilter = {
     from: { row: 1, column: 1 },
-    to: { row: Math.max(1, rows.length + 1), column: 7 },
+    to: { row: Math.max(1, rows.length + 1), column: 9 },
   };
 
   ws.addRow([]);

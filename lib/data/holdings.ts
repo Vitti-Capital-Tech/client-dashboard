@@ -19,6 +19,46 @@ import type { RealizedRow } from "./compute";
 // Components can re-aggregate them when the account filter changes.
 export type { RealizedSummary, RealizedRow } from "./compute";
 
+/** A desk correction to one summary row, at account × parent-code grain. */
+export type PnlOverrideRow = {
+  accountId: string;
+  parent: string;
+  buyQty: number | null;
+  sellQty: number | null;
+  buyPrice: number | null;
+  sellOrCurrent: number | null;
+  note: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+/**
+ * Hand-entered corrections for one client. Like the realized rows these stay
+ * at account grain so the island can apply the same account filter.
+ */
+export const getClientPnlOverrides = cache(
+  async (clientId: string): Promise<PnlOverrideRow[]> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("pnl_overrides")
+      .select("*")
+      .eq("client_id", clientId);
+    if (error) throw error;
+
+    return data.map((r) => ({
+      accountId: r.account_id,
+      parent: r.parent_code,
+      buyQty: r.buy_qty,
+      sellQty: r.sell_qty,
+      buyPrice: r.buy_price,
+      sellOrCurrent: r.sell_price,
+      note: r.note,
+      updatedBy: r.updated_by,
+      updatedAt: r.updated_at,
+    }));
+  },
+);
+
 /**
  * Realized P&L for one client, left at account grain so the caller can apply
  * the same account filter the rest of the client view uses. Drives the Order

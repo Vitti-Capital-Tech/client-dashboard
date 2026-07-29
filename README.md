@@ -31,7 +31,8 @@ client-dashboard/
 │   │   ├── session.ts          # Server actions: signIn / setViewClient / signOut (session cookie)
 │   │   ├── placements.ts       # Server actions: placeBid / withdrawBid / scaleBids / settlePlacement / notifyBpayPayment
 │   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
-│   │   └── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
+│   │   ├── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
+│   │   └── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
@@ -53,7 +54,8 @@ client-dashboard/
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
 │           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed island:
 │           │                   #      holdings · order history · options · bids · alerts)
-│           │                   #      + RealizedPnlChart.tsx (diverging bar chart, SVG, no deps)
+│           │                   #      + RealizedPnlChart.tsx (realised P&L by month, SVG, no deps)
+│           │                   #      + EditPnlRow.tsx (inline editor for a summary row)
 │           ├── placements/     #   ✅ page.tsx (server) + StaffPlacementsClient.tsx (scaling & settlement island)
 │           ├── options/        #   ✅ page.tsx (server) + StaffOptionsClient.tsx (firm-wide monitor island)
 │           ├── alerts/         #   ✅ page.tsx (server) + StaffAlertsClient.tsx (island)
@@ -87,7 +89,7 @@ client-dashboard/
 ├── supabase/
 │   ├── config.toml             # Supabase CLI project config
 │   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
-│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle · trade-ledger
+│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle · trade-ledger · pnl-overrides
 ├── scripts/
 │   ├── seed-auth-users.mjs     # Creates the staff Supabase Auth user (role in app_metadata)
 │   ├── _import-common.mjs      # Shared importer plumbing (service-role client, chunked upserts)
@@ -230,8 +232,9 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Multi-account model | ✅ `…_multi_account.sql` — `accounts` table; holdings/cash/bids gain `account_id`; client switches account via a topbar switcher, staff aggregate across accounts |
 | Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
 | Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/`; a reconciliation report flags every sale with no cost basis and proposes a ticker-change match where the ledger itself contains one |
-| Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — contract-note ledger grouped by company under its realised result, plus a diverging bar chart ranking companies by realised P&L. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
-| P&L summary export | ✅ one row per company (Row Labels · Buy Price · Sell/Current Price · PnL · Open Positions · Type) with a summing Grand Total. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — amber = open, green = exited, red bold = the two sources disagree. The workbook is built in a server action so the ~1 MB library never reaches the browser |
+| Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — a P&L-by-company table (one row per ticker, same columns as the exports) plus a diverging **column chart of realised P&L by month**. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
+| P&L summary export | ✅ one row per company (Row Labels · Company · Buy Qty · Sell Qty · Buy Price · Sell/Current Price · PnL · Open Positions · Type) with a summing Grand Total, rendered identically on screen and in both files. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — amber = open, green = exited, red bold = the two sources disagree. The workbook is built in a server action so the ~1 MB library never reaches the browser |
+| Desk P&L overrides | ✅ `…_pnl_overrides.sql` + `app/actions/pnl-overrides.ts` — an **Edit** button on each summary row lets staff correct Buy Qty / Sell Qty / Buy Price / Sell Price when a source is incomplete. Null = keep the computed value; P&L itself is never stored, so an edited row cannot contradict its own columns. Every edit is audited and marked in the table and both exports |
 | Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
