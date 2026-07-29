@@ -2,52 +2,143 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  buildOrderHistoryCsv,
-  orderHistoryFilename,
+  buildPnlSummary,
+  buildPnlSummaryCsv,
+  grandTotal,
+  pnlSummaryFilename,
   type ExportGroup,
+  type HeldPosition,
 } from "./order-history.ts";
 
-const trade = (over: Partial<ExportGroup["trades"][number]> = {}) =>
-  ({
-    id: "t1",
-    cnote: "2462073",
-    accountId: "a1",
-    clientId: "c1",
-    code: "EOS",
-    parent: "EOS",
-    name: "ELECTRO OPTIC SYS.",
-    instrument: "FPO",
-    side: "SELL" as const,
-    tradeDate: "2026-05-21",
-    units: 407,
-    avgPrice: 8.11,
-    consideration: 3300.77,
-    brokerage: 100,
-    otherCharges: 0,
-    gst: 10,
-    value: 3190.77,
-    adviser: "VIZ",
-    status: "SETTLED",
-    ...over,
-  }) as ExportGroup["trades"][number];
-
 const summary = (over = {}) => ({
-  realizedPl: -65.23,
-  proceeds: 3190.77,
-  costOfSold: 3256,
-  unitsSold: 407,
-  fees: 110,
-  tradeCount: 2,
-  firstTrade: "2026-05-19",
-  lastTrade: "2026-05-21",
+  realizedPl: 0,
+  proceeds: 0,
+  costOfSold: 0,
+  unitsSold: 0,
+  fees: 0,
+  tradeCount: 0,
+  firstTrade: null,
+  lastTrade: null,
   hasPartial: false,
   shortHistory: false,
+  unitsBought: 0,
   ...over,
 });
 
+const group = (
+  parent: string,
+  realized: ReturnType<typeof summary> | null,
+  name = `${parent} CO`,
+): ExportGroup => ({ parent, name, trades: [], realized });
+
+const held = (over: Partial<HeldPosition> = {}): HeldPosition => ({
+  qty: 100,
+  costBase: 1000,
+  marketValue: 1200,
+  hasPrice: true,
+  ...over,
+});
+
+// ---------------------------------------------------------------------------
+// The two halves
+// ---------------------------------------------------------------------------
+
+test("summary: sold half comes from the ledger, held half from the snapshot", () => {
+  // Bought 1,000 for $2,000; sold 400 (cost $800) for $1,000; 600 still held
+  // at a $1,200 cost base, now worth $1,500.
+  const [r] = buildPnlSummary(
+    [group("LDX", summary({ unitsBought: 1000, unitsSold: 400, proceeds: 1000, costOfSold: 800 }))],
+    new Map([["LDX", held({ qty: 600, costBase: 1200, marketValue: 1500 })]]),
+  );
+
+  assert.equal(r.buyPrice, 2000, "cost of sold + cost base of held");
+  assert.equal(r.sellOrCurrent, 2500, "proceeds + market value of held");
+  assert.equal(r.pnl, 500, "realised 200 + unrealised 300");
+  assert.equal(r.openPosition, true);
+  assert.equal(r.type, "Partial exit");
+});
+
+test("summary: a fully exited company uses the ledger alone", () => {
+  const [r] = buildPnlSummary(
+    [group("EOS", summary({ unitsBought: 407, unitsSold: 407, proceeds: 3190.77, costOfSold: 3256 }))],
+    new Map(),
+  );
+  assert.equal(r.buyPrice, 3256);
+  assert.equal(r.sellOrCurrent, 3190.77);
+  assert.equal(Number(r.pnl.toFixed(2)), -65.23);
+  assert.equal(r.openPosition, false);
+  assert.equal(r.type, "Full exit");
+  assert.equal(r.flagged, false);
+});
+
+test("summary: a holding with no ledger history uses the snapshot alone", () => {
+  const [r] = buildPnlSummary(
+    [],
+    new Map([["IMU", held({ qty: 16302, costBase: 5652.68, marketValue: 1499.78 })]]),
+  );
+  assert.equal(r.buyPrice, 5652.68);
+  assert.equal(r.sellOrCurrent, 1499.78);
+  assert.equal(r.openPosition, true);
+  assert.equal(r.type, "Open - no ledger history");
+  assert.equal(r.flagged, true);
+});
+
+// ---------------------------------------------------------------------------
+// Type classification
+// ---------------------------------------------------------------------------
+
+test("type: buy qty > sell qty is a partial exit", () => {
+  const [r] = buildPnlSummary(
+    [group("ACW", summary({ unitsBought: 250939, unitsSold: 179510, proceeds: 6352.36, costOfSold: 5666.78 }))],
+    new Map([["ACW", held({ qty: 71429 })]]),
+  );
+  assert.equal(r.type, "Partial exit");
+  assert.equal(r.flagged, false);
+});
+
+test("type: selling more than was bought is flagged as missing", () => {
+  // The real EUR case: 115,385 units sold, no purchase in the ledger.
+  const [r] = buildPnlSummary(
+    [group("EUR", summary({ unitsBought: 0, unitsSold: 115385, proceeds: 10397.08 }))],
+    new Map(),
+  );
+  assert.equal(r.type, "CHECK - sold more than bought");
+  assert.equal(r.flagged, true);
+});
+
+test("type: the two sources contradicting each other is flagged", () => {
+  // Ledger says units remain open; the snapshot holds none of them.
+  const [partial] = buildPnlSummary(
+    [group("ACW", summary({ unitsBought: 250939, unitsSold: 179510 }))],
+    new Map(),
+  );
+  assert.equal(partial.type, "CHECK - partial exit but nothing held");
+  assert.equal(partial.flagged, true);
+
+  // Ledger says the position closed; the snapshot still holds units.
+  const [full] = buildPnlSummary(
+    [group("BM1", summary({ unitsBought: 12403, unitsSold: 12403 }))],
+    new Map([["BM1", held({ qty: 500 })]]),
+  );
+  assert.equal(full.type, "CHECK - full exit but still holding");
+  assert.equal(full.flagged, true);
+});
+
+test("type: an unpriced holding cannot be valued and says so", () => {
+  const [r] = buildPnlSummary(
+    [group("XYZ", summary({ unitsBought: 100 }))],
+    new Map([["XYZ", held({ marketValue: 0, hasPrice: false })]]),
+  );
+  assert.match(r.type, /no market price/);
+  assert.equal(r.flagged, true);
+});
+
+// ---------------------------------------------------------------------------
+// CSV
+// ---------------------------------------------------------------------------
+
 function parse(csv: string) {
   return csv.split("\r\n").map((line) => {
-    // Good enough for assertions: the fixtures below quote only whole fields.
     const out: string[] = [];
     let f = "",
       q = false;
@@ -66,103 +157,86 @@ function parse(csv: string) {
   });
 }
 
-test("csv: a SUMMARY row precedes each company's TRADE rows", () => {
-  const groups: ExportGroup[] = [
-    { parent: "EOS", name: "ELECTRO OPTIC SYS.", trades: [trade()], realized: summary() },
-  ];
-  const rows = parse(buildOrderHistoryCsv(groups));
-
-  assert.equal(rows[0][0], "Row type");
-  assert.equal(rows[1][0], "SUMMARY");
-  assert.equal(rows[2][0], "TRADE");
-  assert.equal(rows[1][1], "EOS");
-  assert.equal(rows[2][1], "EOS", "trade rows carry the rollup ticker too");
-});
-
-test("csv: the two grains never share a money column", () => {
-  const rows = parse(
-    buildOrderHistoryCsv([
-      { parent: "EOS", name: "ELECTRO OPTIC SYS.", trades: [trade()], realized: summary() },
-    ]),
+const SAMPLE = () =>
+  buildPnlSummary(
+    [
+      group("LDX", summary({ unitsBought: 1000, unitsSold: 1000, proceeds: 2500, costOfSold: 2000 })),
+      group("ACW", summary({ unitsBought: 300, unitsSold: 100, proceeds: 500, costOfSold: 400 })),
+    ],
+    new Map([["ACW", held({ qty: 200, costBase: 800, marketValue: 900 })]]),
   );
-  const h = rows[0];
-  const valueCol = h.indexOf("Value");
-  const realisedCol = h.indexOf("Realised P&L");
 
-  // Summing "Value" must pick up trades only; summing "Realised P&L" summaries
-  // only. Either column double-counting would silently inflate a report.
-  assert.equal(rows[1][valueCol], "", "summary contributes nothing to Value");
-  assert.equal(rows[2][realisedCol], "", "trade contributes nothing to Realised");
-  assert.equal(rows[1][realisedCol], "-65.23");
-  assert.equal(rows[2][valueCol], "3190.77");
+test("csv: headers are exactly the requested columns", () => {
+  const rows = parse(buildPnlSummaryCsv(SAMPLE()));
+  assert.deepEqual(rows[0], [
+    "Row Labels",
+    "Company",
+    "Buy Price",
+    "Sell Price / Current Price",
+    "PnL",
+    "Open Positions",
+    "Type",
+  ]);
 });
 
-test("csv: money keeps its cents", () => {
-  const rows = parse(
-    buildOrderHistoryCsv([
-      {
-        parent: "BKB",
-        name: "BLACKBEARMINERALSLTD",
-        trades: [trade({ value: 3634.8, consideration: 3634.8, brokerage: 0, gst: 0 })],
-        realized: summary({ realizedPl: 3634.8, proceeds: 3634.8, costOfSold: 0 }),
-      },
-    ]),
-  );
-  const valueCol = rows[0].indexOf("Value");
-  assert.equal(rows[2][valueCol], "3634.80", "never rounded to whole dollars");
+test("csv: the last row is a Grand Total that sums the three money columns", () => {
+  const rows = parse(buildPnlSummaryCsv(SAMPLE()));
+  const last = rows[rows.length - 1];
+
+  assert.equal(last[0], "Grand Total");
+  // LDX 2000 + ACW (400 sold-cost + 800 held-cost) = 3200
+  assert.equal(last[2], "3200.00");
+  // LDX 2500 + ACW (500 proceeds + 900 market) = 3900
+  assert.equal(last[3], "3900.00");
+  assert.equal(last[4], "700.00");
+
+  // And it must equal the sum of the body rows, not be computed separately.
+  const body = rows.slice(1, -1);
+  const sum = (i: number) => body.reduce((s, r) => s + Number(r[i]), 0);
+  assert.equal(Number(last[2]), sum(2));
+  assert.equal(Number(last[3]), sum(3));
+  assert.equal(Number(last[4]), sum(4));
 });
 
-test("csv: a company name containing a comma survives the round trip", () => {
-  const rows = parse(
-    buildOrderHistoryCsv([
-      {
-        parent: "SMI",
-        name: 'SMITH, JOHN + JANE "FAMILY" TRUST',
-        trades: [trade({ name: "x" })],
-        realized: null,
-      },
-    ]),
-  );
-  assert.equal(rows[1][2], 'SMITH, JOHN + JANE "FAMILY" TRUST');
-  assert.equal(rows[1].length, rows[0].length, "column count must not shift");
-});
-
-test("csv: the cost-basis caveat travels with the number", () => {
-  const col = (csv: string) => {
-    const rows = parse(csv);
-    return rows[1][rows[0].indexOf("Cost basis")];
-  };
-
-  const g = (realized: ExportGroup["realized"]): ExportGroup[] => [
-    { parent: "EUR", name: "EUROPEAN LITHIUM LTD", trades: [trade()], realized },
-  ];
-
-  assert.match(col(buildOrderHistoryCsv(g(summary({ shortHistory: true })))), /^MISSING/);
-  assert.match(col(buildOrderHistoryCsv(g(summary({ hasPartial: true })))), /^approximate/);
-  assert.equal(col(buildOrderHistoryCsv(g(summary()))), "complete");
-  assert.equal(col(buildOrderHistoryCsv(g(summary({ unitsSold: 0 })))), "still open");
-});
-
-test("csv: every row has the same column count", () => {
-  const rows = parse(
-    buildOrderHistoryCsv([
-      { parent: "EOS", name: "ELECTRO OPTIC SYS.", trades: [trade(), trade({ id: "t2" })], realized: summary() },
-      { parent: "IMU", name: "IMUGENE LIMITED", trades: [trade({ id: "t3" })], realized: null },
-    ]),
-  );
-  const width = rows[0].length;
-  for (const [i, r] of rows.entries()) {
-    assert.equal(r.length, width, `row ${i} has ${r.length} columns, expected ${width}`);
+test("csv: money is bare 2dp so the cells stay numeric and summable", () => {
+  const rows = parse(buildPnlSummaryCsv(SAMPLE()));
+  for (const r of rows.slice(1)) {
+    for (const i of [2, 3, 4]) {
+      if (r[i] === "") continue;
+      assert.match(r[i], /^-?\d+\.\d{2}$/, `"${r[i]}" must be a bare 2dp number`);
+      assert.ok(!Number.isNaN(Number(r[i])));
+    }
   }
 });
 
-test("filename: slugged, dated, and account-scoped when filtered", () => {
+test("csv: Open Positions is Yes/No", () => {
+  const rows = parse(buildPnlSummaryCsv(SAMPLE()));
+  const vals = rows.slice(1, -1).map((r) => r[5]);
+  assert.deepEqual([...new Set(vals)].sort(), ["No", "Yes"]);
+});
+
+test("csv: a company name with a comma keeps the column count", () => {
+  const rows = parse(
+    buildPnlSummaryCsv(
+      buildPnlSummary([group("SMI", summary({ unitsBought: 1 }), 'SMITH, JOHN "X"')], new Map()),
+    ),
+  );
+  assert.equal(rows[1][1], 'SMITH, JOHN "X"');
+  for (const r of rows) assert.equal(r.length, rows[0].length);
+});
+
+test("grandTotal: P&L total equals buy/sell totals differenced", () => {
+  const t = grandTotal(SAMPLE());
+  assert.equal(Number((t.sellOrCurrent - t.buyPrice).toFixed(2)), Number(t.pnl.toFixed(2)));
+});
+
+test("filename: slugged, dated, account-scoped, correct extension", () => {
   assert.equal(
-    orderHistoryFilename("SRI GURU NANAK PTY LTD", null, "2026-07-28"),
-    "order-history-sri-guru-nanak-pty-ltd-2026-07-28.csv",
+    pnlSummaryFilename("SRI GURU NANAK PTY LTD", null, "2026-07-29", "csv"),
+    "pnl-summary-sri-guru-nanak-pty-ltd-2026-07-29.csv",
   );
   assert.equal(
-    orderHistoryFilename("Smith, John", "Halloran SMSF", "2026-07-28"),
-    "order-history-smith-john-halloran-smsf-2026-07-28.csv",
+    pnlSummaryFilename("Smith, John", "Halloran SMSF", "2026-07-29", "xlsx"),
+    "pnl-summary-smith-john-halloran-smsf-2026-07-29.xlsx",
   );
 });

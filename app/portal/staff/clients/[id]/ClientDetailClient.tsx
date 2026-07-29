@@ -14,9 +14,12 @@ import type {
 } from "@/lib/data/queries";
 import { rollUpRealized, type RealizedRow } from "@/lib/data/compute";
 import {
-  buildOrderHistoryCsv,
-  orderHistoryFilename,
+  buildPnlSummary,
+  buildPnlSummaryCsv,
+  pnlSummaryFilename,
+  type HeldPosition,
 } from "@/lib/export/order-history";
+import { buildPnlSummaryXlsx } from "@/app/actions/exports";
 import { RealizedPnlChart } from "./RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
 
@@ -193,28 +196,76 @@ export function ClientDetailClient({
         );
       });
   })();
-  // Export exactly what is on screen: the same groups, same order, same account
-  // filter. A CSV that disagrees with the table it sits under is worse than no
-  // CSV at all.
-  const exportCsv = () => {
-    const csv = buildOrderHistoryCsv(tradeGroups);
-    const name = orderHistoryFilename(
-      client.name,
-      acctFilter === "all" ? null : (accounts.find((a) => a.id === acctFilter)?.label ?? null),
-      new Date().toISOString().slice(0, 10),
-    );
+  // Still-held units per company, rolled up from the holdings snapshot. This is
+  // the other half of every export row: the ledger supplies what was sold, this
+  // supplies what is still owned. Derivatives fold into their ordinary, matching
+  // how the ledger groups by parent code.
+  const heldByParent = (() => {
+    const m = new Map<string, HeldPosition>();
+    for (const p of visiblePositions) {
+      const prev = m.get(p.parent);
+      const priced = p.last !== null;
+      m.set(p.parent, {
+        qty: (prev?.qty ?? 0) + p.qty,
+        costBase: (prev?.costBase ?? 0) + p.qty * p.cost,
+        marketValue: (prev?.marketValue ?? 0) + (priced ? p.qty * p.last! : 0),
+        // One unpriced line makes the whole company's market value incomplete.
+        hasPrice: (prev?.hasPrice ?? true) && priced,
+      });
+    }
+    return m;
+  })();
 
-    // A BOM makes Excel read the file as UTF-8 rather than the local codepage,
-    // which otherwise mangles non-ASCII company names.
-    const blob = new Blob(["﻿", csv], {
-      type: "text/csv;charset=utf-8",
-    });
+  /** Export honours the account filter, so the file always matches the screen. */
+  const downloadBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = name;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const download = (contents: string, filename: string, mime: string) =>
+    // The BOM makes Excel read the text as UTF-8 rather than the local
+    // codepage, which otherwise mangles non-ASCII company names.
+    downloadBlob(new Blob(["﻿", contents], { type: `${mime};charset=utf-8` }), filename);
+
+  const exportName = (ext: "csv" | "xlsx") =>
+    pnlSummaryFilename(
+      client.name,
+      acctFilter === "all"
+        ? null
+        : (accounts.find((a) => a.id === acctFilter)?.label ?? null),
+      new Date().toISOString().slice(0, 10),
+      ext,
+    );
+
+  const summaryRows = () => buildPnlSummary(tradeGroups, heldByParent);
+
+  const exportCsv = () =>
+    download(buildPnlSummaryCsv(summaryRows()), exportName("csv"), "text/csv");
+
+  // The workbook is built by a server action (ExcelJS stays out of the client
+  // bundle), so this one is async and the button reflects that.
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const base64 = await buildPnlSummaryXlsx(
+        summaryRows(),
+        `${client.name} — P&L summary`,
+      );
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      downloadBlob(
+        new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }),
+        exportName("xlsx"),
+      );
+    } finally {
+      setExporting(false);
+    }
   };
 
   // Flatten the client's bids (one row per bid — a client may bid from several
@@ -455,12 +506,24 @@ export function ClientDetailClient({
                   {visibleTrades.length !== settledTrades.length &&
                     ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed`}
                 </span>
+                {/* CSV for data, Excel for the colour-coded copy — plain CSV
+                    cannot carry a fill. */}
                 <button
                   onClick={exportCsv}
-                  disabled={tradeGroups.length === 0}
+                  disabled={tradeGroups.length === 0 && heldByParent.size === 0}
                   className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Export CSV
+                </button>
+                <button
+                  onClick={exportExcel}
+                  disabled={
+                    exporting || (tradeGroups.length === 0 && heldByParent.size === 0)
+                  }
+                  title="Same rows as an .xlsx, colour-coded: amber = still open, green = fully exited, red = needs checking"
+                  className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {exporting ? "Building…" : "Export Excel"}
                 </button>
               </div>
             </div>

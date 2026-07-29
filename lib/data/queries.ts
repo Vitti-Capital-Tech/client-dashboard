@@ -91,6 +91,7 @@ export type Position = {
   accountId: string | null;
   clientId: string; // owning person (denormalized)
   code: string;
+  parent: string; // rollup code — the ordinary ASX code, or `code` if it is one
   name: string;
   sector: string | null;
   qty: number;
@@ -415,13 +416,18 @@ export const getMergeRequests = cache(
 // Shared row mappers so account- and client-scoped getters return the same shape.
 function toPosition(
   p: Tables<"positions">,
-  securityMap: Map<string, { name: string; sector: string | null; last: number | null }>,
+  securityMap: Map<
+    string,
+    { name: string; sector: string | null; last: number | null; parent: string | null }
+  >,
 ): Position {
   const sec = securityMap.get(p.security_code);
   return {
     accountId: p.account_id,
     clientId: p.client_id,
     code: p.security_code,
+    // A derivative rolls up to its ordinary; an ordinary is its own parent.
+    parent: sec?.parent ?? p.security_code,
     name: sec?.name ?? p.security_code,
     sector: sec?.sector ?? null,
     qty: p.qty,

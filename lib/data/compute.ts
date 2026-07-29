@@ -84,6 +84,9 @@ export type RealizedSummary = {
   realizedPl: number;
   proceeds: number;
   costOfSold: number;
+  /** Units the ledger saw bought. Compared against `unitsSold` to classify the
+   *  exit — and to catch a ledger that sold more than it ever acquired. */
+  unitsBought: number;
   unitsSold: number;
   fees: number;
   tradeCount: number;
@@ -113,6 +116,7 @@ export function rollUpRealized(
       realizedPl: (prev?.realizedPl ?? 0) + r.realizedPl,
       proceeds: (prev?.proceeds ?? 0) + r.proceeds,
       costOfSold: (prev?.costOfSold ?? 0) + r.costOfSold,
+      unitsBought: (prev?.unitsBought ?? 0) + r.unitsBought,
       unitsSold: (prev?.unitsSold ?? 0) + r.unitsSold,
       fees: (prev?.fees ?? 0) + r.fees,
       tradeCount: (prev?.tradeCount ?? 0) + r.tradeCount,

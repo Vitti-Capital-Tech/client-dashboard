@@ -40,6 +40,7 @@ export const getClientRealized = cache(
       realizedPl: r.realized_pl,
       proceeds: r.proceeds,
       costOfSold: r.cost_of_sold,
+      unitsBought: r.units_bought,
       unitsSold: r.units_sold,
       fees: r.fees,
       tradeCount: r.trade_count,

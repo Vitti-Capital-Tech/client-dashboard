@@ -30,7 +30,8 @@ client-dashboard/
 │   ├── actions/
 │   │   ├── session.ts          # Server actions: signIn / setViewClient / signOut (session cookie)
 │   │   ├── placements.ts       # Server actions: placeBid / withdrawBid / scaleBids / settlePlacement / notifyBpayPayment
-│   │   └── alerts.ts           # Server actions: ackAlert / addCustomAlert
+│   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
+│   │   └── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
@@ -78,8 +79,9 @@ client-dashboard/
 │   │   ├── reconcile.ts        #   Missing-cost-basis worklist + ticker-change suggestions
 │   │   └── import.test.ts      #   28 tests (node --test)
 │   └── export/
-│       ├── order-history.ts    # Order-history CSV builder (SUMMARY/TRADE grains)
-│       └── order-history.test.ts
+│       ├── order-history.ts    # P&L summary rows + CSV (pure, client-safe)
+│       ├── xlsx.ts              # Colour-coded .xlsx via ExcelJS — server-side only
+│       └── *.test.ts            # 21 tests incl. an xlsx generate-and-read-back round trip
 ├── store/
 │   └── useDatabaseStore.ts     # Legacy Zustand store — no longer imported by any route (pending removal)
 ├── supabase/
@@ -117,7 +119,8 @@ client-dashboard/
 - **Mutations:** all state changes are **Server Actions** (`app/actions/placements.ts`, `app/actions/alerts.ts`) that write to Supabase, append an `audit_log` entry, and `revalidatePath("/portal", "layout")` so the UI reflects the new state. Islands call them from event handlers.
 - **Auth & session:** **real Supabase Auth** (email + password). `signInWithPassword` (`app/actions/session.ts`) verifies credentials; the root `proxy.ts` refreshes the session cookie each request; `lib/session.ts` reads identity via `supabase.auth.getUser()` (`getActiveClientId` / `getActor`), with the workspace role in `app_metadata.role`. Only `vitti_view` (staff's inspected client) remains a cookie. Deferred: RLS, route protection, and real TOTP MFA (the login OTP screen is cosmetic).
 - **Broker data pipeline:** two CSV exports (holdings snapshot + contract-note ledger) are imported by plain-Node CLIs in `scripts/`, with all parsing and P&L logic in `lib/import/` — pure, dependency-free modules the Next server and the CLIs both load. Node 24 strips their types natively, which is why they import each other with an explicit `.ts` extension (`allowImportingTsExtensions`). See §4.5.
-- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts"`. 35 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, and CSV export grain separation.
+- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts"`. 49 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, the export's exit classification, and an xlsx generate-and-read-back round trip that asserts on what Excel would actually show.
+- **Spreadsheets:** `exceljs` is the one non-Supabase runtime dependency, and it is confined to a **server action** (`app/actions/exports.ts`) — a build check confirms it appears in no client chunk, so the browser only ever receives the finished bytes.
 - **Charts:** hand-written SVG, no charting library — a diverging bar chart for realised P&L (`RealizedPnlChart.tsx`). The `--color-gain`/`--color-loss` pair was validated for colour-vision deficiency and lands in the ΔE 6–8 floor band, so polarity is carried by **bar direction and signed value labels** as well as hue.
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
 - **Fonts:** `Fraunces` (serif accent headers), `Hanken Grotesk` (clean sans body text), and `IBM Plex Mono` (financial figures and metrics).
@@ -228,7 +231,7 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
 | Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/`; a reconciliation report flags every sale with no cost basis and proposes a ticker-change match where the ledger itself contains one |
 | Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — contract-note ledger grouped by company under its realised result, plus a diverging bar chart ranking companies by realised P&L. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
-| Order history CSV export | ✅ `lib/export/order-history.ts` — exports the visible groups at both grains, tagged `SUMMARY` / `TRADE` in a leading column so a SUM never mixes them; money to the cent and each realised figure carries its cost-basis caveat |
+| P&L summary export | ✅ one row per company (Row Labels · Buy Price · Sell/Current Price · PnL · Open Positions · Type) with a summing Grand Total. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — amber = open, green = exited, red bold = the two sources disagree. The workbook is built in a server action so the ~1 MB library never reaches the browser |
 | Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
