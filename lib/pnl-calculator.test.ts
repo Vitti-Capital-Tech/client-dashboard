@@ -23,8 +23,8 @@ test("PNL Calculator - parse CSV buffer and aggregate by ticker", async () => {
   assert.ok(eos);
   assert.equal(eos.buyQty, 407);
   assert.equal(eos.sellQty, 407);
-  assert.equal(eos.buyPrice, 8.00);
-  assert.equal(eos.sellPrice, 8.11);
+  assert.equal(eos.buyPrice, 3256.00);
+  assert.equal(eos.sellPrice, 3300.77);
   assert.equal(eos.totalBuyValue, 3256.00);
   assert.equal(eos.totalSellValue, 3300.77);
   assert.equal(eos.pnlCalculated, 44.77);
@@ -53,6 +53,8 @@ test("PNL Calculator - ignore non-SETTLED trades (CANCELLED, PENDING, REVERSED)"
   const abc = result.summary[0];
   assert.equal(abc.buyQty, 100);
   assert.equal(abc.sellQty, 100);
+  assert.equal(abc.buyPrice, 1000.00);
+  assert.equal(abc.sellPrice, 1500.00);
   assert.equal(abc.pnlCalculated, 500.00);
 });
 
@@ -63,8 +65,8 @@ test("PNL Calculator - CSV export string contains required columns and numbers",
       company: "ELECTRO C FPO",
       buyQty: 407,
       sellQty: 407,
-      buyPrice: 8.00,
-      sellPrice: 8.11,
+      buyPrice: 3256.00,
+      sellPrice: 3300.77,
       totalBuyValue: 3256.00,
       totalSellValue: 3300.77,
       pnlCalculated: 44.77,
@@ -74,8 +76,8 @@ test("PNL Calculator - CSV export string contains required columns and numbers",
   ];
 
   const csv = buildPnlExportCsvString(summary);
-  assert.ok(csv.includes("Ticker,Company,Buy Qty,Sell Qty,Buy Price,Sell Price,Total Buy Value,Total Sell Value,PnL Calculated,Open Qty"));
-  assert.ok(csv.includes("EOS,ELECTRO C FPO,407,407,8.0000,8.1100,3256.00,3300.77,44.77,0"));
+  assert.ok(csv.includes("Ticker,Company,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Open Qty"));
+  assert.ok(csv.includes("EOS,ELECTRO C FPO,407,407,3256.00,3300.77,44.77,0"));
   assert.ok(csv.includes("Grand Total"));
 });
 

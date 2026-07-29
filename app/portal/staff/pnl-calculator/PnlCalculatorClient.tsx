@@ -451,19 +451,17 @@ export function PnlCalculatorClient() {
                   <tr className="bg-paper-2 text-navy border-b border-paper-border text-2xs font-semibold uppercase tracking-wider">
                     <th className="py-3.5 px-4">Ticker</th>
                     <th className="py-3.5 px-4">Company</th>
-                    <th className="py-3.5 px-4 text-right">Buy Qty</th>
-                    <th className="py-3.5 px-4 text-right">Sell Qty</th>
-                    <th className="py-3.5 px-4 text-right">Buy Price (Avg)</th>
-                    <th className="py-3.5 px-4 text-right">Sell Price (Avg)</th>
-                    <th className="py-3.5 px-4 text-right">Total Buy Value</th>
-                    <th className="py-3.5 px-4 text-right">Total Sell Value</th>
+                    <th className="py-3.5 px-4 text-right">Buy Qty (Sum)</th>
+                    <th className="py-3.5 px-4 text-right">Sell Qty (Sum)</th>
+                    <th className="py-3.5 px-4 text-right">Buy Price (Sum)</th>
+                    <th className="py-3.5 px-4 text-right">Sell Price (Sum)</th>
                     <th className="py-3.5 px-4 text-right">PnL Calculated</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-paper-border text-xs">
                   {filteredSummary.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-12 text-center text-mut">
+                      <td colSpan={7} className="py-12 text-center text-mut">
                         No ticker records found matching your filters.
                       </td>
                     </tr>
@@ -490,16 +488,10 @@ export function PnlCalculatorClient() {
                           {fmtQty(item.sellQty)}
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {item.buyQty > 0 ? fmtPrice(item.buyPrice) : "-"}
+                          {fmtCurrency(item.buyPrice)}
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {item.sellQty > 0 ? fmtPrice(item.sellPrice) : "-"}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtCurrency(item.totalBuyValue)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtCurrency(item.totalSellValue)}
+                          {fmtCurrency(item.sellPrice)}
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono font-bold">
                           <span
@@ -530,13 +522,11 @@ export function PnlCalculatorClient() {
                       <td className="py-4 px-4 text-right font-mono">
                         {fmtQty(filteredSummary.reduce((s, i) => s + i.sellQty, 0))}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">-</td>
-                      <td className="py-4 px-4 text-right font-mono">-</td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.totalBuyValue, 0))}
+                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.buyPrice, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.totalSellValue, 0))}
+                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.sellPrice, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
                         <span

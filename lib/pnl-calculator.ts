@@ -223,20 +223,20 @@ export async function parsePnlFileBuffer(
     }
   }
 
-  // Calculate weighted averages and final P&L per ticker
+  // Calculate sum of buy price and sum of sell price per ticker
   const summary: PnlSummaryItem[] = Array.from(tickerMap.values()).map((item) => {
-    const buyPrice = item.buyQty > 0 ? item.totalBuyValue / item.buyQty : 0;
-    const sellPrice = item.sellQty > 0 ? item.totalSellValue / item.sellQty : 0;
-    const pnlCalculated = item.totalSellValue - item.totalBuyValue;
+    const buyPrice = Math.round(item.totalBuyValue * 100) / 100;
+    const sellPrice = Math.round(item.totalSellValue * 100) / 100;
+    const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
     const openQty = item.buyQty - item.sellQty;
 
     return {
       ...item,
-      buyPrice: Math.round(buyPrice * 10000) / 10000,
-      sellPrice: Math.round(sellPrice * 10000) / 10000,
-      totalBuyValue: Math.round(item.totalBuyValue * 100) / 100,
-      totalSellValue: Math.round(item.totalSellValue * 100) / 100,
-      pnlCalculated: Math.round(pnlCalculated * 100) / 100,
+      buyPrice,
+      sellPrice,
+      totalBuyValue: buyPrice,
+      totalSellValue: sellPrice,
+      pnlCalculated,
       openQty,
     };
   });
@@ -271,17 +271,14 @@ export async function buildPnlExportXlsxBuffer(
 
   const MONEY_FMT = "$#,##0.00;($#,##0.00);\"-\"";
   const QTY_FMT = "#,##0";
-  const PRICE_FMT = "$#,##0.0000";
 
   ws.columns = [
     { header: "Ticker", key: "ticker", width: 14 },
     { header: "Company", key: "company", width: 32 },
-    { header: "Buy Qty", key: "buyQty", width: 14, style: { numFmt: QTY_FMT } },
-    { header: "Sell Qty", key: "sellQty", width: 14, style: { numFmt: QTY_FMT } },
-    { header: "Buy Price", key: "buyPrice", width: 16, style: { numFmt: PRICE_FMT } },
-    { header: "Sell Price", key: "sellPrice", width: 16, style: { numFmt: PRICE_FMT } },
-    { header: "Total Buy Value", key: "totalBuyValue", width: 18, style: { numFmt: MONEY_FMT } },
-    { header: "Total Sell Value", key: "totalSellValue", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "Buy Qty (Sum)", key: "buyQty", width: 16, style: { numFmt: QTY_FMT } },
+    { header: "Sell Qty (Sum)", key: "sellQty", width: 16, style: { numFmt: QTY_FMT } },
+    { header: "Buy Price (Sum)", key: "buyPrice", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "Sell Price (Sum)", key: "sellPrice", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "Open Qty", key: "openQty", width: 14, style: { numFmt: QTY_FMT } },
   ];
@@ -304,8 +301,6 @@ export async function buildPnlExportXlsxBuffer(
       sellQty: item.sellQty,
       buyPrice: item.buyPrice,
       sellPrice: item.sellPrice,
-      totalBuyValue: item.totalBuyValue,
-      totalSellValue: item.totalSellValue,
       pnlCalculated: item.pnlCalculated,
       openQty: item.openQty,
     });
@@ -320,8 +315,8 @@ export async function buildPnlExportXlsxBuffer(
   }
 
   // Grand Total Row
-  const totalBuyVal = summary.reduce((s, i) => s + i.totalBuyValue, 0);
-  const totalSellVal = summary.reduce((s, i) => s + i.totalSellValue, 0);
+  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
   const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   const totalRow = ws.addRow({
@@ -329,10 +324,8 @@ export async function buildPnlExportXlsxBuffer(
     company: "",
     buyQty: "",
     sellQty: "",
-    buyPrice: "",
-    sellPrice: "",
-    totalBuyValue: totalBuyVal,
-    totalSellValue: totalSellVal,
+    buyPrice: totalBuyPrice,
+    sellPrice: totalSellPrice,
     pnlCalculated: totalPnl,
     openQty: "",
   });
@@ -357,12 +350,10 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
   const headers = [
     "Ticker",
     "Company",
-    "Buy Qty",
-    "Sell Qty",
+    "Buy Qty (Sum)",
+    "Sell Qty (Sum)",
     "Buy Price",
     "Sell Price",
-    "Total Buy Value",
-    "Total Sell Value",
     "PnL Calculated",
     "Open Qty",
   ];
@@ -383,10 +374,8 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.company,
         item.buyQty,
         item.sellQty,
-        item.buyPrice.toFixed(4),
-        item.sellPrice.toFixed(4),
-        item.totalBuyValue.toFixed(2),
-        item.totalSellValue.toFixed(2),
+        item.buyPrice.toFixed(2),
+        item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
         item.openQty,
       ]
@@ -395,8 +384,8 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     ),
   ];
 
-  const totalBuyVal = summary.reduce((s, i) => s + i.totalBuyValue, 0);
-  const totalSellVal = summary.reduce((s, i) => s + i.totalSellValue, 0);
+  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
   const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   lines.push(
@@ -405,10 +394,8 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
       "",
       "",
       "",
-      "",
-      "",
-      totalBuyVal.toFixed(2),
-      totalSellVal.toFixed(2),
+      totalBuyPrice.toFixed(2),
+      totalSellPrice.toFixed(2),
       totalPnl.toFixed(2),
       "",
     ]
