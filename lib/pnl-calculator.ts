@@ -1,0 +1,420 @@
+import ExcelJS from "exceljs";
+
+export interface ParsedTradeRow {
+  cnote?: string;
+  account?: string;
+  type: "BUY" | "SELL";
+  ticker: string;
+  company: string;
+  contractDate?: string;
+  units: number;
+  avgPrice: number;
+  consideration?: number;
+  value: number;
+  status?: string;
+}
+
+export interface PnlSummaryItem {
+  ticker: string;
+  company: string;
+  buyQty: number;
+  sellQty: number;
+  buyPrice: number; // Average Buy Price
+  sellPrice: number; // Average Sell Price
+  totalBuyValue: number; // Total Cost paid
+  totalSellValue: number; // Total Proceeds received
+  pnlCalculated: number; // Total Sell Value - Total Buy Value (or Realized P&L)
+  openQty: number; // buyQty - sellQty
+  tradeCount: number;
+}
+
+export interface ParseResult {
+  summary: PnlSummaryItem[];
+  rawTrades: ParsedTradeRow[];
+  totalPnl: number;
+  totalTrades: number;
+  uniqueTickers: number;
+  errors: string[];
+}
+
+/**
+ * Normalizes header string to lower case alphanumeric only for flexible matching
+ */
+function normHeader(h: string): string {
+  return String(h || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Parses numeric values safely from Excel cell or string
+ */
+function parseNum(val: any): number {
+  if (val == null) return 0;
+  if (typeof val === "number") return isNaN(val) ? 0 : val;
+  if (typeof val === "object" && "result" in val) return parseNum(val.result);
+  const cleaned = String(val).replace(/[^0-9.-]/g, "");
+  const parsed = parseFloat(cleaned);
+  return isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Extracts string value safely from Excel cell or value
+ */
+function parseStr(val: any): string {
+  if (val == null) return "";
+  if (typeof val === "object") {
+    if ("result" in val) return parseStr(val.result);
+    if ("text" in val) return parseStr(val.text);
+    if ("richText" in val && Array.isArray(val.richText)) {
+      return val.richText.map((t: any) => t.text || "").join("");
+    }
+  }
+  return String(val).trim();
+}
+
+/**
+ * Parses trade rows from an Excel or CSV Buffer completely in-memory.
+ */
+export async function parsePnlFileBuffer(
+  buffer: Buffer,
+  filename: string
+): Promise<ParseResult> {
+  const isCsv = filename.toLowerCase().endsWith(".csv");
+  const workbook = new ExcelJS.Workbook();
+  const errors: string[] = [];
+  const rawTrades: ParsedTradeRow[] = [];
+
+  if (isCsv) {
+    // Read as CSV
+    const { Readable } = await import("stream");
+    const stream = Readable.from(buffer);
+    await workbook.csv.read(stream);
+  } else {
+    // Read as Excel XLSX/XLS
+    await workbook.xlsx.load(buffer as any);
+  }
+
+  const worksheet = workbook.worksheets[0];
+  if (!worksheet) {
+    return {
+      summary: [],
+      rawTrades: [],
+      totalPnl: 0,
+      totalTrades: 0,
+      uniqueTickers: 0,
+      errors: ["The uploaded file contains no worksheets."],
+    };
+  }
+
+  // Identify column headers from row 1
+  const headerRow = worksheet.getRow(1);
+  const colMap: Record<string, number> = {};
+
+  headerRow.eachCell((cell, colNumber) => {
+    const rawVal = parseStr(cell.value);
+    const key = normHeader(rawVal);
+    if (key) colMap[key] = colNumber;
+  });
+
+  // Helper to find column index by multiple possible alias names
+  const getCol = (aliases: string[]): number | undefined => {
+    for (const alias of aliases) {
+      const norm = normHeader(alias);
+      if (colMap[norm] != null) return colMap[norm];
+    }
+    return undefined;
+  };
+
+  const colType = getCol(["type", "side", "tradetype", "buysell"]);
+  const colSecurity = getCol(["security", "ticker", "code", "securitycode", "symbol"]);
+  const colCompany = getCol(["company", "description", "name", "securityname"]);
+  const colUnits = getCol(["units", "qty", "quantity", "volume"]);
+  const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate"]);
+  const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue"]);
+  const colCNote = getCol(["cnote", "contractnote", "ref", "reference"]);
+  const colAccount = getCol(["account", "accountno", "clientcode"]);
+  const colDate = getCol(["contractdate", "date", "tradedate"]);
+  const colStatus = getCol(["status"]);
+
+  if (!colType || !colSecurity || (!colUnits && !colValue)) {
+    return {
+      summary: [],
+      rawTrades: [],
+      totalPnl: 0,
+      totalTrades: 0,
+      uniqueTickers: 0,
+      errors: [
+        "Required columns could not be mapped. Please ensure the file includes columns for Type (BUY/SELL), Security (Ticker), and Units/Qty.",
+      ],
+    };
+  }
+
+  // Iterate data rows starting from row 2
+  worksheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return; // Skip header
+
+    const typeRaw = parseStr(colType ? row.getCell(colType).value : "").toUpperCase();
+    const tickerRaw = parseStr(colSecurity ? row.getCell(colSecurity).value : "").toUpperCase();
+
+    if (!tickerRaw || (typeRaw !== "BUY" && typeRaw !== "SELL")) {
+      return; // Skip invalid or non-trade rows
+    }
+
+    const units = parseNum(colUnits ? row.getCell(colUnits).value : 0);
+    const avgPrice = parseNum(colAvgPrice ? row.getCell(colAvgPrice).value : 0);
+    let value = parseNum(colValue ? row.getCell(colValue).value : 0);
+
+    if (value === 0 && units > 0 && avgPrice > 0) {
+      value = Math.round(units * avgPrice * 100) / 100;
+    }
+
+    const status = colStatus ? parseStr(row.getCell(colStatus).value).toUpperCase() : "SETTLED";
+
+    // ONLY SETTLED trades are considered for PNL calculation
+    if (status !== "SETTLED") {
+      return;
+    }
+
+    rawTrades.push({
+      cnote: colCNote ? parseStr(row.getCell(colCNote).value) : undefined,
+      account: colAccount ? parseStr(row.getCell(colAccount).value) : undefined,
+      type: typeRaw as "BUY" | "SELL",
+      ticker: tickerRaw,
+      company: colCompany ? parseStr(row.getCell(colCompany).value) : tickerRaw,
+      contractDate: colDate ? parseStr(row.getCell(colDate).value) : undefined,
+      units,
+      avgPrice,
+      value,
+      status,
+    });
+  });
+
+  // Aggregate by Ticker
+  const tickerMap = new Map<string, PnlSummaryItem>();
+
+  for (const t of rawTrades) {
+    let item = tickerMap.get(t.ticker);
+    if (!item) {
+      item = {
+        ticker: t.ticker,
+        company: t.company || t.ticker,
+        buyQty: 0,
+        sellQty: 0,
+        buyPrice: 0,
+        sellPrice: 0,
+        totalBuyValue: 0,
+        totalSellValue: 0,
+        pnlCalculated: 0,
+        openQty: 0,
+        tradeCount: 0,
+      };
+      tickerMap.set(t.ticker, item);
+    }
+
+    item.tradeCount += 1;
+
+    if (t.type === "BUY") {
+      item.buyQty += t.units;
+      item.totalBuyValue += t.value;
+    } else {
+      item.sellQty += t.units;
+      item.totalSellValue += t.value;
+    }
+  }
+
+  // Calculate weighted averages and final P&L per ticker
+  const summary: PnlSummaryItem[] = Array.from(tickerMap.values()).map((item) => {
+    const buyPrice = item.buyQty > 0 ? item.totalBuyValue / item.buyQty : 0;
+    const sellPrice = item.sellQty > 0 ? item.totalSellValue / item.sellQty : 0;
+    const pnlCalculated = item.totalSellValue - item.totalBuyValue;
+    const openQty = item.buyQty - item.sellQty;
+
+    return {
+      ...item,
+      buyPrice: Math.round(buyPrice * 10000) / 10000,
+      sellPrice: Math.round(sellPrice * 10000) / 10000,
+      totalBuyValue: Math.round(item.totalBuyValue * 100) / 100,
+      totalSellValue: Math.round(item.totalSellValue * 100) / 100,
+      pnlCalculated: Math.round(pnlCalculated * 100) / 100,
+      openQty,
+    };
+  });
+
+  // Sort summary by largest P&L descending
+  summary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
+
+  const totalPnl = summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+
+  return {
+    summary,
+    rawTrades,
+    totalPnl: Math.round(totalPnl * 100) / 100,
+    totalTrades: rawTrades.length,
+    uniqueTickers: summary.length,
+    errors,
+  };
+}
+
+/**
+ * Builds an Excel (.xlsx) workbook buffer for the P&L summary download.
+ */
+export async function buildPnlExportXlsxBuffer(
+  summary: PnlSummaryItem[]
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Vitti Capital Admin";
+
+  const ws = wb.addWorksheet("PnL Summary", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  const MONEY_FMT = "$#,##0.00;($#,##0.00);\"-\"";
+  const QTY_FMT = "#,##0";
+  const PRICE_FMT = "$#,##0.0000";
+
+  ws.columns = [
+    { header: "Ticker", key: "ticker", width: 14 },
+    { header: "Company", key: "company", width: 32 },
+    { header: "Buy Qty", key: "buyQty", width: 14, style: { numFmt: QTY_FMT } },
+    { header: "Sell Qty", key: "sellQty", width: 14, style: { numFmt: QTY_FMT } },
+    { header: "Buy Price", key: "buyPrice", width: 16, style: { numFmt: PRICE_FMT } },
+    { header: "Sell Price", key: "sellPrice", width: 16, style: { numFmt: PRICE_FMT } },
+    { header: "Total Buy Value", key: "totalBuyValue", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "Total Sell Value", key: "totalSellValue", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "Open Qty", key: "openQty", width: 14, style: { numFmt: QTY_FMT } },
+  ];
+
+  // Header formatting
+  const headerRow = ws.getRow(1);
+  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF1E293B" }, // dark slate navy
+  };
+  headerRow.height = 24;
+
+  for (const item of summary) {
+    const row = ws.addRow({
+      ticker: item.ticker,
+      company: item.company,
+      buyQty: item.buyQty,
+      sellQty: item.sellQty,
+      buyPrice: item.buyPrice,
+      sellPrice: item.sellPrice,
+      totalBuyValue: item.totalBuyValue,
+      totalSellValue: item.totalSellValue,
+      pnlCalculated: item.pnlCalculated,
+      openQty: item.openQty,
+    });
+
+    // PnL cell highlighting
+    const pnlCell = row.getCell("pnlCalculated");
+    if (item.pnlCalculated > 0) {
+      pnlCell.font = { color: { argb: "FF166534" }, bold: true }; // Green
+    } else if (item.pnlCalculated < 0) {
+      pnlCell.font = { color: { argb: "FF991B1B" }, bold: true }; // Red
+    }
+  }
+
+  // Grand Total Row
+  const totalBuyVal = summary.reduce((s, i) => s + i.totalBuyValue, 0);
+  const totalSellVal = summary.reduce((s, i) => s + i.totalSellValue, 0);
+  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+
+  const totalRow = ws.addRow({
+    ticker: "Grand Total",
+    company: "",
+    buyQty: "",
+    sellQty: "",
+    buyPrice: "",
+    sellPrice: "",
+    totalBuyValue: totalBuyVal,
+    totalSellValue: totalSellVal,
+    pnlCalculated: totalPnl,
+    openQty: "",
+  });
+
+  totalRow.font = { bold: true };
+  totalRow.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FFE2E8F0" },
+  };
+  totalRow.eachCell((c) => {
+    c.border = { top: { style: "thin" }, bottom: { style: "double" } };
+  });
+
+  return Buffer.from(await wb.xlsx.writeBuffer() as any);
+}
+
+/**
+ * Builds CSV string for the P&L summary download.
+ */
+export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
+  const headers = [
+    "Ticker",
+    "Company",
+    "Buy Qty",
+    "Sell Qty",
+    "Buy Price",
+    "Sell Price",
+    "Total Buy Value",
+    "Total Sell Value",
+    "PnL Calculated",
+    "Open Qty",
+  ];
+
+  const escapeCsv = (val: any) => {
+    const s = String(val == null ? "" : val);
+    if (/[",\r\n]/.test(s)) {
+      return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+  };
+
+  const lines = [
+    headers.join(","),
+    ...summary.map((item) =>
+      [
+        item.ticker,
+        item.company,
+        item.buyQty,
+        item.sellQty,
+        item.buyPrice.toFixed(4),
+        item.sellPrice.toFixed(4),
+        item.totalBuyValue.toFixed(2),
+        item.totalSellValue.toFixed(2),
+        item.pnlCalculated.toFixed(2),
+        item.openQty,
+      ]
+        .map(escapeCsv)
+        .join(",")
+    ),
+  ];
+
+  const totalBuyVal = summary.reduce((s, i) => s + i.totalBuyValue, 0);
+  const totalSellVal = summary.reduce((s, i) => s + i.totalSellValue, 0);
+  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+
+  lines.push(
+    [
+      "Grand Total",
+      "",
+      "",
+      "",
+      "",
+      "",
+      totalBuyVal.toFixed(2),
+      totalSellVal.toFixed(2),
+      totalPnl.toFixed(2),
+      "",
+    ]
+      .map(escapeCsv)
+      .join(",")
+  );
+
+  return lines.join("\r\n");
+}

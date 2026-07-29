@@ -90,6 +90,7 @@ export function PortalShell({
       { k: "clients", label: "Clients", path: "/portal/staff/clients", icon: "M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM3 21c0-3.9 4-7 9-7s9 3.1 9 7", tab: true },
       { k: "placements", label: "Placements", path: "/portal/staff/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true, badge: "pendingAlloc" },
       { k: "options", label: "Options", path: "/portal/staff/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: true },
+      { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: "M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", tab: true },
       { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0", tab: false, badge: "alerts" },
       { k: "merge", label: "Merge requests", path: "/portal/staff/merge-requests", icon: "M7 3v6a5 5 0 0 0 5 5 5 5 0 0 1 5 5v2M7 3H4m3 0h3M17 21h3m-3 0h-3", tab: false, badge: "pendingMerge" },
       { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: "M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tab: false }
