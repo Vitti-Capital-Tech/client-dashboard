@@ -536,3 +536,37 @@ The summary row is computed, so when a source is incomplete no amount of re-impo
 - **Nothing edited travels silently.** `buildPnlSummary` returns `edited`, a per-field `overridden` map, and the original `computed` values. The table dot-underlines each hand-set cell with the computed figure in its tooltip; the `Type` column gains `(edited)`, so both exports carry the fact too. Every save writes an `audit_log` row naming the fields and the note.
 - **The chart stays in step.** An override is a company-level figure with no date, so `realizedByMonth` takes a `deltaByTicker` map and spreads each correction across that company's sale months **pro-rata by units sold** — where the corrected cost would have landed had it been in the ledger. A company with no sales gets no chart impact: correcting an unsold position moves *unrealised* P&L, which has no place on a realised chart.
 - **Account scope:** an override is stored per account, so the editor refuses to save while the filter is on "All accounts" rather than guessing which one to attach it to.
+
+### 8.17 In-Memory PNL Calculator Module & Actions (`lib/pnl-calculator.ts`, `app/actions/pnl-calculator.ts`)
+
+A self-contained, in-memory trade ledger parser and P&L calculator engineered for staff admins to parse contract notes and auto-merge Placement Tracker allocations without persistence.
+
+- **Data Models:**
+  - `PnlSummaryItem`: `{ ticker, company, buyQty, sellQty, buyPrice, sellPrice, totalBuyValue, totalSellValue, pnlCalculated, isMatched, isOption, isEdited?, isEnriched?, openQty, tradeCount, clientAllocations? }`
+  - `PlacementClientAllocation`: `{ clientName, advisor, askingBid, allocationDollar, roundShares, actualDollar, tranche1Dollar?, tranche1Shares?, tranche2Dollar?, tranche2Shares?, sellerFee? }`
+  - `PlacementTickerInfo`: `{ ticker, company?, totalShares, totalActualDollar, clientAllocations }`
+  - `ParseResult`: `{ summary, rawTrades, totalPnl, totalTrades, uniqueTickers, matchedTickers, optionTickers, errors }`
+- **In-Memory Engine (`parsePnlFileBuffer` & `parsePlacementTrackerBuffer`):**
+  - Accepts ArrayBuffer/Buffer from `.xlsx`, `.xls`, or `.csv` files.
+  - Normalizes headers dynamically (`Type`, `Security`, `Units`, `Value`, `Avg Price`, `CNote`, `Status`).
+  - Restricts trade calculations strictly to `Status === "SETTLED"` trades.
+  - Aggregates derivative tickers (`EOSXX`, `ACWXX`) to 3-character parent tickers (`EOS`, `ACW`) via `getParentTicker`.
+  - Calculates `buyPrice` (sum of buy values), `sellPrice` (sum of sell values), and `pnlCalculated` (`sellPrice - buyPrice`) for all tickers.
+  - Computes `totalPnl` as the universal sum of all calculated ticker P&Ls.
+- **Placement Tracker Auto-Merge Engine (`mergePlacementTrackerIntoSummary`):**
+  - `isClientMatch(clientName, fileStem)`: Extracts the initial uploaded trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching.
+  - Directly adds the matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in the current summary table.
+  - Leaves unmatched tickers and tickers not present in the current summary untouched.
+  - Recomputes `pnlCalculated = sellPrice - buyPrice`, `openQty = buyQty - sellQty`, `isMatched`, and tags rows with `isEnriched = true`.
+- **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
+  - `fetchPlacementTrackerUrlAction(url)`: Converts Google Sheets / SharePoint URLs (`/export?format=xlsx`, `/download.aspx`), checks for HTML login responses, and returns lightweight `PlacementTickerInfo[]` array.
+  - `exportPnlXlsxAction(summaryRows)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
+  - `exportPnlCsvAction(summaryRows)`: Generates RFC 4180 compliant `.csv` download string.
+  - Configured `serverActions.bodySizeLimit: "25mb"` in `next.config.ts`.
+- **Interactive UI Capabilities (`PnlCalculatorClient.tsx`):**
+  - Browser-side `file.arrayBuffer()` processing for 5ms zero-latency execution in browser memory without server action payload limits.
+  - Placement Tracker Integration Bar for direct URL fetch or local `.xlsx` file upload with `Enriched` row badges.
+  - Inline row editing with **Edit / Save / Cancel** controls.
+  - Open Position Market Price Helper: Staff can input a market price per unit (`$/u`) for open positions (`buyQty > sellQty`), which automatically calculates estimated sell value and matches quantities.
+  - Tab Filter Pills with real-time count badges (`All Tickers`, `Matched P&L`, `Profit Only`, `Loss Only`, `Options / Unmatched`).
+  - Fixed Grand Total row in table footer showing the overall summary across all tickers regardless of active tab view.

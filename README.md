@@ -32,7 +32,8 @@ client-dashboard/
 │   │   ├── placements.ts       # Server actions: placeBid / withdrawBid / scaleBids / settlePlacement / notifyBpayPayment
 │   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
 │   │   ├── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
-│   │   └── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
+│   │   ├── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
+│   │   └── pnl-calculator.ts   # Server action: in-memory P&L file parsing & export generation
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
@@ -51,6 +52,7 @@ client-dashboard/
 │       │   └── alerts/         #   ✅ page.tsx (server) + AlertsClient.tsx (island)
 │       └── staff/              # Staff/Adviser views
 │           ├── page.tsx        #   ✅ Overview / desk summary + StaffOverviewClient.tsx (island)
+│           ├── pnl-calculator/ #   ✅ page.tsx (server) + PnlCalculatorClient.tsx (in-memory ledger tool island)
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
 │           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed island:
 │           │                   #      holdings · order history · options · bids · alerts)
@@ -63,6 +65,8 @@ client-dashboard/
 ├── lib/
 │   ├── db.ts                   # Legacy in-memory DB — no longer imported by any route (pending removal)
 │   ├── fonts.ts                # next/font loader configurations
+│   ├── pnl-calculator.ts       # In-memory Excel/CSV trade ledger parser, Placement Tracker auto-merge engine & export generator
+│   ├── pnl-calculator.test.ts  # Test suite for in-memory P&L calculator engine (66 tests)
 │   ├── session.ts              # Auth session helpers (Supabase getUser): getSession / getActiveClientId / getActor
 │   ├── supabase/
 │   │   ├── client.ts           # Browser Supabase client (@supabase/ssr)
@@ -235,6 +239,7 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — a P&L-by-company table (one row per ticker, same columns as the exports) plus a diverging **column chart of realised P&L by month**. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
 | P&L summary export | ✅ one row per company (Row Labels · Company · Buy Qty · Sell Qty · Buy Price · Sell/Current Price · PnL · Open Positions · Type) with a summing Grand Total, rendered identically on screen and in both files. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — amber = open, green = exited, red bold = the two sources disagree. The workbook is built in a server action so the ~1 MB library never reaches the browser |
 | Desk P&L overrides | ✅ `…_pnl_overrides.sql` + `app/actions/pnl-overrides.ts` — an **Edit** button on each summary row lets staff correct Buy Qty / Sell Qty / Buy Price / Sell Price when a source is incomplete. Null = keep the computed value; P&L itself is never stored, so an edited row cannot contradict its own columns. Every edit is audited and marked in the table and both exports |
+| In-Memory P&L Calculator | ✅ `/portal/staff/pnl-calculator` — a dedicated admin tool that parses trade ledger Excel/CSV files entirely in-memory with **zero database persistence**. Automatically maps derivative tickers (`EOSXX → EOS`), sums buy/sell considerations, filters strictly `SETTLED` trades, supports inline row editing & open-position market pricing, and exports formatted Excel (`.xlsx`) and CSV files. |
 | Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |

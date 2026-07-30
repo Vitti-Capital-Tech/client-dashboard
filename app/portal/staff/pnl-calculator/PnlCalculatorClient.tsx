@@ -5,8 +5,16 @@ import {
   parsePnlFileAction,
   exportPnlXlsxAction,
   exportPnlCsvAction,
+  fetchPlacementTrackerUrlAction,
 } from "@/app/actions/pnl-calculator";
-import type { ParseResult, PnlSummaryItem } from "@/lib/pnl-calculator";
+import {
+  parsePnlFileBuffer,
+  parsePlacementTrackerBuffer,
+  mergePlacementTrackerIntoSummary,
+  placementArrayToMap,
+  type ParseResult,
+  type PnlSummaryItem,
+} from "@/lib/pnl-calculator";
 
 export function PnlCalculatorClient() {
   const [file, setFile] = useState<File | null>(null);
@@ -14,11 +22,101 @@ export function PnlCalculatorClient() {
   const [isProcessing, startProcessing] = useTransition();
   const [isExportingXlsx, startExportingXlsx] = useTransition();
   const [isExportingCsv, startExportingCsv] = useTransition();
+  const [isFetchingUrl, startFetchingUrl] = useTransition();
+  const [isMergingPlacementFile, startMergingPlacementFile] = useTransition();
   const [result, setResult] = useState<ParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "matched" | "profit" | "loss" | "options">("all");
 
+  const [placementUrl, setPlacementUrl] = useState("");
+  const [placementMsg, setPlacementMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const placementFileInputRef = useRef<HTMLInputElement>(null);
+
+  const toggleExpandTicker = (ticker: string) => {
+    setExpandedTickers((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticker)) {
+        next.delete(ticker);
+      } else {
+        next.add(ticker);
+      }
+      return next;
+    });
+  };
+
+  const getFilenameStem = (filename?: string | null): string => {
+    if (!filename) return "";
+    const dotIdx = filename.lastIndexOf(".");
+    const name = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
+    return name.trim();
+  };
+
+  const handleMergeUrl = () => {
+    if (!placementUrl || !result) return;
+    setPlacementMsg(null);
+    startFetchingUrl(async () => {
+      const res = await fetchPlacementTrackerUrlAction(placementUrl);
+      if (res.ok && res.placementItems) {
+        const placementMap = placementArrayToMap(res.placementItems);
+        const fileStem = getFilenameStem(file?.name);
+        const merged = mergePlacementTrackerIntoSummary(result.summary, placementMap, fileStem);
+        setResult({
+          ...result,
+          summary: merged.summary,
+          totalPnl: merged.totalPnl,
+        });
+        setPlacementMsg({
+          type: "success",
+          text: `Enriched Placement Tracker data for ${fileStem || "client"}! Matched/merged ${merged.mergedCount} tickers.`,
+        });
+        setPlacementUrl("");
+      } else {
+        setPlacementMsg({
+          type: "error",
+          text: res.error || "Failed to fetch/parse Placement Tracker URL.",
+        });
+      }
+    });
+  };
+
+  const handleMergePlacementFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0] || !result) return;
+    const pFile = e.target.files[0];
+    setPlacementMsg(null);
+    startMergingPlacementFile(async () => {
+      try {
+        const arrayBuffer = await pFile.arrayBuffer();
+        const placementMap = await parsePlacementTrackerBuffer(Buffer.from(arrayBuffer as any));
+        if (placementMap.size === 0) {
+          setPlacementMsg({
+            type: "error",
+            text: "No valid placement ticker sheets found in the uploaded file.",
+          });
+          return;
+        }
+        const fileStem = getFilenameStem(file?.name);
+        const merged = mergePlacementTrackerIntoSummary(result.summary, placementMap, fileStem);
+        setResult({
+          ...result,
+          summary: merged.summary,
+          totalPnl: merged.totalPnl,
+        });
+        setPlacementMsg({
+          type: "success",
+          text: `Enriched Placement Tracker data for ${fileStem || "client"}! Matched/merged ${merged.mergedCount} tickers.`,
+        });
+      } catch (err: any) {
+        console.error("Error parsing placement file:", err);
+        setPlacementMsg({
+          type: "error",
+          text: err.message || "Failed to parse placement file.",
+        });
+      }
+    });
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -54,10 +152,23 @@ export function PnlCalculatorClient() {
   const handleProcessFile = () => {
     if (!file) return;
     startProcessing(async () => {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await parsePnlFileAction(formData);
-      setResult(res);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const res = await parsePnlFileBuffer(Buffer.from(arrayBuffer as any), file.name);
+        setResult(res);
+      } catch (err: any) {
+        console.error("Error processing trade file:", err);
+        setResult({
+          rawTrades: [],
+          summary: [],
+          totalPnl: 0,
+          totalTrades: 0,
+          uniqueTickers: 0,
+          matchedTickers: 0,
+          optionTickers: 0,
+          errors: [err.message || "Failed to parse trade file."],
+        });
+      }
     });
   };
 
@@ -142,6 +253,85 @@ export function PnlCalculatorClient() {
     return num.toLocaleString("en-AU");
   };
 
+  // Inline row edit state
+  const [editingTicker, setEditingTicker] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    buyQty: string;
+    sellQty: string;
+    buyPrice: string;
+    sellPrice: string;
+    marketPrice: string;
+  }>({ buyQty: "", sellQty: "", buyPrice: "", sellPrice: "", marketPrice: "" });
+
+  const handleStartEdit = (item: PnlSummaryItem) => {
+    setEditingTicker(item.ticker);
+    setEditForm({
+      buyQty: String(item.buyQty),
+      sellQty: String(item.sellQty),
+      buyPrice: String(item.buyPrice),
+      sellPrice: String(item.sellPrice),
+      marketPrice: "",
+    });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingTicker(null);
+  };
+
+  const handleSaveEdit = (ticker: string) => {
+    if (!result) return;
+    const bQty = parseFloat(editForm.buyQty) || 0;
+    const sQty = parseFloat(editForm.sellQty) || 0;
+    const bPrice = parseFloat(editForm.buyPrice) || 0;
+    let sPrice = parseFloat(editForm.sellPrice) || 0;
+    const mPrice = parseFloat(editForm.marketPrice) || 0;
+
+    let finalSellQty = sQty;
+    // Helper: If market price is entered for open position, calculate estimated sell value and set sell qty = buy qty
+    if (mPrice > 0) {
+      const openQty = bQty - sQty;
+      if (openQty > 0) {
+        sPrice = sPrice + openQty * mPrice;
+        finalSellQty = bQty;
+      }
+    }
+
+    const isMatched = bQty === finalSellQty && bQty > 0;
+    const pnlCalculated = Math.round((sPrice - bPrice) * 100) / 100;
+
+    const updatedSummary = result.summary.map((item) => {
+      if (item.ticker === ticker) {
+        return {
+          ...item,
+          buyQty: bQty,
+          sellQty: finalSellQty,
+          buyPrice: Math.round(bPrice * 100) / 100,
+          sellPrice: Math.round(sPrice * 100) / 100,
+          totalBuyValue: Math.round(bPrice * 100) / 100,
+          totalSellValue: Math.round(sPrice * 100) / 100,
+          pnlCalculated,
+          isMatched,
+          isOption: !isMatched,
+          isEdited: true,
+          openQty: bQty - finalSellQty,
+        };
+      }
+      return item;
+    });
+
+    const newTotalPnl = updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+
+    setResult({
+      ...result,
+      summary: updatedSummary,
+      totalPnl: Math.round(newTotalPnl * 100) / 100,
+      matchedTickers: updatedSummary.filter((s) => s.isMatched).length,
+      optionTickers: updatedSummary.filter((s) => s.isOption).length,
+    });
+
+    setEditingTicker(null);
+  };
+
   // Filtered rows
   const filteredSummary = (result?.summary || []).filter((item) => {
     const matchesSearch =
@@ -151,8 +341,8 @@ export function PnlCalculatorClient() {
     if (!matchesSearch) return false;
 
     if (filterType === "matched") return item.isMatched;
-    if (filterType === "profit") return item.isMatched && item.pnlCalculated > 0;
-    if (filterType === "loss") return item.isMatched && item.pnlCalculated < 0;
+    if (filterType === "profit") return item.pnlCalculated > 0;
+    if (filterType === "loss") return item.pnlCalculated < 0;
     if (filterType === "options") return item.isOption;
     return true;
   });
@@ -164,10 +354,17 @@ export function PnlCalculatorClient() {
   const tabCounts = {
     all: summaryList.length,
     matched: summaryList.filter((i) => i.isMatched).length,
-    profit: summaryList.filter((i) => i.isMatched && i.pnlCalculated > 0).length,
-    loss: summaryList.filter((i) => i.isMatched && i.pnlCalculated < 0).length,
+    profit: summaryList.filter((i) => i.pnlCalculated > 0).length,
+    loss: summaryList.filter((i) => i.pnlCalculated < 0).length,
     options: summaryList.filter((i) => i.isOption).length,
   };
+
+  // Dynamic Grand Totals for currently visible tab rows
+  const filteredTotalBuyQty = filteredSummary.reduce((s, i) => s + i.buyQty, 0);
+  const filteredTotalSellQty = filteredSummary.reduce((s, i) => s + i.sellQty, 0);
+  const filteredTotalBuyPrice = filteredSummary.reduce((s, i) => s + i.buyPrice, 0);
+  const filteredTotalSellPrice = filteredSummary.reduce((s, i) => s + i.sellPrice, 0);
+  const filteredTotalPnl = filteredSummary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -362,6 +559,85 @@ export function PnlCalculatorClient() {
             </div>
           </div>
 
+          {/* Placement Tracker Integration Card */}
+          <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-paper-border pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-navy flex items-center gap-2">
+                  <span>Placement Tracker Integration (Direct Link & File Merge)</span>
+                  <span className="text-3xs px-2 py-0.5 rounded-full bg-navy/10 text-navy font-semibold">
+                    Auto-Enrichment
+                  </span>
+                </h3>
+                <p className="text-2xs text-mut mt-0.5">
+                  Paste a Google Sheets / Excel URL or upload a Placement Tracker file to auto-fill missing Buy Qty (Round Shares), Buy Price (ACTUAL $), and client breakdowns.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  ref={placementFileInputRef}
+                  onChange={handleMergePlacementFile}
+                  accept=".xlsx,.xls"
+                  className="hidden"
+                />
+                <button
+                  type="button"
+                  onClick={() => placementFileInputRef.current?.click()}
+                  disabled={isMergingPlacementFile}
+                  className="text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {isMergingPlacementFile ? "Merging File..." : "Upload Placement .xlsx"}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <div className="relative flex-1 w-full">
+                <input
+                  type="url"
+                  value={placementUrl}
+                  onChange={(e) => setPlacementUrl(e.target.value)}
+                  placeholder="Paste Placement Tracker Link (Google Sheets or Excel URL)..."
+                  className="w-full bg-paper-2/60 border border-paper-border rounded-xl px-3.5 py-2 text-xs font-mono text-navy focus:outline-none focus:border-navy"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleMergeUrl}
+                disabled={isFetchingUrl || !placementUrl.trim()}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold text-white bg-navy hover:bg-navy-h px-5 py-2 rounded-xl transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+              >
+                {isFetchingUrl ? (
+                  <>
+                    <svg className="animate-spin w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    Fetching & Merging...
+                  </>
+                ) : (
+                  "Fetch & Auto-Merge Link"
+                )}
+              </button>
+            </div>
+
+            {placementMsg && (
+              <div
+                className={`text-2xs p-3 rounded-xl flex items-center justify-between ${
+                  placementMsg.type === "success"
+                    ? "bg-green-bg text-green-d border border-green/20"
+                    : "bg-loss-bg text-loss-d border border-loss/20"
+                }`}
+              >
+                <span>{placementMsg.text}</span>
+                <button onClick={() => setPlacementMsg(null)} className="text-3xs underline font-semibold cursor-pointer">
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+
           {/* Action & Filter Toolbar */}
           <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
             {/* Filter Pills Bar — Full width on Desktop so all 5 tabs fit with ZERO scrolling */}
@@ -492,49 +768,158 @@ export function PnlCalculatorClient() {
                     <th className="py-3.5 px-4 text-right">Buy Price (Sum)</th>
                     <th className="py-3.5 px-4 text-right">Sell Price (Sum)</th>
                     <th className="py-3.5 px-4 text-right">PnL Calculated</th>
+                    <th className="py-3.5 px-4 text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-paper-border text-xs">
                   {filteredSummary.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-mut">
+                      <td colSpan={8} className="py-12 text-center text-mut">
                         No ticker records found matching your filters.
                       </td>
                     </tr>
                   ) : (
-                    filteredSummary.map((item) => (
-                      <tr key={item.ticker} className="hover:bg-paper-2/60 transition-colors">
-                        <td className="py-3.5 px-4 font-bold text-navy">
-                          <div className="flex items-center gap-2">
-                            <span>{item.ticker}</span>
-                            {item.isOption ? (
-                              <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities - categorized under options">
-                                Option ({fmtQty(Math.abs(item.openQty))})
-                              </span>
-                            ) : (
-                              <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
-                                Matched
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-mut truncate max-w-[200px]" title={item.company}>
-                          {item.company}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtQty(item.buyQty)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtQty(item.sellQty)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtCurrency(item.buyPrice)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono text-navy">
-                          {fmtCurrency(item.sellPrice)}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold">
-                          {item.isMatched ? (
+                    filteredSummary.map((item) => {
+                      const isEditing = editingTicker === item.ticker;
+
+                      if (isEditing) {
+                        return (
+                          <tr key={item.ticker} className="bg-paper-2/90 border-l-4 border-l-navy transition-colors">
+                            <td className="py-3 px-4 font-bold text-navy">
+                              <div className="flex items-center gap-1.5">
+                                <span>{item.ticker}</span>
+                                <span className="text-3xs px-1 py-0.5 rounded bg-navy text-white font-semibold">
+                                  Editing
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-mut text-xs max-w-[180px] truncate" title={item.company}>
+                              {item.company}
+                            </td>
+                            <td className="py-3 px-2 text-right">
+                              <input
+                                type="number"
+                                value={editForm.buyQty}
+                                onChange={(e) => setEditForm({ ...editForm, buyQty: e.target.value })}
+                                className="w-24 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                placeholder="Buy Qty"
+                              />
+                            </td>
+                            <td className="py-3 px-2 text-right">
+                              <input
+                                type="number"
+                                value={editForm.sellQty}
+                                onChange={(e) => setEditForm({ ...editForm, sellQty: e.target.value })}
+                                className="w-24 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                placeholder="Sell Qty"
+                              />
+                            </td>
+                            <td className="py-3 px-2 text-right">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={editForm.buyPrice}
+                                onChange={(e) => setEditForm({ ...editForm, buyPrice: e.target.value })}
+                                className="w-28 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                placeholder="Buy Price $"
+                              />
+                            </td>
+                            <td className="py-3 px-2 text-right">
+                              <div className="space-y-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={editForm.sellPrice}
+                                  onChange={(e) => setEditForm({ ...editForm, sellPrice: e.target.value })}
+                                  className="w-28 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                  placeholder="Sell Price $"
+                                />
+                                {item.openQty > 0 && (
+                                  <div className="text-3xs text-mut">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      value={editForm.marketPrice}
+                                      onChange={(e) => setEditForm({ ...editForm, marketPrice: e.target.value })}
+                                      className="w-28 bg-paper-1 border border-paper-border rounded-lg px-1.5 py-0.5 text-right text-3xs font-mono text-navy focus:outline-none focus:border-navy"
+                                      placeholder="Mkt Price ($/u)"
+                                      title="Enter current market price per unit to value open position"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-right text-2xs italic text-mut">
+                              Auto-calculated on save
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  onClick={() => handleSaveEdit(item.ticker)}
+                                  className="p-1.5 rounded-lg bg-green text-white hover:bg-green-h transition-all cursor-pointer shadow-2xs"
+                                  title="Save Changes"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={handleCancelEdit}
+                                  className="p-1.5 rounded-lg bg-paper-2 text-mut hover:text-navy border border-paper-border transition-all cursor-pointer"
+                                  title="Cancel Edit"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return (
+                        <tr key={item.ticker} className="hover:bg-paper-2/60 transition-colors">
+                          <td className="py-3.5 px-4 font-bold text-navy">
+                            <div className="flex items-center gap-2">
+                              <span>{item.ticker}</span>
+                              {item.isEnriched && (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold" title="Buy Qty and Buy Price merged from Placement Tracker">
+                                  Enriched
+                                </span>
+                              )}
+                              {item.isEdited && (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-navy/10 text-navy font-semibold">
+                                  Edited
+                                </span>
+                              )}
+                              {item.isOption ? (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities - option / open position">
+                                  Option ({fmtQty(Math.abs(item.openQty))})
+                                </span>
+                              ) : (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
+                                  Matched
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-mut truncate max-w-[200px]" title={item.company}>
+                            {item.company}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                            {fmtQty(item.buyQty)}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                            {fmtQty(item.sellQty)}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                            {fmtCurrency(item.buyPrice)}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                            {fmtCurrency(item.sellPrice)}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-mono font-bold">
                             <span
                               className={`inline-block px-2.5 py-1 rounded-lg ${
                                 item.pnlCalculated > 0
@@ -546,35 +931,43 @@ export function PnlCalculatorClient() {
                             >
                               {fmtCurrency(item.pnlCalculated)}
                             </span>
-                          ) : (
-                            <span className="inline-block px-2 py-1 rounded-lg bg-paper-2 text-mut font-normal text-2xs italic">
-                              Option (Excluded)
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))
+                          </td>
+                          <td className="py-3.5 px-4 text-center">
+                            <button
+                              onClick={() => handleStartEdit(item)}
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-mut hover:text-navy px-2.5 py-1 rounded-lg border border-paper-border hover:bg-paper-2 transition-all cursor-pointer"
+                              title="Edit position values manually"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                              </svg>
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
                 {filteredSummary.length > 0 && (
                   <tfoot>
                     <tr className="bg-paper-2 font-bold text-navy border-t border-paper-border text-xs">
                       <td className="py-4 px-4" colSpan={2}>
-                        Matched Grand Total ({tabCounts.matched} matched tickers)
+                        Grand Total ({summaryList.length} total tickers)
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtQty(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.buyQty, 0))}
+                        {fmtQty(summaryList.reduce((s, i) => s + i.buyQty, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtQty(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.sellQty, 0))}
+                        {fmtQty(summaryList.reduce((s, i) => s + i.sellQty, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.buyPrice, 0))}
+                        {fmtCurrency(totalBuyVolume)}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.sellPrice, 0))}
+                        {fmtCurrency(totalSellVolume)}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">
+                      <td className="py-4 px-4 text-right font-mono" colSpan={2}>
                         <span
                           className={`inline-block px-2.5 py-1 rounded-lg ${
                             result.totalPnl >= 0 ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"

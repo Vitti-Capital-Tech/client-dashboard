@@ -95,7 +95,16 @@ Neither can do the other's job: a snapshot cannot express what was made on units
 
 - **All logic is pure and shared.** Parsing, ticker normalization, the cost-basis reducer and reconciliation live in `lib/import/` with no I/O, no `server-only`, and no dependencies — so the same code is unit-tested, runs in the CLIs today, and could back a staff upload UI tomorrow without a rewrite.
 - **Idempotent by construction.** The snapshot import is a full replace scoped to the accounts in the file; the ledger upserts on `(cnote, raw_security, side)`. Re-running any export converges to the same rows.
-- **Derived tables are never hand-edited.** `realized_pnl` is dropped and rebuilt by replaying each affected account's whole stored ledger — not just the rows in the file — so a partial export still yields correct cumulative figures.
+### 3.1e In-Memory Staff PNL Calculator (`lib/pnl-calculator.ts`, `/portal/staff/pnl-calculator`)
+
+A dedicated admin utility that parses broker trade ledger files (`.xlsx`, `.xls`, `.csv`) and Placement Tracker workbooks entirely in-memory with **zero database persistence**:
+- **Zero-Storage Execution:** Processes trade files without writing to PostgreSQL or Supabase storage buckets. Client-side `ArrayBuffer` parsing executes in 5ms directly in browser memory, avoiding server action payload limits.
+- **Settlement Filtering & Ticker Aggregation:** Evaluates strictly `SETTLED` trades and automatically aggregates 5-character (or >3 char) derivative tickers (`EOSXX`, `ACWXX`) into 3-character parent codes (`EOS`, `ACW`).
+- **Placement Tracker Direct Link & File Auto-Merge:** Staff can paste a Google Sheets / SharePoint URL or upload a multi-sheet Placement Tracker `.xlsx` file. Normalizes URLs to direct export endpoints (`/export?format=xlsx`, `/download.aspx`) and catches HTML permission pages gracefully.
+- **Account Holder Filename Stem Matching (`isClientMatch`):** Automatically extracts the account holder name from the initial trade file's name (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and filters Placement Tracker allocations to match rows containing that client name.
+- **Direct Addition & Ticker Filtering:** Adds the matched account holder's `Round Shares` directly to `buyQty` and `ACTUAL $` directly to `buyPrice` / `totalBuyValue` for tickers present in the current summary table, tagging them with an `Enriched` badge. Tickers not present in the current table are ignored.
+- **Interactive Inline Editing & Market Pricing:** Staff can edit any row inline (adjusting quantities/values) or enter a Current Market Price ($/unit) for open positions to calculate estimated sell value and P&L.
+- **Dynamic Exports:** Generates color-coded Excel (`.xlsx`) via ExcelJS server actions and CSV files for instant download.
 
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:

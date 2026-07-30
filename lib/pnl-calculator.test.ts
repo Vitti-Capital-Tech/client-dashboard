@@ -4,6 +4,7 @@ import {
   parsePnlFileBuffer,
   buildPnlExportCsvString,
   buildPnlExportXlsxBuffer,
+  mergePlacementTrackerIntoSummary,
 } from "./pnl-calculator.ts";
 
 test("PNL Calculator - parse CSV buffer and aggregate by ticker", async () => {
@@ -86,10 +87,10 @@ test("PNL Calculator - map 5-letter derivative tickers (EOSXX, ACWXX) to 3-lette
   assert.equal(acw.buyPrice, 3000.02);
   assert.equal(acw.isMatched, false);
   assert.equal(acw.isOption, true);
-  assert.equal(acw.pnlCalculated, 0); // Excluded from PnL calculation!
+  assert.equal(acw.pnlCalculated, -3000.02);
 
-  // Total PNL only sums matched positions (EOS = 44.77)
-  assert.equal(result.totalPnl, 44.77);
+  // Total PNL sums all positions (EOS: 44.77, ACW: -3000.02 => -2955.25)
+  assert.equal(result.totalPnl, -2955.25);
 });
 
 test("PNL Calculator - CSV export string contains required columns and numbers", async () => {
@@ -114,7 +115,7 @@ test("PNL Calculator - CSV export string contains required columns and numbers",
   const csv = buildPnlExportCsvString(summary);
   assert.ok(csv.includes("Ticker,Company,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Status,Open Qty"));
   assert.ok(csv.includes("EOS,ELECTRO C FPO,407,407,3256.00,3300.77,44.77,Matched,0"));
-  assert.ok(csv.includes("Grand Total (Matched)"));
+  assert.ok(csv.includes("Grand Total"));
 });
 
 test("PNL Calculator - XLSX export buffer builds cleanly", async () => {
@@ -139,4 +140,60 @@ test("PNL Calculator - XLSX export buffer builds cleanly", async () => {
   const buffer = await buildPnlExportXlsxBuffer(summary);
   assert.ok(buffer instanceof Buffer);
   assert.ok(buffer.length > 0);
+});
+
+test("PNL Calculator - mergePlacementTrackerIntoSummary populates Buy Qty (Round Shares) and Buy Price (ACTUAL $)", async () => {
+  const initialSummary = [
+    {
+      ticker: "ZEU",
+      company: "ZEUS RESOURCES",
+      buyQty: 0,
+      sellQty: 3333333,
+      buyPrice: 0,
+      sellPrice: 24000.00,
+      totalBuyValue: 0,
+      totalSellValue: 24000.00,
+      pnlCalculated: 24000.00,
+      isMatched: false,
+      isOption: true,
+      openQty: -3333333,
+      tradeCount: 1,
+    },
+  ];
+
+  const placementMap = new Map();
+  placementMap.set("ZEU", {
+    ticker: "ZEU",
+    totalShares: 3333333,
+    totalActualDollar: 20000.00,
+    clientAllocations: [
+      { clientName: "Ikigai Consortium Pty Ltd", advisor: "VTC", askingBid: 9000, allocationDollar: 7200, roundShares: 1200000, actualDollar: 7200 },
+      { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 5000, allocationDollar: 4000, roundShares: 666667, actualDollar: 4000 },
+      { clientName: "Mr Akshit Verma", advisor: "VTC", askingBid: 4000, allocationDollar: 3200, roundShares: 533333, actualDollar: 3200 },
+      { clientName: "PSG Capital", advisor: "VTC", askingBid: 7000, allocationDollar: 5600, roundShares: 933333, actualDollar: 5600 },
+    ],
+  });
+
+  placementMap.set("UNKNOWN_TICKER", {
+    ticker: "UNKNOWN_TICKER",
+    totalShares: 100000,
+    totalActualDollar: 5000,
+    clientAllocations: [],
+  });
+
+  const merged = mergePlacementTrackerIntoSummary(initialSummary, placementMap);
+  const zeu = merged.summary.find((s) => s.ticker === "ZEU");
+  const unknown = merged.summary.find((s) => s.ticker === "UNKNOWN_TICKER");
+
+  assert.ok(zeu);
+  assert.equal(unknown, undefined); // Should NOT add tickers not in the current table!
+  assert.equal(merged.summary.length, 1);
+  assert.equal(zeu.buyQty, 3333333); // Enriched from Round Shares
+  assert.equal(zeu.buyPrice, 20000.00); // Enriched from ACTUAL $
+  assert.equal(zeu.sellPrice, 24000.00);
+  assert.equal(zeu.pnlCalculated, 4000.00); // 24000 - 20000 = 4000 P&L
+  assert.equal(zeu.isMatched, true);
+  assert.equal(zeu.isEnriched, true);
+  assert.equal(zeu.clientAllocations?.length, 4);
+  assert.equal(merged.totalPnl, 4000.00);
 });

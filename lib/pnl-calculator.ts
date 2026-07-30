@@ -14,6 +14,30 @@ export interface ParsedTradeRow {
   status?: string;
 }
 
+export interface PlacementClientAllocation {
+  clientName: string;
+  advisor: string;
+  askingBid: number;
+  allocationDollar: number;
+  roundShares: number;
+  actualDollar: number;
+  tranche1Dollar?: number;
+  tranche1Shares?: number;
+  tranche2Dollar?: number;
+  tranche2Shares?: number;
+  sellerFee?: number;
+}
+
+export interface PlacementTickerInfo {
+  ticker: string;
+  company?: string;
+  issuePrice?: number;
+  leadManager?: string;
+  totalShares: number;
+  totalActualDollar: number;
+  clientAllocations: PlacementClientAllocation[];
+}
+
 export interface PnlSummaryItem {
   ticker: string;
   company: string;
@@ -23,11 +47,14 @@ export interface PnlSummaryItem {
   sellPrice: number; // Sum of Sell Prices / Value
   totalBuyValue: number; // Total Cost paid
   totalSellValue: number; // Total Proceeds received
-  pnlCalculated: number; // Total Sell Value - Total Buy Value (Calculated ONLY when buyQty === sellQty)
+  pnlCalculated: number; // Total Sell Value - Total Buy Value
   isMatched: boolean; // true when buyQty === sellQty
   isOption: boolean; // true when buyQty !== sellQty (option / unmatched parcel)
+  isEdited?: boolean; // true if manually adjusted by staff
+  isEnriched?: boolean; // true if merged with placement tracker data
   openQty: number; // buyQty - sellQty
   tradeCount: number;
+  clientAllocations?: PlacementClientAllocation[];
 }
 
 export interface ParseResult {
@@ -256,11 +283,8 @@ export async function parsePnlFileBuffer(
     const isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
     const isOption = !isMatched;
 
-    // ONLY calculate PnL if buy and sell qty match!
-    const pnlCalculated = isMatched
-      ? Math.round((sellPrice - buyPrice) * 100) / 100
-      : 0;
-
+    // Calculate PnL for all positions regardless of qty match
+    const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
     const openQty = item.buyQty - item.sellQty;
 
     return {
@@ -276,16 +300,11 @@ export async function parsePnlFileBuffer(
     };
   });
 
-  // Sort summary: Matched items first by largest P&L, then Option/Unmatched items
-  summary.sort((a, b) => {
-    if (a.isMatched !== b.isMatched) return a.isMatched ? -1 : 1;
-    return b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker);
-  });
+  // Sort summary by largest P&L descending
+  summary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
 
-  // Total PnL sums ONLY matched positions where buyQty === sellQty
-  const totalPnl = summary
-    .filter((s) => s.isMatched)
-    .reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+  // Total PnL sums all positions
+  const totalPnl = summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
 
   const matchedTickers = summary.filter((s) => s.isMatched).length;
   const optionTickers = summary.filter((s) => s.isOption).length;
@@ -366,14 +385,13 @@ export async function buildPnlExportXlsxBuffer(
     }
   }
 
-  // Grand Total Row (sums ONLY matched positions)
-  const matchedSummary = summary.filter((i) => i.isMatched);
-  const totalBuyPrice = matchedSummary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = matchedSummary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = matchedSummary.reduce((s, i) => s + i.pnlCalculated, 0);
+  // Grand Total Row (sums all exported positions)
+  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   const totalRow = ws.addRow({
-    ticker: "Grand Total (Matched)",
+    ticker: "Grand Total",
     company: "",
     buyQty: "",
     sellQty: "",
@@ -432,7 +450,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.buyPrice.toFixed(2),
         item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
-        item.isMatched ? "Matched" : "Option / Unmatched",
+        item.isMatched ? "Matched" : item.isEdited ? "Edited" : "Option / Unmatched",
         item.openQty,
       ]
         .map(escapeCsv)
@@ -440,14 +458,13 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     ),
   ];
 
-  const matchedSummary = summary.filter((i) => i.isMatched);
-  const totalBuyPrice = matchedSummary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = matchedSummary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = matchedSummary.reduce((s, i) => s + i.pnlCalculated, 0);
+  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   lines.push(
     [
-      "Grand Total (Matched)",
+      "Grand Total",
       "",
       "",
       "",
@@ -462,4 +479,276 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
   );
 
   return lines.join("\r\n");
+}
+
+/**
+ * Safely extracts raw scalar values from ExcelJS cells, resolving formulas if present.
+ */
+function extractCellValue(val: any): any {
+  if (val === null || val === undefined) return "";
+  if (typeof val === "object") {
+    if ("result" in val && val.result !== undefined && val.result !== null) {
+      return val.result;
+    }
+    if ("text" in val) return val.text;
+    if ("richText" in val && Array.isArray(val.richText)) {
+      return val.richText.map((t: any) => t.text || "").join("");
+    }
+  }
+  return val;
+}
+
+/**
+ * Parses a multi-sheet Placement Tracker Excel file buffer (containing Overview and individual Ticker tabs).
+ * Focuses on Round Shares (Buy Qty) and ACTUAL $ (Buy Consideration) for each Account Holder / Client.
+ */
+export async function parsePlacementTrackerBuffer(
+  buffer: ArrayBuffer | Buffer
+): Promise<Map<string, PlacementTickerInfo>> {
+  const workbook = new ExcelJS.Workbook();
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as any);
+
+  try {
+    await workbook.xlsx.load(buf as any);
+  } catch (err: any) {
+    if (err.message && (err.message.includes("central directory") || err.message.includes("zip"))) {
+      throw new Error(
+        "The file/link provided is not a valid .xlsx Excel workbook (or link requires login). If using Google Sheets, make sure link sharing is set to 'Anyone with the link can view' or upload a saved .xlsx file."
+      );
+    }
+    throw err;
+  }
+
+  const placementMap = new Map<string, PlacementTickerInfo>();
+
+  // Exclude non-ticker system/utility sheets
+  const ignoredSheets = new Set([
+    "template",
+    "index",
+    "invoice",
+    "options",
+    "2026 overview",
+    "overview",
+    "summary",
+    "dashboard",
+  ]);
+
+  workbook.eachSheet((worksheet) => {
+    const rawSheetName = worksheet.name.trim();
+    const normSheetName = normHeader(rawSheetName);
+
+    if (ignoredSheets.has(normSheetName) || normSheetName.length === 0) {
+      return;
+    }
+
+    // Extract ticker from sheet name e.g. "FIN (b)" -> "FIN", "ZEU" -> "ZEU"
+    const cleanedTicker = rawSheetName.split(/\s|\(/)[0].trim().toUpperCase();
+    if (!cleanedTicker || cleanedTicker.length < 2) return;
+
+    const parentTicker = getParentTicker(cleanedTicker);
+
+    // Scan top 25 rows for table headers
+    let headerRowIdx = -1;
+    let colClient = -1;
+    let colAdvisor = -1;
+    let colAskingBid = -1;
+    let colAlloc = -1;
+    let colRoundShares = -1;
+    let colActualDollar = -1;
+    let colT1Dollar = -1;
+    let colT1Shares = -1;
+    let colT2Dollar = -1;
+    let colT2Shares = -1;
+    let colSellerFee = -1;
+
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (headerRowIdx !== -1 || rowNumber > 25) return;
+
+      const cells = row.values as any[];
+      if (!Array.isArray(cells)) return;
+
+      cells.forEach((cellVal, colIdx) => {
+        const str = normHeader(extractCellValue(cellVal));
+        if (str.includes("clientname") || str === "client" || str.includes("accountname")) {
+          headerRowIdx = rowNumber;
+        }
+      });
+
+      if (headerRowIdx === rowNumber) {
+        cells.forEach((cellVal, colIdx) => {
+          const str = normHeader(extractCellValue(cellVal));
+          if (str.includes("clientname") || str === "client" || str.includes("account")) colClient = colIdx;
+          else if (str.includes("advisor") || str.includes("broker")) colAdvisor = colIdx;
+          else if (str.includes("askingbid") || str === "bid") colAskingBid = colIdx;
+          else if (str === "allocation" || str.includes("alloc")) colAlloc = colIdx;
+          else if (str.includes("roundshares") || str.includes("ofshares") || str === "shares") colRoundShares = colIdx;
+          else if (str.includes("actual") || str === "actual") colActualDollar = colIdx;
+          else if (str.includes("tranche1") && str.includes("shares")) colT1Shares = colIdx;
+          else if (str.includes("tranche1")) colT1Dollar = colIdx;
+          else if (str.includes("tranche2") && str.includes("shares")) colT2Shares = colIdx;
+          else if (str.includes("tranche2")) colT2Dollar = colIdx;
+          else if (str.includes("sellerfee")) colSellerFee = colIdx;
+        });
+      }
+    });
+
+    if (headerRowIdx === -1 || colClient === -1) return;
+
+    const allocations: PlacementClientAllocation[] = [];
+    let totalShares = 0;
+    let totalActualDollar = 0;
+
+    worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber <= headerRowIdx) return;
+
+      const cells = row.values as any[];
+      if (!Array.isArray(cells)) return;
+
+      const clientName = String(extractCellValue(cells[colClient]) || "").trim();
+      const normClient = normHeader(clientName);
+
+      if (!clientName || normClient === "total" || normClient === "grandtotal" || normClient === "subtotal" || normClient === "sum") {
+        return;
+      }
+
+      const parseNum = (col: number) => {
+        if (col === -1 || col >= cells.length) return 0;
+        const v = extractCellValue(cells[col]);
+        if (typeof v === "number") return v;
+        const n = parseFloat(String(v || "").replace(/[^0-9.-]/g, ""));
+        return isNaN(n) ? 0 : n;
+      };
+
+      const advisor = colAdvisor !== -1 ? String(extractCellValue(cells[colAdvisor]) || "").trim() : "";
+      const askingBid = parseNum(colAskingBid);
+      const allocationDollar = parseNum(colAlloc);
+      const roundShares = Math.round(parseNum(colRoundShares > -1 ? colRoundShares : colT1Shares));
+      const actualDollar = Math.round(parseNum(colActualDollar > -1 ? colActualDollar : colAlloc) * 100) / 100;
+
+      if (roundShares > 0 || actualDollar > 0 || allocationDollar > 0) {
+        allocations.push({
+          clientName,
+          advisor,
+          askingBid,
+          allocationDollar,
+          roundShares,
+          actualDollar,
+          tranche1Dollar: parseNum(colT1Dollar),
+          tranche1Shares: parseNum(colT1Shares),
+          tranche2Dollar: parseNum(colT2Dollar),
+          tranche2Shares: parseNum(colT2Shares),
+          sellerFee: parseNum(colSellerFee),
+        });
+
+        totalShares += roundShares;
+        totalActualDollar += actualDollar;
+      }
+    });
+
+    if (allocations.length > 0) {
+      placementMap.set(parentTicker, {
+        ticker: parentTicker,
+        totalShares,
+        totalActualDollar: Math.round(totalActualDollar * 100) / 100,
+        clientAllocations: allocations,
+      });
+    }
+  });
+
+  return placementMap;
+}
+
+/**
+ * Converts Placement Map to JSON-serializable array.
+ */
+export function placementMapToArray(map: Map<string, PlacementTickerInfo>): PlacementTickerInfo[] {
+  return Array.from(map.values());
+}
+
+/**
+ * Converts JSON-serializable array back to Placement Map.
+ */
+export function placementArrayToMap(list: PlacementTickerInfo[]): Map<string, PlacementTickerInfo> {
+  const map = new Map<string, PlacementTickerInfo>();
+  for (const item of list) {
+    map.set(item.ticker, item);
+  }
+  return map;
+}
+
+/**
+ * Helper to check if a client name matches or contains the filename stem.
+ */
+export function isClientMatch(clientName: string, fileStem: string): boolean {
+  if (!clientName || !fileStem) return false;
+  const c = clientName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const s = fileStem.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  if (c.includes(s) || s.includes(c)) return true;
+
+  // Also check individual words (e.g. "Akshit" and "Verma")
+  const stemWords = fileStem
+    .toLowerCase()
+    .split(/[\s\-_]+/)
+    .filter((w) => w.length > 2 && !["trade", "ledger", "contract", "note", "notes", "xlsx", "csv", "xls"].includes(w));
+
+  if (stemWords.length > 0 && stemWords.every((w) => clientName.toLowerCase().includes(w))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Merges parsed Placement Tracker data into an existing PNL Summary.
+ * Fills missing Buy Qty (from Round Shares) & Buy Price (from ACTUAL $) for account holder matching filename stem.
+ */
+export function mergePlacementTrackerIntoSummary(
+  summary: PnlSummaryItem[],
+  placementData: Map<string, PlacementTickerInfo>,
+  fileStem?: string
+): { summary: PnlSummaryItem[]; mergedCount: number; totalPnl: number } {
+  const updatedSummary = summary.map((item) => ({ ...item }));
+  let mergedCount = 0;
+
+  for (const [rawTicker, info] of placementData.entries()) {
+    const parentTicker = getParentTicker(rawTicker);
+    const existing = updatedSummary.find((s) => getParentTicker(s.ticker) === parentTicker);
+
+    if (existing) {
+      // Find allocations for the matching account holder if fileStem is specified
+      let matchedAllocations = info.clientAllocations;
+      if (fileStem && fileStem.trim()) {
+        matchedAllocations = info.clientAllocations.filter((alloc) =>
+          isClientMatch(alloc.clientName, fileStem)
+        );
+      }
+
+      if (matchedAllocations.length > 0) {
+        const addedQty = matchedAllocations.reduce((sum, a) => sum + a.roundShares, 0);
+        const addedPrice = matchedAllocations.reduce((sum, a) => sum + a.actualDollar, 0);
+
+        if (addedQty > 0 || addedPrice > 0) {
+          existing.buyQty += addedQty;
+          existing.buyPrice = Math.round((existing.buyPrice + addedPrice) * 100) / 100;
+          existing.totalBuyValue = existing.buyPrice;
+
+          existing.pnlCalculated = Math.round((existing.sellPrice - existing.buyPrice) * 100) / 100;
+          existing.openQty = existing.buyQty - existing.sellQty;
+          existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
+          existing.isOption = !existing.isMatched;
+          existing.isEnriched = true;
+          existing.clientAllocations = matchedAllocations;
+          mergedCount++;
+        }
+      }
+    }
+  }
+
+  // Sort by pnlCalculated descending
+  updatedSummary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
+
+  const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+
+  return { summary: updatedSummary, mergedCount, totalPnl };
 }
