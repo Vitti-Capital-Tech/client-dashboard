@@ -5,6 +5,14 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Vitti Capital — Portfolio & Placements Platform",
   description: "One platform for portfolios, placements, and critical options exercise windows.",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/icon.png", type: "image/png" },
+      { url: "/favicon.ico" },
+    ],
+    apple: [{ url: "/icon.png" }],
+  },
 };
 
 export default function RootLayout({
