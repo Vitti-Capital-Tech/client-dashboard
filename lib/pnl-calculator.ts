@@ -300,8 +300,8 @@ export async function parsePnlFileBuffer(
     };
   });
 
-  // Sort summary by largest P&L descending
-  summary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
+  // Sort summary by ticker symbol ascending
+  summary.sort((a, b) => a.ticker.localeCompare(b.ticker));
 
   // Total PnL sums all positions
   const totalPnl = summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
@@ -359,7 +359,9 @@ export async function buildPnlExportXlsxBuffer(
   };
   headerRow.height = 24;
 
-  for (const item of summary) {
+  const sortedSummary = [...summary].sort((a, b) => a.ticker.localeCompare(b.ticker));
+
+  for (const item of sortedSummary) {
     const row = ws.addRow({
       ticker: item.ticker,
       company: item.company,
@@ -439,9 +441,11 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     return s;
   };
 
+  const sortedSummary = [...summary].sort((a, b) => a.ticker.localeCompare(b.ticker));
+
   const lines = [
     headers.join(","),
-    ...summary.map((item) =>
+    ...sortedSummary.map((item) =>
       [
         item.ticker,
         item.company,
@@ -725,14 +729,25 @@ export function mergePlacementTrackerIntoSummary(
       }
 
       if (matchedAllocations.length > 0) {
-        const addedQty = matchedAllocations.reduce((sum, a) => sum + a.roundShares, 0);
-        const addedPrice = matchedAllocations.reduce((sum, a) => sum + a.actualDollar, 0);
+        const placementQty = matchedAllocations.reduce((sum, a) => sum + a.roundShares, 0);
+        const placementPrice = matchedAllocations.reduce((sum, a) => sum + a.actualDollar, 0);
 
-        if (addedQty > 0 || addedPrice > 0) {
-          existing.buyQty += addedQty;
-          existing.buyPrice = Math.round((existing.buyPrice + addedPrice) * 100) / 100;
+        let updated = false;
+
+        // Only fill buyQty from Placement Tracker if currently 0
+        if (existing.buyQty === 0 && placementQty > 0) {
+          existing.buyQty = placementQty;
+          updated = true;
+        }
+
+        // Only fill buyPrice from Placement Tracker if currently 0
+        if (existing.buyPrice === 0 && placementPrice > 0) {
+          existing.buyPrice = Math.round(placementPrice * 100) / 100;
           existing.totalBuyValue = existing.buyPrice;
+          updated = true;
+        }
 
+        if (updated) {
           existing.pnlCalculated = Math.round((existing.sellPrice - existing.buyPrice) * 100) / 100;
           existing.openQty = existing.buyQty - existing.sellQty;
           existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
@@ -745,8 +760,8 @@ export function mergePlacementTrackerIntoSummary(
     }
   }
 
-  // Sort by pnlCalculated descending
-  updatedSummary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
+  // Sort by ticker symbol ascending
+  updatedSummary.sort((a, b) => a.ticker.localeCompare(b.ticker));
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 

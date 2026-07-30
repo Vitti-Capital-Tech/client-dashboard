@@ -551,6 +551,7 @@ A self-contained, in-memory trade ledger parser and P&L calculator engineered fo
   - Normalizes headers dynamically (`Type`, `Security`, `Units`, `Value`, `Avg Price`, `CNote`, `Status`).
   - Restricts trade calculations strictly to `Status === "SETTLED"` trades.
   - Aggregates derivative tickers (`EOSXX`, `ACWXX`) to 3-character parent tickers (`EOS`, `ACW`) via `getParentTicker`.
+  - Sorts all ticker summary items in **ascending alphabetical order** (`a.ticker.localeCompare(b.ticker)`).
   - Calculates `buyPrice` (sum of buy values), `sellPrice` (sum of sell values), and `pnlCalculated` (`sellPrice - buyPrice`) for all tickers.
   - Computes `totalPnl` as the universal sum of all calculated ticker P&Ls.
 - **Placement Tracker Auto-Merge Engine (`mergePlacementTrackerIntoSummary`):**

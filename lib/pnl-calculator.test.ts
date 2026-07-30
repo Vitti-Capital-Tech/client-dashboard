@@ -197,3 +197,41 @@ test("PNL Calculator - mergePlacementTrackerIntoSummary populates Buy Qty (Round
   assert.equal(zeu.clientAllocations?.length, 4);
   assert.equal(merged.totalPnl, 4000.00);
 });
+
+test("PNL Calculator - mergePlacementTrackerIntoSummary does NOT double buyQty/buyPrice if already present (non-zero)", async () => {
+  const initialSummary = [
+    {
+      ticker: "ZEU",
+      company: "ZEUS RESOURCES",
+      buyQty: 3333333,
+      sellQty: 3333333,
+      buyPrice: 20000.00,
+      sellPrice: 24000.00,
+      totalBuyValue: 20000.00,
+      totalSellValue: 24000.00,
+      pnlCalculated: 4000.00,
+      isMatched: true,
+      isOption: false,
+      openQty: 0,
+      tradeCount: 2,
+    },
+  ];
+
+  const placementMap = new Map();
+  placementMap.set("ZEU", {
+    ticker: "ZEU",
+    totalShares: 3333333,
+    totalActualDollar: 20000.00,
+    clientAllocations: [
+      { clientName: "Mr Akshit Verma", advisor: "VTC", askingBid: 4000, allocationDollar: 3200, roundShares: 3333333, actualDollar: 20000 },
+    ],
+  });
+
+  const merged = mergePlacementTrackerIntoSummary(initialSummary, placementMap, "Mr Akshit Verma");
+  const zeu = merged.summary.find((s) => s.ticker === "ZEU");
+
+  assert.ok(zeu);
+  assert.equal(zeu.buyQty, 3333333); // NOT doubled to 6666666!
+  assert.equal(zeu.buyPrice, 20000.00); // NOT doubled to 40000!
+  assert.equal(zeu.pnlCalculated, 4000.00);
+});
