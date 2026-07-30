@@ -58,6 +58,32 @@ test("PNL Calculator - ignore non-SETTLED trades (CANCELLED, PENDING, REVERSED)"
   assert.equal(abc.pnlCalculated, 500.00);
 });
 
+test("PNL Calculator - map 5-letter derivative tickers (EOSXX, ACWXX) to 3-letter parent ticker", async () => {
+  const sampleCsv = `CNote,Account,Type,Security,Company,Description,Contract Date,Adviser,Units,Avg Price,Consideration,Brokerage,Other Charges,GST,Value,Brokerage%,Status
+2462073,114716,SELL,EOS,ELECTRO C FPO,,21-05-2026,VIZ,407,8.11,3300.77,100,0,10,3300.77,3.0296,SETTLED
+2458396,114716,BUY,EOSXX,ELECTRO C INSTPLACE,,19-05-2026,VIZ,407,8.00,3256.00,0,0,0,3256.00,0,SETTLED
+2303464,114716,BUY,ACWXX,ACTINOGE INSTOPLACE,,03-02-2026,VIZ,71429,0.042,3000.02,0,0,0,3000.02,0,SETTLED`;
+
+  const result = await parsePnlFileBuffer(Buffer.from(sampleCsv), "derivative.csv");
+
+  assert.equal(result.totalTrades, 3);
+  assert.equal(result.uniqueTickers, 2);
+
+  const eos = result.summary.find((s) => s.ticker === "EOS");
+  assert.ok(eos);
+  assert.equal(eos.buyQty, 407); // aggregated from EOSXX
+  assert.equal(eos.sellQty, 407); // aggregated from EOS
+  assert.equal(eos.buyPrice, 3256.00);
+  assert.equal(eos.sellPrice, 3300.77);
+  assert.equal(eos.pnlCalculated, 44.77);
+
+  const acw = result.summary.find((s) => s.ticker === "ACW");
+  assert.ok(acw);
+  assert.equal(acw.buyQty, 71429); // aggregated from ACWXX
+  assert.equal(acw.sellQty, 0);
+  assert.equal(acw.buyPrice, 3000.02);
+});
+
 test("PNL Calculator - CSV export string contains required columns and numbers", async () => {
   const summary = [
     {

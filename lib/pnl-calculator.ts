@@ -47,6 +47,18 @@ function normHeader(h: string): string {
 }
 
 /**
+ * Normalizes security codes/tickers by mapping derivatives (e.g. EOSXX, ACWXX, EOSYY, EOSZZ)
+ * to their 3-character ordinary parent ticker (e.g. EOS, ACW).
+ */
+export function getParentTicker(rawCode: string): string {
+  const code = String(rawCode || "").trim().toUpperCase();
+  if (code.length >= 3) {
+    return code.slice(0, 3);
+  }
+  return code;
+}
+
+/**
  * Parses numeric values safely from Excel cell or string
  */
 function parseNum(val: any): number {
@@ -190,15 +202,16 @@ export async function parsePnlFileBuffer(
     });
   });
 
-  // Aggregate by Ticker
+  // Aggregate by Parent Ticker (e.g. EOSXX -> EOS, ACWXX -> ACW)
   const tickerMap = new Map<string, PnlSummaryItem>();
 
   for (const t of rawTrades) {
-    let item = tickerMap.get(t.ticker);
+    const parent = getParentTicker(t.ticker);
+    let item = tickerMap.get(parent);
     if (!item) {
       item = {
-        ticker: t.ticker,
-        company: t.company || t.ticker,
+        ticker: parent,
+        company: t.company || parent,
         buyQty: 0,
         sellQty: 0,
         buyPrice: 0,
@@ -209,7 +222,10 @@ export async function parsePnlFileBuffer(
         openQty: 0,
         tradeCount: 0,
       };
-      tickerMap.set(t.ticker, item);
+      tickerMap.set(parent, item);
+    } else if (t.ticker.length === 3 && t.company) {
+      // Prefer cleaner company name from ordinary 3-char security
+      item.company = t.company;
     }
 
     item.tradeCount += 1;
