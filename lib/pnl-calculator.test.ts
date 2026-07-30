@@ -75,6 +75,8 @@ test("PNL Calculator - map 5-letter derivative tickers (EOSXX, ACWXX) to 3-lette
   assert.equal(eos.sellQty, 407); // aggregated from EOS
   assert.equal(eos.buyPrice, 3256.00);
   assert.equal(eos.sellPrice, 3300.77);
+  assert.equal(eos.isMatched, true);
+  assert.equal(eos.isOption, false);
   assert.equal(eos.pnlCalculated, 44.77);
 
   const acw = result.summary.find((s) => s.ticker === "ACW");
@@ -82,6 +84,12 @@ test("PNL Calculator - map 5-letter derivative tickers (EOSXX, ACWXX) to 3-lette
   assert.equal(acw.buyQty, 71429); // aggregated from ACWXX
   assert.equal(acw.sellQty, 0);
   assert.equal(acw.buyPrice, 3000.02);
+  assert.equal(acw.isMatched, false);
+  assert.equal(acw.isOption, true);
+  assert.equal(acw.pnlCalculated, 0); // Excluded from PnL calculation!
+
+  // Total PNL only sums matched positions (EOS = 44.77)
+  assert.equal(result.totalPnl, 44.77);
 });
 
 test("PNL Calculator - CSV export string contains required columns and numbers", async () => {
@@ -96,15 +104,17 @@ test("PNL Calculator - CSV export string contains required columns and numbers",
       totalBuyValue: 3256.00,
       totalSellValue: 3300.77,
       pnlCalculated: 44.77,
+      isMatched: true,
+      isOption: false,
       openQty: 0,
       tradeCount: 2,
     },
   ];
 
   const csv = buildPnlExportCsvString(summary);
-  assert.ok(csv.includes("Ticker,Company,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Open Qty"));
-  assert.ok(csv.includes("EOS,ELECTRO C FPO,407,407,3256.00,3300.77,44.77,0"));
-  assert.ok(csv.includes("Grand Total"));
+  assert.ok(csv.includes("Ticker,Company,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Status,Open Qty"));
+  assert.ok(csv.includes("EOS,ELECTRO C FPO,407,407,3256.00,3300.77,44.77,Matched,0"));
+  assert.ok(csv.includes("Grand Total (Matched)"));
 });
 
 test("PNL Calculator - XLSX export buffer builds cleanly", async () => {
@@ -119,6 +129,8 @@ test("PNL Calculator - XLSX export buffer builds cleanly", async () => {
       totalBuyValue: 3256.00,
       totalSellValue: 3300.77,
       pnlCalculated: 44.77,
+      isMatched: true,
+      isOption: false,
       openQty: 0,
       tradeCount: 2,
     },

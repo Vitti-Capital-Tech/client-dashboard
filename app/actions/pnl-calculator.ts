@@ -21,6 +21,8 @@ export async function parsePnlFileAction(formData: FormData): Promise<ParseResul
       totalPnl: 0,
       totalTrades: 0,
       uniqueTickers: 0,
+      matchedTickers: 0,
+      optionTickers: 0,
       errors: ["No file uploaded."],
     };
   }
@@ -37,6 +39,8 @@ export async function parsePnlFileAction(formData: FormData): Promise<ParseResul
       totalPnl: 0,
       totalTrades: 0,
       uniqueTickers: 0,
+      matchedTickers: 0,
+      optionTickers: 0,
       errors: [err.message || "Failed to process the uploaded file."],
     };
   }

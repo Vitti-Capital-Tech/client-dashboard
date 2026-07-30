@@ -19,11 +19,13 @@ export interface PnlSummaryItem {
   company: string;
   buyQty: number;
   sellQty: number;
-  buyPrice: number; // Average Buy Price
-  sellPrice: number; // Average Sell Price
+  buyPrice: number; // Sum of Buy Prices / Value
+  sellPrice: number; // Sum of Sell Prices / Value
   totalBuyValue: number; // Total Cost paid
   totalSellValue: number; // Total Proceeds received
-  pnlCalculated: number; // Total Sell Value - Total Buy Value (or Realized P&L)
+  pnlCalculated: number; // Total Sell Value - Total Buy Value (Calculated ONLY when buyQty === sellQty)
+  isMatched: boolean; // true when buyQty === sellQty
+  isOption: boolean; // true when buyQty !== sellQty (option / unmatched parcel)
   openQty: number; // buyQty - sellQty
   tradeCount: number;
 }
@@ -34,6 +36,8 @@ export interface ParseResult {
   totalPnl: number;
   totalTrades: number;
   uniqueTickers: number;
+  matchedTickers: number;
+  optionTickers: number;
   errors: string[];
 }
 
@@ -115,6 +119,8 @@ export async function parsePnlFileBuffer(
       totalPnl: 0,
       totalTrades: 0,
       uniqueTickers: 0,
+      matchedTickers: 0,
+      optionTickers: 0,
       errors: ["The uploaded file contains no worksheets."],
     };
   }
@@ -156,6 +162,8 @@ export async function parsePnlFileBuffer(
       totalPnl: 0,
       totalTrades: 0,
       uniqueTickers: 0,
+      matchedTickers: 0,
+      optionTickers: 0,
       errors: [
         "Required columns could not be mapped. Please ensure the file includes columns for Type (BUY/SELL), Security (Ticker), and Units/Qty.",
       ],
@@ -219,6 +227,8 @@ export async function parsePnlFileBuffer(
         totalBuyValue: 0,
         totalSellValue: 0,
         pnlCalculated: 0,
+        isMatched: false,
+        isOption: true,
         openQty: 0,
         tradeCount: 0,
       };
@@ -243,7 +253,14 @@ export async function parsePnlFileBuffer(
   const summary: PnlSummaryItem[] = Array.from(tickerMap.values()).map((item) => {
     const buyPrice = Math.round(item.totalBuyValue * 100) / 100;
     const sellPrice = Math.round(item.totalSellValue * 100) / 100;
-    const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
+    const isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
+    const isOption = !isMatched;
+
+    // ONLY calculate PnL if buy and sell qty match!
+    const pnlCalculated = isMatched
+      ? Math.round((sellPrice - buyPrice) * 100) / 100
+      : 0;
+
     const openQty = item.buyQty - item.sellQty;
 
     return {
@@ -253,14 +270,25 @@ export async function parsePnlFileBuffer(
       totalBuyValue: buyPrice,
       totalSellValue: sellPrice,
       pnlCalculated,
+      isMatched,
+      isOption,
       openQty,
     };
   });
 
-  // Sort summary by largest P&L descending
-  summary.sort((a, b) => b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker));
+  // Sort summary: Matched items first by largest P&L, then Option/Unmatched items
+  summary.sort((a, b) => {
+    if (a.isMatched !== b.isMatched) return a.isMatched ? -1 : 1;
+    return b.pnlCalculated - a.pnlCalculated || a.ticker.localeCompare(b.ticker);
+  });
 
-  const totalPnl = summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+  // Total PnL sums ONLY matched positions where buyQty === sellQty
+  const totalPnl = summary
+    .filter((s) => s.isMatched)
+    .reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+
+  const matchedTickers = summary.filter((s) => s.isMatched).length;
+  const optionTickers = summary.filter((s) => s.isOption).length;
 
   return {
     summary,
@@ -268,6 +296,8 @@ export async function parsePnlFileBuffer(
     totalPnl: Math.round(totalPnl * 100) / 100,
     totalTrades: rawTrades.length,
     uniqueTickers: summary.length,
+    matchedTickers,
+    optionTickers,
     errors,
   };
 }
@@ -296,6 +326,7 @@ export async function buildPnlExportXlsxBuffer(
     { header: "Buy Price (Sum)", key: "buyPrice", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "Sell Price (Sum)", key: "sellPrice", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "Status", key: "status", width: 16 },
     { header: "Open Qty", key: "openQty", width: 14, style: { numFmt: QTY_FMT } },
   ];
 
@@ -318,31 +349,38 @@ export async function buildPnlExportXlsxBuffer(
       buyPrice: item.buyPrice,
       sellPrice: item.sellPrice,
       pnlCalculated: item.pnlCalculated,
+      status: item.isMatched ? "Matched" : "Option / Unmatched",
       openQty: item.openQty,
     });
 
     // PnL cell highlighting
     const pnlCell = row.getCell("pnlCalculated");
-    if (item.pnlCalculated > 0) {
-      pnlCell.font = { color: { argb: "FF166534" }, bold: true }; // Green
-    } else if (item.pnlCalculated < 0) {
-      pnlCell.font = { color: { argb: "FF991B1B" }, bold: true }; // Red
+    if (item.isMatched) {
+      if (item.pnlCalculated > 0) {
+        pnlCell.font = { color: { argb: "FF166534" }, bold: true }; // Green
+      } else if (item.pnlCalculated < 0) {
+        pnlCell.font = { color: { argb: "FF991B1B" }, bold: true }; // Red
+      }
+    } else {
+      pnlCell.font = { color: { argb: "FF6B7280" }, italic: true };
     }
   }
 
-  // Grand Total Row
-  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+  // Grand Total Row (sums ONLY matched positions)
+  const matchedSummary = summary.filter((i) => i.isMatched);
+  const totalBuyPrice = matchedSummary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = matchedSummary.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = matchedSummary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   const totalRow = ws.addRow({
-    ticker: "Grand Total",
+    ticker: "Grand Total (Matched)",
     company: "",
     buyQty: "",
     sellQty: "",
     buyPrice: totalBuyPrice,
     sellPrice: totalSellPrice,
     pnlCalculated: totalPnl,
+    status: "",
     openQty: "",
   });
 
@@ -371,6 +409,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     "Buy Price",
     "Sell Price",
     "PnL Calculated",
+    "Status",
     "Open Qty",
   ];
 
@@ -393,6 +432,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.buyPrice.toFixed(2),
         item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
+        item.isMatched ? "Matched" : "Option / Unmatched",
         item.openQty,
       ]
         .map(escapeCsv)
@@ -400,19 +440,21 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     ),
   ];
 
-  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+  const matchedSummary = summary.filter((i) => i.isMatched);
+  const totalBuyPrice = matchedSummary.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = matchedSummary.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = matchedSummary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   lines.push(
     [
-      "Grand Total",
+      "Grand Total (Matched)",
       "",
       "",
       "",
       totalBuyPrice.toFixed(2),
       totalSellPrice.toFixed(2),
       totalPnl.toFixed(2),
+      "",
       "",
     ]
       .map(escapeCsv)

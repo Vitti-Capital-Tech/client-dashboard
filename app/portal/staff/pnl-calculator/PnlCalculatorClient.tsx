@@ -16,7 +16,7 @@ export function PnlCalculatorClient() {
   const [isExportingCsv, startExportingCsv] = useTransition();
   const [result, setResult] = useState<ParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterType, setFilterType] = useState<"all" | "profit" | "loss" | "open">("all");
+  const [filterType, setFilterType] = useState<"all" | "matched" | "profit" | "loss" | "options">("all");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -150,15 +150,24 @@ export function PnlCalculatorClient() {
 
     if (!matchesSearch) return false;
 
-    if (filterType === "profit") return item.pnlCalculated > 0;
-    if (filterType === "loss") return item.pnlCalculated < 0;
-    if (filterType === "open") return item.openQty > 0;
+    if (filterType === "matched") return item.isMatched;
+    if (filterType === "profit") return item.isMatched && item.pnlCalculated > 0;
+    if (filterType === "loss") return item.isMatched && item.pnlCalculated < 0;
+    if (filterType === "options") return item.isOption;
     return true;
   });
 
-  const profitableCount = (result?.summary || []).filter((i) => i.pnlCalculated > 0).length;
-  const totalBuyVolume = (result?.summary || []).reduce((acc, curr) => acc + curr.totalBuyValue, 0);
-  const totalSellVolume = (result?.summary || []).reduce((acc, curr) => acc + curr.totalSellValue, 0);
+  const summaryList = result?.summary || [];
+  const totalBuyVolume = summaryList.reduce((acc, curr) => acc + curr.totalBuyValue, 0);
+  const totalSellVolume = summaryList.reduce((acc, curr) => acc + curr.totalSellValue, 0);
+
+  const tabCounts = {
+    all: summaryList.length,
+    matched: summaryList.filter((i) => i.isMatched).length,
+    profit: summaryList.filter((i) => i.isMatched && i.pnlCalculated > 0).length,
+    loss: summaryList.filter((i) => i.isMatched && i.pnlCalculated < 0).length,
+    options: summaryList.filter((i) => i.isOption).length,
+  };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -315,7 +324,7 @@ export function PnlCalculatorClient() {
                 {fmtCurrency(result.totalPnl)}
               </p>
               <p className="text-xs text-mut">
-                {profitableCount} of {result.uniqueTickers} tickers profitable
+                {result.matchedTickers} matched ({tabCounts.profit} profit, {tabCounts.loss} loss)
               </p>
             </div>
 
@@ -354,9 +363,46 @@ export function PnlCalculatorClient() {
           </div>
 
           {/* Action & Filter Toolbar */}
-          <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
-            {/* Search and Filters */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 flex-1">
+          <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
+            {/* Filter Pills Bar — Full width on Desktop so all 5 tabs fit with ZERO scrolling */}
+            <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-paper-border text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
+              {(["all", "matched", "profit", "loss", "options"] as const).map((f) => {
+                const active = filterType === f;
+                const count = tabCounts[f];
+                const labels = {
+                  all: "All Tickers",
+                  matched: "Matched P&L",
+                  profit: "Profit Only",
+                  loss: "Loss Only",
+                  options: "Options / Unmatched",
+                };
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setFilterType(f)}
+                    className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl transition-all duration-150 text-xs font-semibold whitespace-nowrap cursor-pointer ${
+                      active
+                        ? "bg-navy text-white shadow-xs"
+                        : "text-mut hover:text-navy hover:bg-paper-1/70"
+                    }`}
+                  >
+                    <span>{labels[f]}</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-3xs font-bold transition-colors ${
+                        active
+                          ? "bg-white/20 text-white"
+                          : "bg-paper-border/80 text-navy/80"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Controls Row: Search Input on left, Export & Action Buttons on right */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               {/* Search Bar */}
               <div className="relative flex-1 max-w-md">
                 <svg className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -364,82 +410,72 @@ export function PnlCalculatorClient() {
                 </svg>
                 <input
                   type="text"
-                  placeholder="Filter by ticker or company..."
+                  placeholder="Search ticker or company..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-paper-2 border border-paper-border rounded-xl pl-9 pr-4 py-2 text-xs text-navy focus:outline-none focus:border-navy"
+                  className="w-full bg-paper-2 border border-paper-border rounded-xl pl-9 pr-8 py-2 text-xs text-navy focus:outline-none focus:border-navy focus:bg-paper-1 transition-all"
                 />
-              </div>
-
-              {/* Filter Pills */}
-              <div className="flex items-center gap-1 bg-paper-2 p-1 rounded-xl border border-paper-border text-2xs font-medium">
-                {(["all", "profit", "loss", "open"] as const).map((f) => (
+                {searchQuery && (
                   <button
-                    key={f}
-                    onClick={() => setFilterType(f)}
-                    className={`px-3 py-1.5 rounded-lg transition-all capitalize ${
-                      filterType === f
-                        ? "bg-paper-1 text-navy font-semibold shadow-2xs"
-                        : "text-mut hover:text-navy"
-                    }`}
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-navy p-0.5"
                   >
-                    {f === "all"
-                      ? "All"
-                      : f === "profit"
-                      ? "Profit Only"
-                      : f === "loss"
-                      ? "Loss Only"
-                      : "Open Positions"}
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
                   </button>
-                ))}
+                )}
               </div>
-            </div>
 
-            {/* Download Export Buttons & Reset */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                onClick={handleDownloadXlsx}
-                disabled={isExportingXlsx}
-                className="inline-flex items-center gap-2 text-xs font-semibold text-white bg-green hover:bg-green-h px-4 py-2.5 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
-              >
-                {isExportingXlsx ? (
-                  "Exporting Excel..."
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Download Excel (.xlsx)
-                  </>
-                )}
-              </button>
+              {/* Download Export Buttons & Reset */}
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <button
+                  onClick={handleDownloadXlsx}
+                  disabled={isExportingXlsx}
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-white bg-green hover:bg-green-h px-4 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  title="Export as Microsoft Excel (.xlsx)"
+                >
+                  {isExportingXlsx ? (
+                    "Exporting..."
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Excel (.xlsx)
+                    </>
+                  )}
+                </button>
 
-              <button
-                onClick={handleDownloadCsv}
-                disabled={isExportingCsv}
-                className="inline-flex items-center gap-2 text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-4 py-2.5 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
-              >
-                {isExportingCsv ? (
-                  "Exporting CSV..."
-                ) : (
-                  <>
-                    <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Download CSV (.csv)
-                  </>
-                )}
-              </button>
+                <button
+                  onClick={handleDownloadCsv}
+                  disabled={isExportingCsv}
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  title="Export as CSV (.csv)"
+                >
+                  {isExportingCsv ? (
+                    "Exporting..."
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      CSV (.csv)
+                    </>
+                  )}
+                </button>
 
-              <button
-                onClick={handleReset}
-                className="inline-flex items-center gap-1.5 text-xs font-semibold text-mut hover:text-loss border border-paper-border hover:border-loss/30 px-3 py-2.5 rounded-xl transition-all cursor-pointer"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Upload New
-              </button>
+                <button
+                  onClick={handleReset}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-mut hover:text-loss border border-paper-border hover:border-loss/30 px-3 py-2 rounded-xl transition-all cursor-pointer"
+                  title="Reset & upload new trade ledger file"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  New
+                </button>
+              </div>
             </div>
           </div>
 
@@ -471,9 +507,13 @@ export function PnlCalculatorClient() {
                         <td className="py-3.5 px-4 font-bold text-navy">
                           <div className="flex items-center gap-2">
                             <span>{item.ticker}</span>
-                            {item.openQty > 0 && (
-                              <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold">
-                                Open ({fmtQty(item.openQty)})
+                            {item.isOption ? (
+                              <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities - categorized under options">
+                                Option ({fmtQty(Math.abs(item.openQty))})
+                              </span>
+                            ) : (
+                              <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
+                                Matched
                               </span>
                             )}
                           </div>
@@ -494,17 +534,23 @@ export function PnlCalculatorClient() {
                           {fmtCurrency(item.sellPrice)}
                         </td>
                         <td className="py-3.5 px-4 text-right font-mono font-bold">
-                          <span
-                            className={`inline-block px-2.5 py-1 rounded-lg ${
-                              item.pnlCalculated > 0
-                                ? "bg-green-bg text-green-d"
-                                : item.pnlCalculated < 0
-                                ? "bg-loss-bg text-loss-d"
-                                : "bg-paper-2 text-mut"
-                            }`}
-                          >
-                            {fmtCurrency(item.pnlCalculated)}
-                          </span>
+                          {item.isMatched ? (
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-lg ${
+                                item.pnlCalculated > 0
+                                  ? "bg-green-bg text-green-d"
+                                  : item.pnlCalculated < 0
+                                  ? "bg-loss-bg text-loss-d"
+                                  : "bg-paper-2 text-mut"
+                              }`}
+                            >
+                              {fmtCurrency(item.pnlCalculated)}
+                            </span>
+                          ) : (
+                            <span className="inline-block px-2 py-1 rounded-lg bg-paper-2 text-mut font-normal text-2xs italic">
+                              Option (Excluded)
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))
@@ -514,19 +560,19 @@ export function PnlCalculatorClient() {
                   <tfoot>
                     <tr className="bg-paper-2 font-bold text-navy border-t border-paper-border text-xs">
                       <td className="py-4 px-4" colSpan={2}>
-                        Grand Total ({filteredSummary.length} tickers)
+                        Matched Grand Total ({tabCounts.matched} matched tickers)
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtQty(filteredSummary.reduce((s, i) => s + i.buyQty, 0))}
+                        {fmtQty(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.buyQty, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtQty(filteredSummary.reduce((s, i) => s + i.sellQty, 0))}
+                        {fmtQty(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.sellQty, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.buyPrice, 0))}
+                        {fmtCurrency(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.buyPrice, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
-                        {fmtCurrency(filteredSummary.reduce((s, i) => s + i.sellPrice, 0))}
+                        {fmtCurrency(filteredSummary.filter((i) => i.isMatched).reduce((s, i) => s + i.sellPrice, 0))}
                       </td>
                       <td className="py-4 px-4 text-right font-mono">
                         <span
