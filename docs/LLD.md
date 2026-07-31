@@ -538,42 +538,55 @@ The summary row is computed, so when a source is incomplete no amount of re-impo
 - **Account scope:** an override is stored per account, so the editor refuses to save while the filter is on "All accounts" rather than guessing which one to attach it to.
 
 ### 8.17 In-Memory PNL Calculator Module & Actions (`lib/pnl-calculator.ts`, `app/actions/pnl-calculator.ts`)
+### 8.17 In-Memory PNL Calculator Architecture (`lib/pnl-calculator.ts` & `PnlCalculatorClient.tsx`)
 
-A self-contained, in-memory trade ledger parser and P&L calculator engineered for staff admins to parse contract notes and auto-merge Placement Tracker allocations without persistence.
+The In-Memory PNL Calculator is a state-of-the-art admin utility designed for zero-persisted, instant P&L analytics across client trade ledgers, Placement Tracker spreadsheets, and live database portfolio market values.
 
-- **Data Models:**
-  - `PnlSummaryItem`: `{ ticker, company, buyQty, sellQty, buyPrice, sellPrice, totalBuyValue, totalSellValue, pnlCalculated, isMatched, isOption, isEdited?, isEnriched?, isDbMarketValued?, openQty, tradeCount, clientAllocations? }`
-  - `PlacementClientAllocation`: `{ clientName, advisor, askingBid, allocationDollar, roundShares, actualDollar, tranche1Dollar?, tranche1Shares?, tranche2Dollar?, tranche2Shares?, sellerFee? }`
-  - `PlacementTickerInfo`: `{ ticker, company?, totalShares, totalActualDollar, clientAllocations }`
-  - `UploadedPlacementFile`: `{ id, name, map, tickerCount }`
-  - `ParseResult`: `{ summary, rawTrades, totalPnl, totalTrades, uniqueTickers, matchedTickers, optionTickers, accounts, errors }`
+- **Data Models (`lib/pnl-calculator.ts`):**
+  - `ParsedTradeRow`: `{ cnote, account, type ("BUY"|"SELL"), ticker, company, contractDate, units, avgPrice, consideration, value, status }`
+  - `PnlSummaryItem`: `{ ticker, company, buyQty, sellQty, buyPrice, sellPrice, totalBuyValue, totalSellValue, pnlCalculated, isMatched, isOption, hasOptionCode, isEdited, isEnriched, isDbMarketValued, openQty, tradeCount, clientAllocations }`
+  - `PlacementClientAllocation`: `{ clientName, advisor, askingBid, allocationDollar, roundShares, actualDollar, tranche1Dollar, tranche1Shares, tranche2Dollar, tranche2Shares, sellerFee }`
+  - `PlacementTickerInfo`: `{ ticker, company, issuePrice, leadManager, totalShares, totalActualDollar, clientAllocations }`
+  - `UploadedPlacementFile`: `{ id, name, map: Map<string, PlacementTickerInfo>, tickerCount }`
+  - `UploadedTradeFile`: `{ id, name, rawTrades: ParsedTradeRow[], tradeCount, accounts: string[] }`
   - `DbHoldingInfo`: `{ accountRef, ticker, parentTicker, companyName, qty, costBase, marketValue, unrealizedPnl }`
-- **In-Memory Engine (`parsePnlFileBuffer` & `parsePlacementTrackerBuffer`):**
-  - Accepts ArrayBuffer/Buffer from `.xlsx`, `.xls`, or `.csv` files.
-  - Normalizes headers dynamically (`Type`, `Security`, `Units`, `Value`, `Avg Price`, `CNote`, `Status`, `Account`).
+- **In-Memory Dual Parsing Engine (`parsePnlFileBuffer` & `parsePlacementTrackerBuffer`):**
+  - Accepts ArrayBuffer/Buffer from `.xlsx`, `.xls` (BIFF8 binary format), `.csv`, `.xlsm`, `.xlsb`, and HTML table exports.
+  - Combines `ExcelJS` with `SheetJS` (`XLSX.read(buffer, { type: "buffer" })`) fallback, enabling universal compatibility across legacy Excel 97-2003 formats and desktop broker exports (e.g., IRESS).
+  - Dynamically detects table header rows by scanning the top 15 rows of any worksheet/matrix using keyword match density (`knownHeaderKeywords`), handling leading blank rows, title rows, and truncated broker header strings (`Contract Dat`, `Considera`, `Other Cha`).
   - Restricts trade calculations strictly to `Status === "SETTLED"` trades.
   - Auto-detects `SELL` trades using negative unit values (`rawUnits < 0`) when column trade type text is missing.
   - Aggregates derivative & option tickers (`EOSXX`, `ENVO`, `NVOO`) to 3-character ordinary parent tickers (`EOS`, `ENV`, `NVO`) via `getParentTicker`.
   - Sorts all ticker summary items in **ascending alphabetical order** (`a.ticker.localeCompare(b.ticker)`).
   - Calculates `buyPrice` (sum of buy values), `sellPrice` (sum of sell values), and `pnlCalculated` (`sellPrice - buyPrice`) for all tickers.
   - Computes `totalPnl` as the universal sum of all calculated ticker P&Ls.
+- **Multi-File Trade Ledger Upload & Accumulation (`PnlCalculatorClient.tsx`):**
+  - Allows staff to drag-and-drop or pick multiple trade files at once or incrementally.
+  - Stores `tradeFiles: UploadedTradeFile[]` in client state, rendering interactive file badges with trade counts and individual `✕` remove controls.
+  - Dynamically combines `rawTrades` across all active trade files, rolling up parent tickers and updating `result.accounts`.
+  - Automatically resets `selectedAccount` filter to `"all"` upon new file upload so all new file trades are immediately visible.
+- **Private Link 1-Click OAuth Authentication & API Engine (`app/actions/pnl-calculator.ts`):**
+  - `fetchPlacementTrackerUrlAction(url, googleAccessToken, microsoftAccessToken)`: Authenticates private Google Drive and Microsoft 365 (SharePoint / OneDrive) URLs.
+  - Provides 1-Click SSO popup auth buttons (`handleGoogle1ClickLogin`, `handleMicrosoft1ClickLogin`) alongside manual token fallbacks.
+  - Executes API fallbacks against Google Drive API v3 (`/drive/v3/files/FILE_ID/export`) and Microsoft Graph API Shares endpoints (`/v1.0/shares/u!{base64Url}/driveItem/content`).
 - **Placement Tracker Auto-Merge Engine (`mergePlacementTrackerIntoSummary`):**
-  - `isClientMatch(clientName, fileStem)`: Extracts the initial uploaded trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching with fallback.
+  - `isClientMatch(clientName, fileStem)`: Extracts initial trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching with fallback.
   - Combines allocations across multiple uploaded Placement Tracker files via `combinePlacementMaps`.
-  - Directly adds the matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in the current summary table.
+  - Directly adds matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in summary table.
   - Recomputes `pnlCalculated = sellPrice - buyPrice`, `openQty = buyQty - sellQty`, `isMatched`, and tags rows with `isEnriched = true`.
 - **Database Portfolio Holdings Sync (`mergeDbHoldingsIntoSummary`):**
-  - `fetchDatabaseHoldingsAction(accountRef)`: Queries `positions`, `accounts`, and `securities` in parallel. Strictly scopes database positions to the requested account number(s) (e.g., `["1103199"]`) to prevent cross-account position leakage.
+  - `fetchDatabaseHoldingsAction(accountRef)`: Queries `positions`, `accounts`, and `securities` in parallel. Strictly scopes database positions to target account number(s) (e.g., `["1103199"]`) to prevent cross-account position leakage.
   - Auto-fills `sellQty` and `sellPrice` (current DB portfolio market value) for open positions (`sellQty = 0`), tagging matched rows with `isDbMarketValued = true`.
 - **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
   - `fetchDatabaseHoldingsAction(accountRef)`: Account-scoped server action returning `DbHoldingInfo[]` array.
-  - `fetchPlacementTrackerUrlAction(url)`: Converts Google Sheets / SharePoint URLs (`/export?format=xlsx`, `/download.aspx`), checks for HTML login responses, and returns lightweight `PlacementTickerInfo[]` array.
+  - `fetchPlacementTrackerUrlAction(url, googleAccessToken?, microsoftAccessToken?)`: URL action with OAuth token fallbacks returning lightweight `PlacementTickerInfo[]` array.
   - `exportPnlXlsxAction(summaryRows)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
   - `exportPnlCsvAction(summaryRows)`: Generates RFC 4180 compliant `.csv` download string.
   - Configured `serverActions.bodySizeLimit: "25mb"` in `next.config.ts`.
 - **Interactive UI Capabilities (`PnlCalculatorClient.tsx`):**
   - Client Account Filter Bar UI for filtering PnL summaries by `external_ref` / Account number.
   - Multi-File Placement Tracker upload (`multiple` selection) with active file list & individual `✕` remove button.
+  - Multi-File Trade Upload (`multiple` selection) with active trade file list, `+ Add Trade File` control & individual `✕` remove button.
   - Dedicated **Sync DB Market Value** action button with automated notifications.
   - Inline row editing with **Edit / Save / Cancel** controls.
   - 6 Filter Tabs (`All Tickers`, `Matched P&L`, `Profit Only`, `Loss Only`, `Unmatched`, `Options`).

@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import * as XLSX from "xlsx";
 
 export interface ParsedTradeRow {
   cnote?: string;
@@ -148,21 +149,92 @@ export async function parsePnlFileBuffer(
   filename: string
 ): Promise<ParseResult> {
   const isCsv = filename.toLowerCase().endsWith(".csv");
-  const workbook = new ExcelJS.Workbook();
+  let workbook = new ExcelJS.Workbook();
   const errors: string[] = [];
   const rawTrades: ParsedTradeRow[] = [];
 
-  if (isCsv) {
-    // Read as CSV
-    const { Readable } = await import("stream");
-    const stream = Readable.from(buffer);
-    await workbook.csv.read(stream);
-  } else {
-    // Read as Excel XLSX/XLS
-    await workbook.xlsx.load(buffer as any);
+  // Attempt 1: Try reading based on extension
+  try {
+    if (isCsv) {
+      const { Readable } = await import("stream");
+      await workbook.csv.read(Readable.from(buffer));
+    } else {
+      await workbook.xlsx.load(buffer as any);
+    }
+  } catch (e) {
+    // If XLSX fails, try CSV
+    try {
+      workbook = new ExcelJS.Workbook();
+      const { Readable } = await import("stream");
+      await workbook.csv.read(Readable.from(buffer));
+    } catch (e2) {
+      // ignore
+    }
   }
 
-  const worksheet = workbook.worksheets[0];
+  let worksheet = workbook.worksheets[0];
+
+  // Helper to scan a worksheet for headers
+  const scanHeaders = (ws: any) => {
+    let headerRowNumber = 1;
+    let maxMatches = 0;
+    let bestColMap: Record<string, number> = {};
+
+    const knownHeaderKeywords = [
+      "type", "side", "security", "ticker", "code", "units", "qty", "quantity",
+      "avgprice", "price", "consideration", "considera", "value", "cnote", "account", "status", "contractdate", "contractdat", "date"
+    ];
+
+    for (let r = 1; r <= Math.min(ws.rowCount || 1, 15); r++) {
+      const row = ws.getRow(r);
+      const tempColMap: Record<string, number> = {};
+      let matches = 0;
+
+      // Scan row.values array
+      const values = Array.isArray(row.values) ? row.values : [];
+      for (let c = 1; c < values.length; c++) {
+        const rawVal = parseStr(values[c]);
+        const key = normHeader(rawVal);
+        if (key) {
+          tempColMap[key] = c;
+          if (knownHeaderKeywords.some((k) => key.includes(k))) {
+            matches++;
+          }
+        }
+      }
+
+      // Also scan row.eachCell fallback
+      row.eachCell({ includeEmpty: false }, (cell: any, colNumber: number) => {
+        const rawVal = parseStr(cell.value);
+        const key = normHeader(rawVal);
+        if (key && !tempColMap[key]) {
+          tempColMap[key] = colNumber;
+          if (knownHeaderKeywords.some((k) => key.includes(k))) {
+            matches++;
+          }
+        }
+      });
+
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        headerRowNumber = r;
+        bestColMap = tempColMap;
+      }
+    }
+
+    return { headerRowNumber, maxMatches, bestColMap };
+  };
+
+  let scanResult = worksheet ? scanHeaders(worksheet) : { headerRowNumber: 1, maxMatches: 0, bestColMap: {} };
+
+  // Fallback: If 0 header matches found with ExcelJS, try loading with SheetJS (XLSX)
+  if (scanResult.maxMatches === 0) {
+    const sheetJsRes = parsePnlSheetJsMatrix(buffer);
+    if (sheetJsRes && sheetJsRes.rawTrades.length > 0) {
+      return sheetJsRes;
+    }
+  }
+
   if (!worksheet) {
     return {
       summary: [],
@@ -176,15 +248,7 @@ export async function parsePnlFileBuffer(
     };
   }
 
-  // Identify column headers from row 1
-  const headerRow = worksheet.getRow(1);
-  const colMap: Record<string, number> = {};
-
-  headerRow.eachCell((cell, colNumber) => {
-    const rawVal = parseStr(cell.value);
-    const key = normHeader(rawVal);
-    if (key) colMap[key] = colNumber;
-  });
+  const { headerRowNumber, bestColMap: colMap } = scanResult;
 
   // Helper to find column index by multiple possible alias names
   const getCol = (aliases: string[]): number | undefined => {
@@ -196,17 +260,17 @@ export async function parsePnlFileBuffer(
   };
 
   const colType = getCol(["type", "side", "tradetype", "buysell", "b/s", "bs", "action", "transactiontype", "ordertype", "buy/sell"]);
-  const colSecurity = getCol(["security", "ticker", "code", "securitycode", "symbol"]);
-  const colCompany = getCol(["company", "description", "name", "securityname"]);
-  const colUnits = getCol(["units", "qty", "quantity", "volume", "shares", "numberofshares", "tradedqty", "matchedqty", "filledqty"]);
-  const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate", "execprice", "price$", "tradeprice"]);
-  const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue", "grossvalue", "netamount", "totalconsideration", "netconsideration"]);
-  const colCNote = getCol(["cnote", "contractnote", "ref", "reference"]);
+  const colSecurity = getCol(["security", "ticker", "code", "securitycode", "symbol", "stock", "instrument"]);
+  const colCompany = getCol(["company", "description", "name", "securityname", "companyname", "stockname"]);
+  const colUnits = getCol(["units", "qty", "quantity", "volume", "shares", "numberofshares", "tradedqty", "matchedqty", "filledqty", "size"]);
+  const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate", "execprice", "price$", "tradeprice", "averageprice"]);
+  const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue", "grossvalue", "netamount", "totalconsideration", "netconsideration", "total"]);
+  const colCNote = getCol(["cnote", "contractnote", "ref", "reference", "note", "cnotenumber", "confirmation"]);
   const colAccount = getCol(["account", "accountno", "clientcode", "brokeraccount", "accno", "clientid", "externalref", "external_ref"]);
-  const colDate = getCol(["contractdate", "date", "tradedate"]);
-  const colStatus = getCol(["status"]);
+  const colDate = getCol(["contractdate", "date", "tradedate", "transdate", "executiondate"]);
+  const colStatus = getCol(["status", "state", "tradestatus"]);
 
-  if (!colType || !colSecurity || (!colUnits && !colValue)) {
+  if (!colSecurity || (!colUnits && !colValue)) {
     return {
       summary: [],
       rawTrades: [],
@@ -216,14 +280,14 @@ export async function parsePnlFileBuffer(
       matchedTickers: 0,
       optionTickers: 0,
       errors: [
-        "Required columns could not be mapped. Please ensure the file includes columns for Type (BUY/SELL), Security (Ticker), and Units/Qty.",
+        "Required columns could not be mapped. Please ensure the file includes columns for Security (Ticker) and Units/Qty or Value.",
       ],
     };
   }
 
-  // Iterate data rows starting from row 2
+  // Iterate data rows starting after headerRowNumber
   worksheet.eachRow((row, rowNumber) => {
-    if (rowNumber === 1) return; // Skip header
+    if (rowNumber <= headerRowNumber) return; // Skip header row and any title rows above it
 
     const typeStr = parseStr(colType ? row.getCell(colType).value : "").toUpperCase().trim();
     const tickerRaw = parseStr(colSecurity ? row.getCell(colSecurity).value : "").toUpperCase().trim();
@@ -315,6 +379,171 @@ export async function parsePnlFileBuffer(
     accounts,
     errors,
   };
+}
+
+/**
+ * Universal SheetJS fallback parser for .xls (Excel 97-2003 BIFF format), .xlsm, .xlsb, and HTML/CSV exports
+ */
+function parsePnlSheetJsMatrix(buffer: Buffer): ParseResult | null {
+  try {
+    const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    if (!wb.SheetNames || wb.SheetNames.length === 0) return null;
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    if (!sheet) return null;
+    const rowsMatrix = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, raw: false });
+    if (!rowsMatrix || rowsMatrix.length === 0) return null;
+
+    const knownHeaderKeywords = [
+      "type", "side", "security", "ticker", "code", "units", "qty", "quantity",
+      "avgprice", "price", "consideration", "considera", "value", "cnote", "account", "status", "contractdate", "contractdat", "date"
+    ];
+
+    let headerRowIdx = -1;
+    let maxMatches = 0;
+    let bestColMap: Record<string, number> = {};
+
+    for (let r = 0; r < Math.min(rowsMatrix.length, 15); r++) {
+      const rowArr = rowsMatrix[r];
+      if (!Array.isArray(rowArr)) continue;
+      const tempColMap: Record<string, number> = {};
+      let matches = 0;
+
+      rowArr.forEach((cellVal, colIdx) => {
+        const rawVal = parseStr(cellVal);
+        const key = normHeader(rawVal);
+        if (key) {
+          tempColMap[key] = colIdx;
+          if (knownHeaderKeywords.some((k) => key.includes(k))) {
+            matches++;
+          }
+        }
+      });
+
+      if (matches > maxMatches) {
+        maxMatches = matches;
+        headerRowIdx = r;
+        bestColMap = tempColMap;
+      }
+    }
+
+    if (maxMatches === 0 || headerRowIdx === -1) return null;
+
+    const colMap = bestColMap;
+    const getCol = (aliases: string[]): number | undefined => {
+      for (const alias of aliases) {
+        const norm = normHeader(alias);
+        if (colMap[norm] != null) return colMap[norm];
+      }
+      return undefined;
+    };
+
+    const colType = getCol(["type", "side", "tradetype", "buysell", "b/s", "bs", "action", "transactiontype", "ordertype", "buy/sell"]);
+    const colSecurity = getCol(["security", "ticker", "code", "securitycode", "symbol", "stock", "instrument"]);
+    const colCompany = getCol(["company", "description", "name", "securityname", "companyname", "stockname"]);
+    const colUnits = getCol(["units", "qty", "quantity", "volume", "shares", "numberofshares", "tradedqty", "matchedqty", "filledqty", "size"]);
+    const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate", "execprice", "price$", "tradeprice", "averageprice"]);
+    const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue", "grossvalue", "netamount", "totalconsideration", "netconsideration", "total"]);
+    const colCNote = getCol(["cnote", "contractnote", "ref", "reference", "note", "cnotenumber", "confirmation"]);
+    const colAccount = getCol(["account", "accountno", "clientcode", "brokeraccount", "accno", "clientid", "externalref", "external_ref"]);
+    const colDate = getCol(["contractdate", "date", "tradedate", "transdate", "executiondate"]);
+    const colStatus = getCol(["status", "state", "tradestatus"]);
+
+    if (!colSecurity || (!colUnits && !colValue)) return null;
+
+    const rawTrades: ParsedTradeRow[] = [];
+
+    for (let r = headerRowIdx + 1; r < rowsMatrix.length; r++) {
+      const rowArr = rowsMatrix[r];
+      if (!Array.isArray(rowArr) || rowArr.length === 0) continue;
+
+      const typeStr = parseStr(colType != null ? rowArr[colType] : "").toUpperCase().trim();
+      const tickerRaw = parseStr(colSecurity != null ? rowArr[colSecurity] : "").toUpperCase().trim();
+      const rawUnitsNum = parseNum(colUnits != null ? rowArr[colUnits] : 0);
+
+      let tradeType: "BUY" | "SELL" | null = null;
+      if (
+        typeStr === "BUY" ||
+        typeStr === "B" ||
+        typeStr === "BOUGHT" ||
+        typeStr === "PURCHASE" ||
+        typeStr.includes("BUY") ||
+        typeStr.startsWith("B")
+      ) {
+        tradeType = "BUY";
+      } else if (
+        typeStr === "SELL" ||
+        typeStr === "S" ||
+        typeStr === "SOLD" ||
+        typeStr === "SALE" ||
+        typeStr === "SL" ||
+        typeStr.includes("SELL") ||
+        typeStr.includes("SOLD") ||
+        typeStr.includes("SALE") ||
+        typeStr.startsWith("S")
+      ) {
+        tradeType = "SELL";
+      } else if (rawUnitsNum < 0) {
+        tradeType = "SELL";
+      } else if (rawUnitsNum > 0) {
+        tradeType = "BUY";
+      }
+
+      if (!tradeType || !tickerRaw) continue;
+
+      const units = Math.abs(rawUnitsNum);
+      let avgPrice = parseNum(colAvgPrice != null ? rowArr[colAvgPrice] : 0);
+      let value = Math.abs(parseNum(colValue != null ? rowArr[colValue] : 0));
+
+      if (value === 0 && units > 0 && avgPrice > 0) {
+        value = Math.round(units * avgPrice * 100) / 100;
+      } else if (avgPrice === 0 && units > 0 && value > 0) {
+        avgPrice = Math.round((value / units) * 10000) / 10000;
+      }
+
+      const status = colStatus != null ? parseStr(rowArr[colStatus]).toUpperCase() : "SETTLED";
+      if (status !== "SETTLED") continue;
+
+      rawTrades.push({
+        cnote: colCNote != null ? parseStr(rowArr[colCNote]) : undefined,
+        account: colAccount != null ? normalizeAccountNo(rowArr[colAccount]) : undefined,
+        type: tradeType,
+        ticker: tickerRaw,
+        company: colCompany != null ? parseStr(rowArr[colCompany]) : tickerRaw,
+        contractDate: colDate != null ? parseStr(rowArr[colDate]) : undefined,
+        units,
+        avgPrice,
+        value,
+        status,
+      });
+    }
+
+    const { summary, totalPnl } = aggregateTradesToSummary(rawTrades);
+    const matchedTickers = summary.filter((s) => s.isMatched).length;
+    const optionTickers = summary.filter((s) => s.isOption).length;
+
+    const accountsSet = new Set<string>();
+    for (const t of rawTrades) {
+      if (t.account && t.account.trim()) {
+        accountsSet.add(t.account.trim());
+      }
+    }
+    const accounts = Array.from(accountsSet).sort();
+
+    return {
+      summary,
+      rawTrades,
+      totalPnl,
+      totalTrades: rawTrades.length,
+      uniqueTickers: summary.length,
+      matchedTickers,
+      optionTickers,
+      accounts,
+      errors: [],
+    };
+  } catch (e) {
+    console.warn("SheetJS fallback parse error:", e);
+    return null;
+  }
 }
 
 /**

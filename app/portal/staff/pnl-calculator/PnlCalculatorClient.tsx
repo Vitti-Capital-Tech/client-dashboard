@@ -28,8 +28,18 @@ export interface UploadedPlacementFile {
   tickerCount: number;
 }
 
+export interface UploadedTradeFile {
+  id: string;
+  name: string;
+  rawTrades: any[];
+  tradeCount: number;
+  accounts: string[];
+}
+
 export function PnlCalculatorClient() {
   const [file, setFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [tradeFiles, setTradeFiles] = useState<UploadedTradeFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isProcessing, startProcessing] = useTransition();
   const [isExportingXlsx, startExportingXlsx] = useTransition();
@@ -50,6 +60,7 @@ export function PnlCalculatorClient() {
   const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addMoreTradeFileInputRef = useRef<HTMLInputElement>(null);
   const placementFileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleExpandTicker = (ticker: string) => {
@@ -306,10 +317,78 @@ export function PnlCalculatorClient() {
     });
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+  const recalculateTradeFiles = (
+    activeTradeFiles: UploadedTradeFile[],
+    targetAcc?: string
+  ) => {
+    if (activeTradeFiles.length === 0) {
+      setResult(null);
+      return;
     }
+
+    const accToUse = targetAcc !== undefined ? targetAcc : selectedAccount;
+    const allRawTrades: any[] = [];
+    const accountsSet = new Set<string>();
+
+    for (const tf of activeTradeFiles) {
+      for (const t of tf.rawTrades) {
+        allRawTrades.push(t);
+        if (t.account && t.account.trim()) {
+          accountsSet.add(t.account.trim());
+        }
+      }
+    }
+
+    const allAccounts = Array.from(accountsSet).sort();
+    const tradesToAggregate =
+      accToUse === "all"
+        ? allRawTrades
+        : allRawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(accToUse));
+
+    const { summary: aggregatedSummary, totalPnl: aggregatedPnl } = aggregateTradesToSummary(tradesToAggregate);
+
+    let finalSummary = aggregatedSummary;
+    let finalTotalPnl = aggregatedPnl;
+
+    if (placementFiles.length > 0) {
+      const combinedPlacementMap = combinePlacementMaps(placementFiles);
+      const merged = mergePlacementTrackerIntoSummary(aggregatedSummary, combinedPlacementMap);
+      finalSummary = merged.summary;
+      finalTotalPnl = merged.totalPnl;
+    } else if (parsedPlacementMap && parsedPlacementMap.size > 0) {
+      const merged = mergePlacementTrackerIntoSummary(aggregatedSummary, parsedPlacementMap);
+      finalSummary = merged.summary;
+      finalTotalPnl = merged.totalPnl;
+    }
+
+    const newResult: ParseResult = {
+      summary: finalSummary,
+      rawTrades: allRawTrades,
+      totalPnl: finalTotalPnl,
+      totalTrades: allRawTrades.length,
+      uniqueTickers: finalSummary.length,
+      matchedTickers: finalSummary.filter((s) => s.isMatched).length,
+      optionTickers: finalSummary.filter((s) => s.isOption).length,
+      accounts: allAccounts,
+      errors: [],
+    };
+
+    setResult(newResult);
+    handleSyncDbHoldings(newResult, accToUse);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const fileList = Array.from(e.target.files);
+      setSelectedFiles(fileList);
+      setFile(fileList[0]);
+    }
+  };
+
+  const handleAddMoreTradeFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const filesToProcess = Array.from(e.target.files);
+    processAndAppendTradeFiles(filesToProcess);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -325,49 +404,84 @@ export function PnlCalculatorClient() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const droppedFile = e.dataTransfer.files[0];
-      if (
-        droppedFile.name.endsWith(".xlsx") ||
-        droppedFile.name.endsWith(".xls") ||
-        droppedFile.name.endsWith(".csv")
-      ) {
-        setFile(droppedFile);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const droppedFiles = Array.from(e.dataTransfer.files).filter(
+        (f) =>
+          f.name.endsWith(".xlsx") ||
+          f.name.endsWith(".xls") ||
+          f.name.endsWith(".csv")
+      );
+      if (droppedFiles.length > 0) {
+        setSelectedFiles(droppedFiles);
+        setFile(droppedFiles[0]);
       }
     }
   };
 
-  const handleProcessFile = () => {
-    if (!file) return;
+  const processAndAppendTradeFiles = (filesToProcess: File[]) => {
     startProcessing(async () => {
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        const res = await parsePnlFileBuffer(Buffer.from(arrayBuffer as any), file.name);
-        setResult(res);
-        handleSyncDbHoldings(res, "all");
+        const newTradeFiles: UploadedTradeFile[] = [];
+
+        for (const f of filesToProcess) {
+          const arrayBuffer = await f.arrayBuffer();
+          const parsed = await parsePnlFileBuffer(Buffer.from(arrayBuffer as any), f.name);
+          if (parsed.rawTrades.length > 0) {
+            newTradeFiles.push({
+              id: `${f.name}-${Date.now()}-${Math.random()}`,
+              name: f.name,
+              rawTrades: parsed.rawTrades,
+              tradeCount: parsed.rawTrades.length,
+              accounts: parsed.accounts || [],
+            });
+          }
+        }
+
+        if (newTradeFiles.length === 0) {
+          setPlacementMsg({
+            type: "error",
+            text: "No valid trade records found in the selected file(s).",
+          });
+          return;
+        }
+
+        const updatedTradeFileList = [...tradeFiles, ...newTradeFiles];
+        setTradeFiles(updatedTradeFileList);
+        setSelectedFiles([]);
+        setFile(null);
+        setSelectedAccount("all");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
+
+        recalculateTradeFiles(updatedTradeFileList, "all");
       } catch (err: any) {
-        console.error("Error processing trade file:", err);
-        setResult({
-          rawTrades: [],
-          summary: [],
-          totalPnl: 0,
-          totalTrades: 0,
-          uniqueTickers: 0,
-          matchedTickers: 0,
-          optionTickers: 0,
-          errors: [err.message || "Failed to parse trade file."],
-        });
+        console.error("Error processing trade file(s):", err);
       }
     });
   };
 
+  const handleProcessFile = () => {
+    const filesToProcess = selectedFiles.length > 0 ? selectedFiles : file ? [file] : [];
+    if (filesToProcess.length === 0) return;
+    processAndAppendTradeFiles(filesToProcess);
+  };
+
+  const handleRemoveTradeFile = (id: string) => {
+    const updated = tradeFiles.filter((tf) => tf.id !== id);
+    setTradeFiles(updated);
+    recalculateTradeFiles(updated);
+  };
+
   const handleReset = () => {
     setFile(null);
+    setSelectedFiles([]);
+    setTradeFiles([]);
     setResult(null);
     setSearchQuery("");
     setPlacementFiles([]);
     setParsedPlacementMap(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
     if (placementFileInputRef.current) placementFileInputRef.current.value = "";
   };
 
@@ -884,6 +998,55 @@ export function PnlCalculatorClient() {
 
           {/* Action & Filter Toolbar */}
           <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
+            {/* Active Uploaded Trade Files Badges */}
+            {tradeFiles.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
+                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
+                  <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Uploaded Trade Files ({tradeFiles.length}):</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {tradeFiles.map((tf) => (
+                    <span
+                      key={tf.id}
+                      className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl"
+                    >
+                      <span className="truncate max-w-[180px] font-semibold">{tf.name}</span>
+                      <span className="text-[10px] bg-emerald-200/60 dark:bg-emerald-800/60 px-1.5 py-0.5 rounded-md font-mono font-bold">
+                        {tf.tradeCount} trades
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTradeFile(tf.id)}
+                        className="ml-0.5 text-emerald-500 hover:text-red-600 dark:hover:text-red-400 font-bold focus:outline-none cursor-pointer"
+                        title="Remove file"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    type="file"
+                    ref={addMoreTradeFileInputRef}
+                    onChange={handleAddMoreTradeFiles}
+                    accept=".xlsx,.xls,.csv"
+                    multiple
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => addMoreTradeFileInputRef.current?.click()}
+                    disabled={isProcessing}
+                    className="px-3 py-1 rounded-xl text-xs font-semibold bg-paper-2 hover:bg-paper-border text-navy border border-paper-border transition-all cursor-pointer inline-flex items-center gap-1"
+                  >
+                    <span>+ Add Trade File</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Account Filter Bar (external_ref / broker account) */}
             {result?.accounts && result.accounts.length > 0 && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">

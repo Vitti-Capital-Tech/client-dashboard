@@ -33,7 +33,7 @@ client-dashboard/
 │   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
 │   │   ├── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
 │   │   ├── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
-│   │   └── pnl-calculator.ts   # Server action: in-memory P&L file parsing & export generation
+│   │   └── pnl-calculator.ts   # Server action: in-memory P&L multi-file trade/placement parsing, OAuth URL fetch & export generation
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
