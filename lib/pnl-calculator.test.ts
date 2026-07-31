@@ -86,11 +86,44 @@ test("PNL Calculator - map 5-letter derivative tickers (EOSXX, ACWXX) to 3-lette
   assert.equal(acw.sellQty, 0);
   assert.equal(acw.buyPrice, 3000.02);
   assert.equal(acw.isMatched, false);
-  assert.equal(acw.isOption, true);
+  assert.equal(acw.isOption, false);
   assert.equal(acw.pnlCalculated, -3000.02);
 
   // Total PNL sums all positions (EOS: 44.77, ACW: -3000.02 => -2955.25)
   assert.equal(result.totalPnl, -2955.25);
+});
+
+test("PNL Calculator - categorize 4-5 character tickers containing 'O' (e.g. EOSO, ACWO) as Options", async () => {
+  const optionCsv = `CNote,Account,Type,Security,Company,Description,Contract Date,Adviser,Units,Avg Price,Consideration,Brokerage,Other Charges,GST,Value,Brokerage%,Status
+2462073,114716,BUY,EOSO,ELECTRO OPTIONS,,21-05-2026,VIZ,500,0.10,50.00,0,0,0,50.00,0,SETTLED
+2458396,114716,SELL,EOSO,ELECTRO OPTIONS,,25-05-2026,VIZ,500,0.25,125.00,0,0,0,125.00,0,SETTLED`;
+
+  const result = await parsePnlFileBuffer(Buffer.from(optionCsv), "option_test.csv");
+  const eos = result.summary.find((s) => s.ticker === "EOS");
+  assert.ok(eos);
+  assert.equal(eos.buyQty, 500);
+  assert.equal(eos.sellQty, 500);
+  assert.equal(eos.isOption, true); // Classified as Option because raw ticker EOSO has length > 3 and contains 'O'!
+});
+
+test("PNL Calculator - map options like ENVO, NVOO to 3-character parent tickers (ENV, NVO)", async () => {
+  const envCsv = `CNote,Account,Type,Security,Company,Description,Contract Date,Adviser,Units,Avg Price,Consideration,Brokerage,Other Charges,GST,Value,Brokerage%,Status
+2462073,114716,BUY,ENVO,ENV OPTIONS,,21-05-2026,VIZ,1000,0.10,100.00,0,0,0,100.00,0,SETTLED
+2458396,114716,BUY,ENV,ENV ORDINARY,,25-05-2026,VIZ,2000,0.50,1000.00,0,0,0,1000.00,0,SETTLED
+2458397,114716,BUY,NVOO,NVO OPTIONS,,26-05-2026,VIZ,500,0.20,100.00,0,0,0,100.00,0,SETTLED`;
+
+  const result = await parsePnlFileBuffer(Buffer.from(envCsv), "env_nvo_test.csv");
+  
+  const env = result.summary.find((s) => s.ticker === "ENV");
+  assert.ok(env);
+  assert.equal(env.buyQty, 3000); // 1000 from ENVO + 2000 from ENV
+  assert.equal(env.buyPrice, 1100.00); // 100 + 1000
+  assert.equal(env.hasOptionCode, true);
+
+  const nvo = result.summary.find((s) => s.ticker === "NVO");
+  assert.ok(nvo);
+  assert.equal(nvo.buyQty, 500); // 500 from NVOO
+  assert.equal(nvo.hasOptionCode, true);
 });
 
 test("PNL Calculator - CSV export string contains required columns and numbers", async () => {

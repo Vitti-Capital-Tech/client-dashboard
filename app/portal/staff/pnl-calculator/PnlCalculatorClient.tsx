@@ -6,15 +6,27 @@ import {
   exportPnlXlsxAction,
   exportPnlCsvAction,
   fetchPlacementTrackerUrlAction,
+  fetchDatabaseHoldingsAction,
 } from "@/app/actions/pnl-calculator";
 import {
   parsePnlFileBuffer,
   parsePlacementTrackerBuffer,
   mergePlacementTrackerIntoSummary,
+  mergeDbHoldingsIntoSummary,
   placementArrayToMap,
+  aggregateTradesToSummary,
+  normalizeAccountNo,
   type ParseResult,
   type PnlSummaryItem,
+  type PlacementTickerInfo,
 } from "@/lib/pnl-calculator";
+
+export interface UploadedPlacementFile {
+  id: string;
+  name: string;
+  map: Map<string, PlacementTickerInfo>;
+  tickerCount: number;
+}
 
 export function PnlCalculatorClient() {
   const [file, setFile] = useState<File | null>(null);
@@ -24,9 +36,14 @@ export function PnlCalculatorClient() {
   const [isExportingCsv, startExportingCsv] = useTransition();
   const [isFetchingUrl, startFetchingUrl] = useTransition();
   const [isMergingPlacementFile, startMergingPlacementFile] = useTransition();
+  const [isSyncingDb, startSyncingDb] = useTransition();
   const [result, setResult] = useState<ParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterType, setFilterType] = useState<"all" | "matched" | "profit" | "loss" | "options">("all");
+  const [filterType, setFilterType] = useState<"all" | "matched" | "profit" | "loss" | "unmatched" | "options">("all");
+
+  const [selectedAccount, setSelectedAccount] = useState<string>("all");
+  const [parsedPlacementMap, setParsedPlacementMap] = useState<Map<string, PlacementTickerInfo> | null>(null);
+  const [placementFiles, setPlacementFiles] = useState<UploadedPlacementFile[]>([]);
 
   const [placementUrl, setPlacementUrl] = useState("");
   const [placementMsg, setPlacementMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -54,6 +71,72 @@ export function PnlCalculatorClient() {
     return name.trim();
   };
 
+  const handleSyncDbHoldings = (currentResult?: ParseResult | null, targetAcc?: string) => {
+    const res = currentResult || result;
+    if (!res) return;
+    const accToUse = targetAcc !== undefined ? targetAcc : selectedAccount;
+
+    const targetAccountsScope =
+      accToUse !== "all"
+        ? accToUse
+        : res.accounts && res.accounts.length > 0
+        ? res.accounts
+        : "all";
+
+    startSyncingDb(async () => {
+      const dbRes = await fetchDatabaseHoldingsAction(targetAccountsScope);
+      if (dbRes.ok && dbRes.holdings.length > 0) {
+        const merged = mergeDbHoldingsIntoSummary(res.summary, dbRes.holdings);
+        setResult({
+          ...res,
+          summary: merged.summary,
+          totalPnl: merged.totalPnl,
+          matchedTickers: merged.summary.filter((s) => s.isMatched).length,
+          optionTickers: merged.summary.filter((s) => s.isOption).length,
+        });
+        setPlacementMsg({
+          type: "success",
+          text: `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
+            Array.isArray(targetAccountsScope) ? targetAccountsScope.join(", ") : targetAccountsScope
+          })!`,
+        });
+      }
+    });
+  };
+
+  const handleSelectAccount = (accNo: string) => {
+    setSelectedAccount(accNo);
+    if (!result) return;
+
+    const tradesToUse =
+      accNo === "all"
+        ? result.rawTrades
+        : result.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(accNo));
+
+    const { summary: newSummary } = aggregateTradesToSummary(tradesToUse);
+
+    let finalSummary = newSummary;
+    let finalTotalPnl = Math.round(newSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+
+    if (parsedPlacementMap && parsedPlacementMap.size > 0) {
+      const fileStem = getFilenameStem(file?.name);
+      const merged = mergePlacementTrackerIntoSummary(newSummary, parsedPlacementMap, fileStem);
+      finalSummary = merged.summary;
+      finalTotalPnl = merged.totalPnl;
+    }
+
+    const updatedRes: ParseResult = {
+      ...result,
+      summary: finalSummary,
+      totalPnl: finalTotalPnl,
+      matchedTickers: finalSummary.filter((s) => s.isMatched).length,
+      optionTickers: finalSummary.filter((s) => s.isOption).length,
+    };
+
+    setResult(updatedRes);
+    handleSyncDbHoldings(updatedRes, accNo);
+  };
+
   const handleMergeUrl = () => {
     if (!placementUrl || !result) return;
     setPlacementMsg(null);
@@ -61,6 +144,7 @@ export function PnlCalculatorClient() {
       const res = await fetchPlacementTrackerUrlAction(placementUrl);
       if (res.ok && res.placementItems) {
         const placementMap = placementArrayToMap(res.placementItems);
+        setParsedPlacementMap(placementMap);
         const fileStem = getFilenameStem(file?.name);
         const merged = mergePlacementTrackerIntoSummary(result.summary, placementMap, fileStem);
         setResult({
@@ -82,39 +166,143 @@ export function PnlCalculatorClient() {
     });
   };
 
+  const combinePlacementMaps = (files: UploadedPlacementFile[]): Map<string, PlacementTickerInfo> => {
+    const combined = new Map<string, PlacementTickerInfo>();
+    for (const f of files) {
+      for (const [ticker, info] of f.map.entries()) {
+        if (!combined.has(ticker)) {
+          combined.set(ticker, {
+            ticker: info.ticker,
+            company: info.company,
+            totalShares: info.totalShares,
+            totalActualDollar: info.totalActualDollar,
+            clientAllocations: [...info.clientAllocations],
+          });
+        } else {
+          const existing = combined.get(ticker)!;
+          existing.totalShares += info.totalShares;
+          existing.totalActualDollar += info.totalActualDollar;
+          for (const alloc of info.clientAllocations) {
+            const found = existing.clientAllocations.find((a) => a.clientName === alloc.clientName);
+            if (found) {
+              found.roundShares += alloc.roundShares;
+              found.actualDollar += alloc.actualDollar;
+            } else {
+              existing.clientAllocations.push({ ...alloc });
+            }
+          }
+        }
+      }
+    }
+    return combined;
+  };
+
+  const reapplyPlacementMerges = (
+    files: UploadedPlacementFile[],
+    baseRes?: ParseResult | null
+  ) => {
+    const res = baseRes || result;
+    if (!res) return;
+
+    const tradesToUse =
+      selectedAccount === "all"
+        ? res.rawTrades
+        : res.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(selectedAccount));
+
+    const { summary: baseSummary } = aggregateTradesToSummary(tradesToUse);
+
+    if (files.length === 0) {
+      setParsedPlacementMap(null);
+      const freshTotalPnl = Math.round(baseSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+      const resetRes: ParseResult = {
+        ...res,
+        summary: baseSummary,
+        totalPnl: freshTotalPnl,
+        matchedTickers: baseSummary.filter((s) => s.isMatched).length,
+        optionTickers: baseSummary.filter((s) => s.isOption).length,
+      };
+      setResult(resetRes);
+      handleSyncDbHoldings(resetRes, selectedAccount);
+      return;
+    }
+
+    const combinedMap = combinePlacementMaps(files);
+    setParsedPlacementMap(combinedMap);
+
+    const fileStem = getFilenameStem(file?.name);
+    const merged = mergePlacementTrackerIntoSummary(baseSummary, combinedMap, fileStem);
+
+    const updatedRes: ParseResult = {
+      ...res,
+      summary: merged.summary,
+      totalPnl: merged.totalPnl,
+      matchedTickers: merged.summary.filter((s) => s.isMatched).length,
+      optionTickers: merged.summary.filter((s) => s.isOption).length,
+    };
+    setResult(updatedRes);
+    handleSyncDbHoldings(updatedRes, selectedAccount);
+  };
+
   const handleMergePlacementFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files[0] || !result) return;
-    const pFile = e.target.files[0];
+    if (!e.target.files || e.target.files.length === 0 || !result) return;
+    const fileList = Array.from(e.target.files);
     setPlacementMsg(null);
+
     startMergingPlacementFile(async () => {
       try {
-        const arrayBuffer = await pFile.arrayBuffer();
-        const placementMap = await parsePlacementTrackerBuffer(Buffer.from(arrayBuffer as any));
-        if (placementMap.size === 0) {
+        const newUploadedFiles: UploadedPlacementFile[] = [];
+
+        for (const pFile of fileList) {
+          const arrayBuffer = await pFile.arrayBuffer();
+          const placementMap = await parsePlacementTrackerBuffer(Buffer.from(arrayBuffer as any));
+          if (placementMap.size > 0) {
+            newUploadedFiles.push({
+              id: `${pFile.name}-${Date.now()}-${Math.random()}`,
+              name: pFile.name,
+              map: placementMap,
+              tickerCount: placementMap.size,
+            });
+          }
+        }
+
+        if (newUploadedFiles.length === 0) {
           setPlacementMsg({
             type: "error",
-            text: "No valid placement ticker sheets found in the uploaded file.",
+            text: "No valid placement ticker sheets found in the selected file(s).",
           });
           return;
         }
-        const fileStem = getFilenameStem(file?.name);
-        const merged = mergePlacementTrackerIntoSummary(result.summary, placementMap, fileStem);
-        setResult({
-          ...result,
-          summary: merged.summary,
-          totalPnl: merged.totalPnl,
-        });
+
+        const updatedFileList = [...placementFiles, ...newUploadedFiles];
+        setPlacementFiles(updatedFileList);
+        reapplyPlacementMerges(updatedFileList);
+
         setPlacementMsg({
           type: "success",
-          text: `Enriched Placement Tracker data for ${fileStem || "client"}! Matched/merged ${merged.mergedCount} tickers.`,
+          text: `Merged ${newUploadedFiles.length} placement file(s)! Total active placement files: ${updatedFileList.length}.`,
         });
+
+        if (placementFileInputRef.current) {
+          placementFileInputRef.current.value = "";
+        }
       } catch (err: any) {
-        console.error("Error parsing placement file:", err);
+        console.error("Error parsing placement files:", err);
         setPlacementMsg({
           type: "error",
-          text: err.message || "Failed to parse placement file.",
+          text: err.message || "Failed to parse placement file(s).",
         });
       }
+    });
+  };
+
+  const handleRemovePlacementFile = (id: string) => {
+    const fileToRemove = placementFiles.find((f) => f.id === id);
+    const updated = placementFiles.filter((f) => f.id !== id);
+    setPlacementFiles(updated);
+    reapplyPlacementMerges(updated);
+    setPlacementMsg({
+      type: "success",
+      text: `Removed placement file "${fileToRemove?.name || "file"}".`,
     });
   };
 
@@ -156,6 +344,7 @@ export function PnlCalculatorClient() {
         const arrayBuffer = await file.arrayBuffer();
         const res = await parsePnlFileBuffer(Buffer.from(arrayBuffer as any), file.name);
         setResult(res);
+        handleSyncDbHoldings(res, "all");
       } catch (err: any) {
         console.error("Error processing trade file:", err);
         setResult({
@@ -176,7 +365,10 @@ export function PnlCalculatorClient() {
     setFile(null);
     setResult(null);
     setSearchQuery("");
+    setPlacementFiles([]);
+    setParsedPlacementMap(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (placementFileInputRef.current) placementFileInputRef.current.value = "";
   };
 
   const handleDownloadXlsx = () => {
@@ -296,11 +488,11 @@ export function PnlCalculatorClient() {
       }
     }
 
-    const isMatched = bQty === finalSellQty && bQty > 0;
-    const pnlCalculated = Math.round((sPrice - bPrice) * 100) / 100;
-
     const updatedSummary = result.summary.map((item) => {
       if (item.ticker === ticker) {
+        const isMatched = bQty === finalSellQty && bQty > 0;
+        const isOption = bQty === 0 || Boolean(item.hasOptionCode);
+        const pnlCalculated = Math.round((sPrice - bPrice) * 100) / 100;
         return {
           ...item,
           buyQty: bQty,
@@ -311,7 +503,7 @@ export function PnlCalculatorClient() {
           totalSellValue: Math.round(sPrice * 100) / 100,
           pnlCalculated,
           isMatched,
-          isOption: !isMatched,
+          isOption,
           isEdited: true,
           openQty: bQty - finalSellQty,
         };
@@ -343,7 +535,8 @@ export function PnlCalculatorClient() {
     if (filterType === "matched") return item.isMatched;
     if (filterType === "profit") return item.pnlCalculated > 0;
     if (filterType === "loss") return item.pnlCalculated < 0;
-    if (filterType === "options") return item.isOption;
+    if (filterType === "unmatched") return !item.isMatched;
+    if (filterType === "options") return Boolean(item.hasOptionCode);
     return true;
   });
 
@@ -356,7 +549,8 @@ export function PnlCalculatorClient() {
     matched: summaryList.filter((i) => i.isMatched).length,
     profit: summaryList.filter((i) => i.pnlCalculated > 0).length,
     loss: summaryList.filter((i) => i.pnlCalculated < 0).length,
-    options: summaryList.filter((i) => i.isOption).length,
+    unmatched: summaryList.filter((i) => !i.isMatched).length,
+    options: summaryList.filter((i) => Boolean(i.hasOptionCode)).length,
   };
 
   // Dynamic Grand Totals for currently visible tab rows
@@ -576,6 +770,7 @@ export function PnlCalculatorClient() {
               <div className="flex items-center gap-2">
                 <input
                   type="file"
+                  multiple
                   ref={placementFileInputRef}
                   onChange={handleMergePlacementFile}
                   accept=".xlsx,.xls"
@@ -585,12 +780,61 @@ export function PnlCalculatorClient() {
                   type="button"
                   onClick={() => placementFileInputRef.current?.click()}
                   disabled={isMergingPlacementFile}
-                  className="text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                  className="text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3.5 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
                 >
-                  {isMergingPlacementFile ? "Merging File..." : "Upload Placement .xlsx"}
+                  <svg className="w-3.5 h-3.5 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                  </svg>
+                  {isMergingPlacementFile ? "Merging Files..." : "Upload Placement (.xlsx)"}
                 </button>
               </div>
             </div>
+
+            {/* Active Uploaded Placement Files List */}
+            {placementFiles.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap pt-0.5 pb-1">
+                <span className="text-3xs font-semibold text-mut uppercase tracking-wider">
+                  Active Placement Files ({placementFiles.length}):
+                </span>
+                {placementFiles.map((pFile) => (
+                  <div
+                    key={pFile.id}
+                    className="inline-flex items-center gap-1.5 bg-paper-2 border border-paper-border px-2.5 py-1 rounded-lg text-xs text-navy shadow-2xs"
+                  >
+                    <svg className="w-3.5 h-3.5 text-green-d flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0" />
+                    </svg>
+                    <span className="font-semibold text-2xs max-w-[170px] truncate" title={pFile.name}>
+                      {pFile.name}
+                    </span>
+                    <span className="text-3xs text-mut font-medium">({pFile.tickerCount} tickers)</span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePlacementFile(pFile.id)}
+                      className="text-mut hover:text-loss p-0.5 rounded transition-colors cursor-pointer ml-0.5"
+                      title={`Remove ${pFile.name}`}
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                ))}
+                {placementFiles.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPlacementFiles([]);
+                      reapplyPlacementMerges([]);
+                      setPlacementMsg({ type: "success", text: "Cleared all placement files." });
+                    }}
+                    className="text-3xs font-semibold text-loss hover:underline cursor-pointer ml-1"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+            )}
 
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <div className="relative flex-1 w-full">
@@ -640,17 +884,55 @@ export function PnlCalculatorClient() {
 
           {/* Action & Filter Toolbar */}
           <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
-            {/* Filter Pills Bar — Full width on Desktop so all 5 tabs fit with ZERO scrolling */}
+            {/* Account Filter Bar (external_ref / broker account) */}
+            {result?.accounts && result.accounts.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
+                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
+                  <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  <span>Client Account (external_ref):</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => handleSelectAccount("all")}
+                    className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                      selectedAccount === "all"
+                        ? "bg-navy text-white shadow-xs"
+                        : "bg-paper-2 text-mut hover:text-navy border border-paper-border"
+                    }`}
+                  >
+                    All Accounts ({result.accounts.length})
+                  </button>
+                  {result.accounts.map((accNo) => (
+                    <button
+                      key={accNo}
+                      onClick={() => handleSelectAccount(accNo)}
+                      className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                        selectedAccount === accNo
+                          ? "bg-navy text-white shadow-xs"
+                          : "bg-paper-2 text-mut hover:text-navy border border-paper-border hover:border-navy/30"
+                      }`}
+                    >
+                      Account #{accNo}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Filter Pills Bar — Full width on Desktop so all tabs fit with ZERO scrolling */}
             <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-paper-border text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
-              {(["all", "matched", "profit", "loss", "options"] as const).map((f) => {
+              {(["all", "matched", "profit", "loss", "unmatched", "options"] as const).map((f) => {
                 const active = filterType === f;
                 const count = tabCounts[f];
-                const labels = {
+                const labels: Record<string, string> = {
                   all: "All Tickers",
                   matched: "Matched P&L",
                   profit: "Profit Only",
                   loss: "Loss Only",
-                  options: "Options / Unmatched",
+                  unmatched: "Unmatched",
+                  options: "Options",
                 };
                 return (
                   <button
@@ -705,6 +987,18 @@ export function PnlCalculatorClient() {
 
               {/* Download Export Buttons & Reset */}
               <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <button
+                  onClick={() => handleSyncDbHoldings()}
+                  disabled={isSyncingDb}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  title="Auto-fill Qty & Market Value from Database Portfolio Holdings for open positions"
+                >
+                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {isSyncingDb ? "Syncing DB..." : "Sync DB Market Value"}
+                </button>
+
                 <button
                   onClick={handleDownloadXlsx}
                   disabled={isExportingXlsx}
@@ -888,18 +1182,27 @@ export function PnlCalculatorClient() {
                                   Enriched
                                 </span>
                               )}
+                              {item.isDbMarketValued && (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold" title="Valued using DB Portfolio Market Value for open position">
+                                  DB Mkt Valued
+                                </span>
+                              )}
                               {item.isEdited && (
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-navy/10 text-navy font-semibold">
                                   Edited
                                 </span>
                               )}
-                              {item.isOption ? (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities - option / open position">
-                                  Option ({fmtQty(Math.abs(item.openQty))})
+                              {item.hasOptionCode ? (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold" title="Option contract derivative security">
+                                  Option
                                 </span>
-                              ) : (
+                              ) : item.isMatched ? (
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
                                   Matched
+                                </span>
+                              ) : (
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities">
+                                  Unmatched ({fmtQty(Math.abs(item.openQty))})
                                 </span>
                               )}
                             </div>

@@ -48,10 +48,12 @@ export interface PnlSummaryItem {
   totalBuyValue: number; // Total Cost paid
   totalSellValue: number; // Total Proceeds received
   pnlCalculated: number; // Total Sell Value - Total Buy Value
-  isMatched: boolean; // true when buyQty === sellQty
-  isOption: boolean; // true when buyQty !== sellQty (option / unmatched parcel)
+  isMatched: boolean; // true when buyQty === sellQty && buyQty > 0
+  isOption: boolean; // true when buyQty === 0 or raw ticker is an option code (length > 3 with 'O')
+  hasOptionCode?: boolean; // true if any raw trade ticker was an option code (length > 3 with 'O')
   isEdited?: boolean; // true if manually adjusted by staff
   isEnriched?: boolean; // true if merged with placement tracker data
+  isDbMarketValued?: boolean; // true if sellQty/sellPrice auto-filled from database portfolio market value
   openQty: number; // buyQty - sellQty
   tradeCount: number;
   clientAllocations?: PlacementClientAllocation[];
@@ -65,6 +67,7 @@ export interface ParseResult {
   uniqueTickers: number;
   matchedTickers: number;
   optionTickers: number;
+  accounts?: string[]; // Unique account numbers (external_ref) found in the file
   errors: string[];
 }
 
@@ -87,6 +90,18 @@ export function getParentTicker(rawCode: string): string {
     return code.slice(0, 3);
   }
   return code;
+}
+
+/**
+ * Checks if a raw security code represents an Option (length > 3 and suffix after 3-letter base contains 'O', e.g. EOSO, ACWO, ZEUOB)
+ */
+export function isOptionCode(rawCode: string): boolean {
+  const code = String(rawCode || "").trim().toUpperCase();
+  if (code.length > 3) {
+    const suffix = code.slice(3);
+    return suffix.includes("O");
+  }
+  return false;
 }
 
 /**
@@ -114,6 +129,15 @@ function parseStr(val: any): string {
     }
   }
   return String(val).trim();
+}
+
+/**
+ * Normalizes account numbers (external_ref) by trimming and stripping trailing float zeroes like "114716.0" -> "114716"
+ */
+export function normalizeAccountNo(val: any): string {
+  const str = parseStr(val).trim();
+  if (!str) return "";
+  return str.replace(/\.0+$/, "");
 }
 
 /**
@@ -171,14 +195,14 @@ export async function parsePnlFileBuffer(
     return undefined;
   };
 
-  const colType = getCol(["type", "side", "tradetype", "buysell"]);
+  const colType = getCol(["type", "side", "tradetype", "buysell", "b/s", "bs", "action", "transactiontype", "ordertype", "buy/sell"]);
   const colSecurity = getCol(["security", "ticker", "code", "securitycode", "symbol"]);
   const colCompany = getCol(["company", "description", "name", "securityname"]);
-  const colUnits = getCol(["units", "qty", "quantity", "volume"]);
-  const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate"]);
-  const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue"]);
+  const colUnits = getCol(["units", "qty", "quantity", "volume", "shares", "numberofshares", "tradedqty", "matchedqty", "filledqty"]);
+  const colAvgPrice = getCol(["avgprice", "price", "unitprice", "rate", "execprice", "price$", "tradeprice"]);
+  const colValue = getCol(["value", "consideration", "totalvalue", "amount", "netvalue", "grossvalue", "netamount", "totalconsideration", "netconsideration"]);
   const colCNote = getCol(["cnote", "contractnote", "ref", "reference"]);
-  const colAccount = getCol(["account", "accountno", "clientcode"]);
+  const colAccount = getCol(["account", "accountno", "clientcode", "brokeraccount", "accno", "clientid", "externalref", "external_ref"]);
   const colDate = getCol(["contractdate", "date", "tradedate"]);
   const colStatus = getCol(["status"]);
 
@@ -201,19 +225,50 @@ export async function parsePnlFileBuffer(
   worksheet.eachRow((row, rowNumber) => {
     if (rowNumber === 1) return; // Skip header
 
-    const typeRaw = parseStr(colType ? row.getCell(colType).value : "").toUpperCase();
-    const tickerRaw = parseStr(colSecurity ? row.getCell(colSecurity).value : "").toUpperCase();
+    const typeStr = parseStr(colType ? row.getCell(colType).value : "").toUpperCase().trim();
+    const tickerRaw = parseStr(colSecurity ? row.getCell(colSecurity).value : "").toUpperCase().trim();
+    const rawUnitsNum = parseNum(colUnits ? row.getCell(colUnits).value : 0);
 
-    if (!tickerRaw || (typeRaw !== "BUY" && typeRaw !== "SELL")) {
+    let tradeType: "BUY" | "SELL" | null = null;
+    if (
+      typeStr === "BUY" ||
+      typeStr === "B" ||
+      typeStr === "BOUGHT" ||
+      typeStr === "PURCHASE" ||
+      typeStr.includes("BUY") ||
+      typeStr.startsWith("B")
+    ) {
+      tradeType = "BUY";
+    } else if (
+      typeStr === "SELL" ||
+      typeStr === "S" ||
+      typeStr === "SOLD" ||
+      typeStr === "SALE" ||
+      typeStr === "SL" ||
+      typeStr.includes("SELL") ||
+      typeStr.includes("SOLD") ||
+      typeStr.includes("SALE") ||
+      typeStr.startsWith("S")
+    ) {
+      tradeType = "SELL";
+    } else if (rawUnitsNum < 0) {
+      tradeType = "SELL";
+    } else if (rawUnitsNum > 0) {
+      tradeType = "BUY";
+    }
+
+    if (!tradeType || !tickerRaw) {
       return; // Skip invalid or non-trade rows
     }
 
-    const units = parseNum(colUnits ? row.getCell(colUnits).value : 0);
-    const avgPrice = parseNum(colAvgPrice ? row.getCell(colAvgPrice).value : 0);
-    let value = parseNum(colValue ? row.getCell(colValue).value : 0);
+    const units = Math.abs(rawUnitsNum);
+    let avgPrice = parseNum(colAvgPrice ? row.getCell(colAvgPrice).value : 0);
+    let value = Math.abs(parseNum(colValue ? row.getCell(colValue).value : 0));
 
     if (value === 0 && units > 0 && avgPrice > 0) {
       value = Math.round(units * avgPrice * 100) / 100;
+    } else if (avgPrice === 0 && units > 0 && value > 0) {
+      avgPrice = Math.round((value / units) * 10000) / 10000;
     }
 
     const status = colStatus ? parseStr(row.getCell(colStatus).value).toUpperCase() : "SETTLED";
@@ -225,8 +280,8 @@ export async function parsePnlFileBuffer(
 
     rawTrades.push({
       cnote: colCNote ? parseStr(row.getCell(colCNote).value) : undefined,
-      account: colAccount ? parseStr(row.getCell(colAccount).value) : undefined,
-      type: typeRaw as "BUY" | "SELL",
+      account: colAccount ? normalizeAccountNo(row.getCell(colAccount).value) : undefined,
+      type: tradeType,
       ticker: tickerRaw,
       company: colCompany ? parseStr(row.getCell(colCompany).value) : tickerRaw,
       contractDate: colDate ? parseStr(row.getCell(colDate).value) : undefined,
@@ -237,11 +292,40 @@ export async function parsePnlFileBuffer(
     });
   });
 
-  // Aggregate by Parent Ticker (e.g. EOSXX -> EOS, ACWXX -> ACW)
+  const { summary, totalPnl } = aggregateTradesToSummary(rawTrades);
+  const matchedTickers = summary.filter((s) => s.isMatched).length;
+  const optionTickers = summary.filter((s) => s.isOption).length;
+
+  const accountsSet = new Set<string>();
+  for (const t of rawTrades) {
+    if (t.account && t.account.trim()) {
+      accountsSet.add(t.account.trim());
+    }
+  }
+  const accounts = Array.from(accountsSet).sort();
+
+  return {
+    summary,
+    rawTrades,
+    totalPnl,
+    totalTrades: rawTrades.length,
+    uniqueTickers: summary.length,
+    matchedTickers,
+    optionTickers,
+    accounts,
+    errors,
+  };
+}
+
+/**
+ * Aggregates an array of parsed trade rows into ticker-level summary items.
+ */
+export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary: PnlSummaryItem[]; totalPnl: number } {
   const tickerMap = new Map<string, PnlSummaryItem>();
 
   for (const t of rawTrades) {
     const parent = getParentTicker(t.ticker);
+    const isOpt = isOptionCode(t.ticker);
     let item = tickerMap.get(parent);
     if (!item) {
       item = {
@@ -256,13 +340,19 @@ export async function parsePnlFileBuffer(
         pnlCalculated: 0,
         isMatched: false,
         isOption: true,
+        hasOptionCode: isOpt,
         openQty: 0,
         tradeCount: 0,
       };
       tickerMap.set(parent, item);
-    } else if (t.ticker.length === 3 && t.company) {
-      // Prefer cleaner company name from ordinary 3-char security
-      item.company = t.company;
+    } else {
+      if (isOpt) {
+        item.hasOptionCode = true;
+      }
+      if (t.ticker.length === 3 && t.company) {
+        // Prefer cleaner company name from ordinary 3-char security
+        item.company = t.company;
+      }
     }
 
     item.tradeCount += 1;
@@ -281,7 +371,7 @@ export async function parsePnlFileBuffer(
     const buyPrice = Math.round(item.totalBuyValue * 100) / 100;
     const sellPrice = Math.round(item.totalSellValue * 100) / 100;
     const isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
-    const isOption = !isMatched;
+    const isOption = item.buyQty === 0 || Boolean(item.hasOptionCode);
 
     // Calculate PnL for all positions regardless of qty match
     const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
@@ -303,22 +393,9 @@ export async function parsePnlFileBuffer(
   // Sort summary by ticker symbol ascending
   summary.sort((a, b) => a.ticker.localeCompare(b.ticker));
 
-  // Total PnL sums all positions
-  const totalPnl = summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+  const totalPnl = Math.round(summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
-  const matchedTickers = summary.filter((s) => s.isMatched).length;
-  const optionTickers = summary.filter((s) => s.isOption).length;
-
-  return {
-    summary,
-    rawTrades,
-    totalPnl: Math.round(totalPnl * 100) / 100,
-    totalTrades: rawTrades.length,
-    uniqueTickers: summary.length,
-    matchedTickers,
-    optionTickers,
-    errors,
-  };
+  return { summary, totalPnl };
 }
 
 /**
@@ -723,9 +800,12 @@ export function mergePlacementTrackerIntoSummary(
       // Find allocations for the matching account holder if fileStem is specified
       let matchedAllocations = info.clientAllocations;
       if (fileStem && fileStem.trim()) {
-        matchedAllocations = info.clientAllocations.filter((alloc) =>
+        const filtered = info.clientAllocations.filter((alloc) =>
           isClientMatch(alloc.clientName, fileStem)
         );
+        if (filtered.length > 0) {
+          matchedAllocations = filtered;
+        }
       }
 
       if (matchedAllocations.length > 0) {
@@ -751,11 +831,62 @@ export function mergePlacementTrackerIntoSummary(
           existing.pnlCalculated = Math.round((existing.sellPrice - existing.buyPrice) * 100) / 100;
           existing.openQty = existing.buyQty - existing.sellQty;
           existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
-          existing.isOption = !existing.isMatched;
+          existing.isOption = existing.buyQty === 0 || Boolean(existing.hasOptionCode);
           existing.isEnriched = true;
           existing.clientAllocations = matchedAllocations;
           mergedCount++;
         }
+      }
+    }
+  }
+
+  // Sort by ticker symbol ascending
+  updatedSummary.sort((a, b) => a.ticker.localeCompare(b.ticker));
+
+  const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+
+  return { summary: updatedSummary, mergedCount, totalPnl };
+}
+
+/**
+ * Merges database portfolio holdings (units & market value) into PNL summary
+ * for open positions where sellQty === 0 or sellPrice === 0.
+ */
+export function mergeDbHoldingsIntoSummary(
+  summary: PnlSummaryItem[],
+  dbHoldings: Array<{
+    accountRef?: string;
+    ticker: string;
+    parentTicker?: string;
+    qty: number;
+    marketValue: number;
+  }>
+): { summary: PnlSummaryItem[]; mergedCount: number; totalPnl: number } {
+  const updatedSummary = summary.map((item) => ({ ...item }));
+  let mergedCount = 0;
+
+  for (const item of updatedSummary) {
+    if (item.sellQty === 0 || item.sellPrice === 0) {
+      const parent = getParentTicker(item.ticker);
+      const match = dbHoldings.find((h) => {
+        const hParent = getParentTicker(h.ticker);
+        return (hParent === parent || h.ticker.toUpperCase().includes(parent)) && (h.qty > 0 || h.marketValue > 0);
+      });
+
+      if (match) {
+        if (item.sellQty === 0 && match.qty > 0) {
+          item.sellQty = match.qty;
+        }
+        if (item.sellPrice === 0 && match.marketValue > 0) {
+          item.sellPrice = Math.round(match.marketValue * 100) / 100;
+          item.totalSellValue = item.sellPrice;
+        }
+        item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
+        item.openQty = item.buyQty - item.sellQty;
+        item.isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
+        item.isOption = item.buyQty === 0 || Boolean(item.hasOptionCode);
+        item.isDbMarketValued = true;
+        mergedCount++;
       }
     }
   }

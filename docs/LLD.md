@@ -542,32 +542,39 @@ The summary row is computed, so when a source is incomplete no amount of re-impo
 A self-contained, in-memory trade ledger parser and P&L calculator engineered for staff admins to parse contract notes and auto-merge Placement Tracker allocations without persistence.
 
 - **Data Models:**
-  - `PnlSummaryItem`: `{ ticker, company, buyQty, sellQty, buyPrice, sellPrice, totalBuyValue, totalSellValue, pnlCalculated, isMatched, isOption, isEdited?, isEnriched?, openQty, tradeCount, clientAllocations? }`
+  - `PnlSummaryItem`: `{ ticker, company, buyQty, sellQty, buyPrice, sellPrice, totalBuyValue, totalSellValue, pnlCalculated, isMatched, isOption, isEdited?, isEnriched?, isDbMarketValued?, openQty, tradeCount, clientAllocations? }`
   - `PlacementClientAllocation`: `{ clientName, advisor, askingBid, allocationDollar, roundShares, actualDollar, tranche1Dollar?, tranche1Shares?, tranche2Dollar?, tranche2Shares?, sellerFee? }`
   - `PlacementTickerInfo`: `{ ticker, company?, totalShares, totalActualDollar, clientAllocations }`
-  - `ParseResult`: `{ summary, rawTrades, totalPnl, totalTrades, uniqueTickers, matchedTickers, optionTickers, errors }`
+  - `UploadedPlacementFile`: `{ id, name, map, tickerCount }`
+  - `ParseResult`: `{ summary, rawTrades, totalPnl, totalTrades, uniqueTickers, matchedTickers, optionTickers, accounts, errors }`
+  - `DbHoldingInfo`: `{ accountRef, ticker, parentTicker, companyName, qty, costBase, marketValue, unrealizedPnl }`
 - **In-Memory Engine (`parsePnlFileBuffer` & `parsePlacementTrackerBuffer`):**
   - Accepts ArrayBuffer/Buffer from `.xlsx`, `.xls`, or `.csv` files.
-  - Normalizes headers dynamically (`Type`, `Security`, `Units`, `Value`, `Avg Price`, `CNote`, `Status`).
+  - Normalizes headers dynamically (`Type`, `Security`, `Units`, `Value`, `Avg Price`, `CNote`, `Status`, `Account`).
   - Restricts trade calculations strictly to `Status === "SETTLED"` trades.
-  - Aggregates derivative tickers (`EOSXX`, `ACWXX`) to 3-character parent tickers (`EOS`, `ACW`) via `getParentTicker`.
+  - Auto-detects `SELL` trades using negative unit values (`rawUnits < 0`) when column trade type text is missing.
+  - Aggregates derivative & option tickers (`EOSXX`, `ENVO`, `NVOO`) to 3-character ordinary parent tickers (`EOS`, `ENV`, `NVO`) via `getParentTicker`.
   - Sorts all ticker summary items in **ascending alphabetical order** (`a.ticker.localeCompare(b.ticker)`).
   - Calculates `buyPrice` (sum of buy values), `sellPrice` (sum of sell values), and `pnlCalculated` (`sellPrice - buyPrice`) for all tickers.
   - Computes `totalPnl` as the universal sum of all calculated ticker P&Ls.
 - **Placement Tracker Auto-Merge Engine (`mergePlacementTrackerIntoSummary`):**
-  - `isClientMatch(clientName, fileStem)`: Extracts the initial uploaded trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching.
+  - `isClientMatch(clientName, fileStem)`: Extracts the initial uploaded trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching with fallback.
+  - Combines allocations across multiple uploaded Placement Tracker files via `combinePlacementMaps`.
   - Directly adds the matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in the current summary table.
-  - Leaves unmatched tickers and tickers not present in the current summary untouched.
   - Recomputes `pnlCalculated = sellPrice - buyPrice`, `openQty = buyQty - sellQty`, `isMatched`, and tags rows with `isEnriched = true`.
+- **Database Portfolio Holdings Sync (`mergeDbHoldingsIntoSummary`):**
+  - `fetchDatabaseHoldingsAction(accountRef)`: Queries `positions`, `accounts`, and `securities` in parallel. Strictly scopes database positions to the requested account number(s) (e.g., `["1103199"]`) to prevent cross-account position leakage.
+  - Auto-fills `sellQty` and `sellPrice` (current DB portfolio market value) for open positions (`sellQty = 0`), tagging matched rows with `isDbMarketValued = true`.
 - **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
+  - `fetchDatabaseHoldingsAction(accountRef)`: Account-scoped server action returning `DbHoldingInfo[]` array.
   - `fetchPlacementTrackerUrlAction(url)`: Converts Google Sheets / SharePoint URLs (`/export?format=xlsx`, `/download.aspx`), checks for HTML login responses, and returns lightweight `PlacementTickerInfo[]` array.
   - `exportPnlXlsxAction(summaryRows)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
   - `exportPnlCsvAction(summaryRows)`: Generates RFC 4180 compliant `.csv` download string.
   - Configured `serverActions.bodySizeLimit: "25mb"` in `next.config.ts`.
 - **Interactive UI Capabilities (`PnlCalculatorClient.tsx`):**
-  - Browser-side `file.arrayBuffer()` processing for 5ms zero-latency execution in browser memory without server action payload limits.
-  - Placement Tracker Integration Bar for direct URL fetch or local `.xlsx` file upload with `Enriched` row badges.
+  - Client Account Filter Bar UI for filtering PnL summaries by `external_ref` / Account number.
+  - Multi-File Placement Tracker upload (`multiple` selection) with active file list & individual `✕` remove button.
+  - Dedicated **Sync DB Market Value** action button with automated notifications.
   - Inline row editing with **Edit / Save / Cancel** controls.
-  - Open Position Market Price Helper: Staff can input a market price per unit (`$/u`) for open positions (`buyQty > sellQty`), which automatically calculates estimated sell value and matches quantities.
-  - Tab Filter Pills with real-time count badges (`All Tickers`, `Matched P&L`, `Profit Only`, `Loss Only`, `Options / Unmatched`).
+  - 6 Filter Tabs (`All Tickers`, `Matched P&L`, `Profit Only`, `Loss Only`, `Unmatched`, `Options`).
   - Fixed Grand Total row in table footer showing the overall summary across all tickers regardless of active tab view.
