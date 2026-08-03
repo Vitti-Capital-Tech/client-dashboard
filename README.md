@@ -152,6 +152,23 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY   # for scripts/seed-auth-users.mjs only
 ```
 
+#### Private spreadsheet links (optional — P&L calculator)
+The P&L calculator's **Placement Tracker Integration** card accepts a pasted link instead of a file upload. Public "anyone with the link" URLs work with no configuration. To also read **private** files, add machine credentials — `lib/remote-sheets.ts` uses them to fetch the workbook server-side. Both blocks are optional and independent; without them the calculator falls back to the anonymous fetch and tells the user which credentials would fix the failure.
+
+**Google Sheets / Drive** — GCP Console → IAM & Admin → Service Accounts → create one → Keys → *Add key* → JSON. Enable the **Google Drive API** on that project. Then, for each private sheet: *Share* → add the service account's email as **Viewer**.
+```bash
+GOOGLE_SERVICE_ACCOUNT_EMAIL=pnl-reader@your-project.iam.gserviceaccount.com
+GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEv...\n-----END PRIVATE KEY-----\n"
+```
+
+**SharePoint / OneDrive** — Entra ID (Azure AD) → App registrations → new registration → *Certificates & secrets* for the client secret, and *API permissions* → Microsoft Graph → **Application** permissions → `Files.Read.All` (plus `Sites.Read.All` for SharePoint), then **Grant admin consent**.
+```bash
+MICROSOFT_TENANT_ID=YOUR_TENANT_ID
+MICROSOFT_CLIENT_ID=YOUR_APP_CLIENT_ID
+MICROSOFT_CLIENT_SECRET=YOUR_CLIENT_SECRET
+```
+The private key is multi-line — keep it double-quoted, either with real newlines or `\n` escapes. Access tokens are minted per process and cached in memory until just before they expire; bearer tokens are only ever sent to `oauth2.googleapis.com` / `googleapis.com` / `graph.microsoft.com`, never to the pasted URL's host.
+
 ### 4.3 Database (Supabase)
 Apply the schema and seed the demo data:
 ```bash

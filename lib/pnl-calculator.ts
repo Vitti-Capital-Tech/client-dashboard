@@ -1011,29 +1011,57 @@ export function isClientMatch(clientName: string, fileStem: string): boolean {
 
 /**
  * Merges parsed Placement Tracker data into an existing PNL Summary.
- * Fills missing Buy Qty (from Round Shares) & Buy Price (from ACTUAL $) for account holder matching filename stem.
+ * Fills missing Buy Qty (from Round Shares) & Buy Price (from ACTUAL $) from the
+ * allocation rows belonging to the account holder(s) whose trades the summary
+ * represents.
+ *
+ * `clientHints` identifies that account holder — the loaded trade-file names
+ * and/or an account holder picked explicitly in the UI. A placement sheet lists
+ * *every* client who took part in the placement, so choosing the right rows is
+ * the whole job: summing all of them would inflate one client's Buy Qty by the
+ * number of participants.
+ *
+ * When the hints match nothing, a ticker is only merged if it has a single
+ * allocation (where "which client" is not in question). Otherwise it is left
+ * untouched and reported in `ambiguousTickers` so the caller can ask which
+ * account holder to use, rather than filling in a wrong number.
  */
 export function mergePlacementTrackerIntoSummary(
   summary: PnlSummaryItem[],
   placementData: Map<string, PlacementTickerInfo>,
-  fileStem?: string
-): { summary: PnlSummaryItem[]; mergedCount: number; totalPnl: number } {
+  clientHints?: string | string[]
+): {
+  summary: PnlSummaryItem[];
+  mergedCount: number;
+  totalPnl: number;
+  ambiguousTickers: string[];
+} {
   const updatedSummary = summary.map((item) => ({ ...item }));
   let mergedCount = 0;
+  const ambiguousTickers: string[] = [];
+
+  const hints = (Array.isArray(clientHints) ? clientHints : [clientHints])
+    .map((h) => (h || "").trim())
+    .filter((h) => h.length > 0);
 
   for (const [rawTicker, info] of placementData.entries()) {
     const parentTicker = getParentTicker(rawTicker);
     const existing = updatedSummary.find((s) => getParentTicker(s.ticker) === parentTicker);
 
     if (existing) {
-      // Find allocations for the matching account holder if fileStem is specified
-      let matchedAllocations = info.clientAllocations;
-      if (fileStem && fileStem.trim()) {
-        const filtered = info.clientAllocations.filter((alloc) =>
-          isClientMatch(alloc.clientName, fileStem)
-        );
-        if (filtered.length > 0) {
-          matchedAllocations = filtered;
+      // Keep only the allocation rows belonging to the account holder(s) in play.
+      let matchedAllocations = hints.length
+        ? info.clientAllocations.filter((alloc) =>
+            hints.some((hint) => isClientMatch(alloc.clientName, hint))
+          )
+        : [];
+
+      if (matchedAllocations.length === 0) {
+        if (info.clientAllocations.length === 1) {
+          // Only one participant — no ambiguity about whose allocation this is.
+          matchedAllocations = info.clientAllocations;
+        } else if (info.clientAllocations.length > 1) {
+          ambiguousTickers.push(parentTicker);
         }
       }
 
@@ -1074,7 +1102,27 @@ export function mergePlacementTrackerIntoSummary(
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
-  return { summary: updatedSummary, mergedCount, totalPnl };
+  return { summary: updatedSummary, mergedCount, totalPnl, ambiguousTickers };
+}
+
+/**
+ * Every distinct account holder named across a set of parsed Placement Tracker
+ * sheets — the candidate list staff pick from when a trade-file name does not
+ * identify the client on its own.
+ */
+export function collectPlacementClientNames(
+  placementData: Map<string, PlacementTickerInfo>
+): string[] {
+  const seen = new Map<string, string>();
+  for (const info of placementData.values()) {
+    for (const alloc of info.clientAllocations) {
+      const name = (alloc.clientName || "").trim();
+      if (!name) continue;
+      const key = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (key && !seen.has(key)) seen.set(key, name);
+    }
+  }
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
 }
 
 /**

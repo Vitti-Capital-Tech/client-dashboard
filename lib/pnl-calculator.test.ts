@@ -5,6 +5,7 @@ import {
   buildPnlExportCsvString,
   buildPnlExportXlsxBuffer,
   mergePlacementTrackerIntoSummary,
+  collectPlacementClientNames,
 } from "./pnl-calculator.ts";
 
 test("PNL Calculator - parse CSV buffer and aggregate by ticker", async () => {
@@ -214,21 +215,195 @@ test("PNL Calculator - mergePlacementTrackerIntoSummary populates Buy Qty (Round
     clientAllocations: [],
   });
 
-  const merged = mergePlacementTrackerIntoSummary(initialSummary, placementMap);
+  // Naming the account holder merges ONLY that holder's allocation row.
+  const merged = mergePlacementTrackerIntoSummary(
+    initialSummary,
+    placementMap,
+    "Ikigai Consortium Pty Ltd"
+  );
   const zeu = merged.summary.find((s) => s.ticker === "ZEU");
   const unknown = merged.summary.find((s) => s.ticker === "UNKNOWN_TICKER");
 
   assert.ok(zeu);
   assert.equal(unknown, undefined); // Should NOT add tickers not in the current table!
   assert.equal(merged.summary.length, 1);
-  assert.equal(zeu.buyQty, 3333333); // Enriched from Round Shares
-  assert.equal(zeu.buyPrice, 20000.00); // Enriched from ACTUAL $
+  assert.equal(zeu.buyQty, 1200000); // Ikigai's Round Shares only — not all 4 clients
+  assert.equal(zeu.buyPrice, 7200.00); // Ikigai's ACTUAL $ only
   assert.equal(zeu.sellPrice, 24000.00);
-  assert.equal(zeu.pnlCalculated, 4000.00); // 24000 - 20000 = 4000 P&L
-  assert.equal(zeu.isMatched, true);
+  assert.equal(zeu.pnlCalculated, 16800.00); // 24000 - 7200
   assert.equal(zeu.isEnriched, true);
-  assert.equal(zeu.clientAllocations?.length, 4);
-  assert.equal(merged.totalPnl, 4000.00);
+  assert.equal(zeu.clientAllocations?.length, 1);
+  assert.equal(merged.ambiguousTickers.length, 0);
+  assert.equal(merged.totalPnl, 16800.00);
+});
+
+test("PNL Calculator - a multi-client placement sheet is NOT summed into one client's row", async () => {
+  // Regression: with four participants and no way to tell which one the trades
+  // belong to, the merge used to sum every allocation — inflating Buy Qty 4x.
+  const initialSummary = [
+    {
+      ticker: "ABE",
+      company: "AUSBONDEXCHANGE",
+      buyQty: 0,
+      sellQty: 166667,
+      buyPrice: 0,
+      sellPrice: 5390.01,
+      totalBuyValue: 0,
+      totalSellValue: 5390.01,
+      pnlCalculated: 5390.01,
+      isMatched: false,
+      isOption: true,
+      openQty: -166667,
+      tradeCount: 1,
+    },
+  ];
+
+  const placementMap = new Map();
+  placementMap.set("ABE", {
+    ticker: "ABE",
+    totalShares: 666668,
+    totalActualDollar: 20000.04,
+    clientAllocations: [
+      { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+      { clientName: "Ikigai Consortium Pty Ltd", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+      { clientName: "Mr Akshit Verma", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+      { clientName: "PSG Capital", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+    ],
+  });
+
+  // No hint at all: leave the row alone and report it rather than guess.
+  const blind = mergePlacementTrackerIntoSummary(initialSummary, placementMap);
+  const blindAbe = blind.summary.find((s) => s.ticker === "ABE");
+  assert.ok(blindAbe);
+  assert.equal(blindAbe.buyQty, 0, "must not fill Buy Qty when the holder is unknown");
+  assert.equal(blindAbe.buyPrice, 0);
+  assert.equal(blind.mergedCount, 0);
+  assert.deepEqual(blind.ambiguousTickers, ["ABE"]);
+
+  // With the holder identified, exactly that row's values land in the table.
+  const named = mergePlacementTrackerIntoSummary(
+    initialSummary,
+    placementMap,
+    "Zidiplus Pty Ltd"
+  );
+  const namedAbe = named.summary.find((s) => s.ticker === "ABE");
+  assert.ok(namedAbe);
+  assert.equal(namedAbe.buyQty, 166667); // NOT 666668
+  assert.equal(namedAbe.buyPrice, 5000.01); // NOT 20000.04
+  assert.equal(namedAbe.isMatched, true); // 166667 bought === 166667 sold
+  assert.equal(namedAbe.openQty, 0);
+  assert.equal(named.mergedCount, 1);
+  assert.equal(named.ambiguousTickers.length, 0);
+});
+
+test("PNL Calculator - trade-file name identifies the account holder", async () => {
+  const initialSummary = [
+    {
+      ticker: "ABE",
+      company: "AUSBONDEXCHANGE",
+      buyQty: 0,
+      sellQty: 166667,
+      buyPrice: 0,
+      sellPrice: 5390.01,
+      totalBuyValue: 0,
+      totalSellValue: 5390.01,
+      pnlCalculated: 5390.01,
+      isMatched: false,
+      isOption: true,
+      openQty: -166667,
+      tradeCount: 1,
+    },
+  ];
+
+  const placementMap = new Map();
+  placementMap.set("ABE", {
+    ticker: "ABE",
+    totalShares: 333334,
+    totalActualDollar: 10000.02,
+    clientAllocations: [
+      { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+      { clientName: "PSG Capital", advisor: "VTC", askingBid: 5000, allocationDollar: 5000, roundShares: 166667, actualDollar: 5000.01 },
+    ],
+  });
+
+  // Hints arrive as the list of loaded trade-file stems.
+  const merged = mergePlacementTrackerIntoSummary(initialSummary, placementMap, [
+    "Zidiplus Pty Ltd trade ledger",
+  ]);
+  const abe = merged.summary.find((s) => s.ticker === "ABE");
+
+  assert.ok(abe);
+  assert.equal(abe.buyQty, 166667);
+  assert.equal(abe.buyPrice, 5000.01);
+  assert.equal(merged.ambiguousTickers.length, 0);
+});
+
+test("PNL Calculator - a single-allocation ticker merges without a hint", async () => {
+  // One participant means there is no ambiguity about whose allocation it is.
+  const initialSummary = [
+    {
+      ticker: "LDX",
+      company: "LUMOS DIAGNOSTICS",
+      buyQty: 0,
+      sellQty: 1000,
+      buyPrice: 0,
+      sellPrice: 500,
+      totalBuyValue: 0,
+      totalSellValue: 500,
+      pnlCalculated: 500,
+      isMatched: false,
+      isOption: true,
+      openQty: -1000,
+      tradeCount: 1,
+    },
+  ];
+
+  const placementMap = new Map();
+  placementMap.set("LDX", {
+    ticker: "LDX",
+    totalShares: 1000,
+    totalActualDollar: 300,
+    clientAllocations: [
+      { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 300, allocationDollar: 300, roundShares: 1000, actualDollar: 300 },
+    ],
+  });
+
+  const merged = mergePlacementTrackerIntoSummary(initialSummary, placementMap);
+  const ldx = merged.summary.find((s) => s.ticker === "LDX");
+
+  assert.ok(ldx);
+  assert.equal(ldx.buyQty, 1000);
+  assert.equal(ldx.buyPrice, 300);
+  assert.equal(merged.mergedCount, 1);
+  assert.equal(merged.ambiguousTickers.length, 0);
+});
+
+test("PNL Calculator - collectPlacementClientNames dedupes across sheets", async () => {
+  const placementMap = new Map();
+  placementMap.set("ABE", {
+    ticker: "ABE",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [
+      { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 0, roundShares: 1, actualDollar: 1 },
+      { clientName: "PSG Capital", advisor: "VTC", askingBid: 0, allocationDollar: 0, roundShares: 1, actualDollar: 1 },
+    ],
+  });
+  placementMap.set("ZEU", {
+    ticker: "ZEU",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [
+      { clientName: "zidiplus pty ltd", advisor: "VTC", askingBid: 0, allocationDollar: 0, roundShares: 1, actualDollar: 1 },
+      { clientName: "Mr Akshit Verma", advisor: "VTC", askingBid: 0, allocationDollar: 0, roundShares: 1, actualDollar: 1 },
+    ],
+  });
+
+  assert.deepEqual(collectPlacementClientNames(placementMap), [
+    "Mr Akshit Verma",
+    "PSG Capital",
+    "Zidiplus Pty Ltd",
+  ]);
 });
 
 test("PNL Calculator - mergePlacementTrackerIntoSummary does NOT double buyQty/buyPrice if already present (non-zero)", async () => {

@@ -14,6 +14,8 @@ import {
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
   placementArrayToMap,
+  collectPlacementClientNames,
+  isClientMatch,
   aggregateTradesToSummary,
   normalizeAccountNo,
   type ParseResult,
@@ -36,6 +38,9 @@ export interface UploadedTradeFile {
   accounts: string[];
 }
 
+/** Sentinel for "derive the account holder from the trade-file names". */
+const AUTO_CLIENT = "__auto__";
+
 export function PnlCalculatorClient() {
   const [file, setFile] = useState<File | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -56,7 +61,14 @@ export function PnlCalculatorClient() {
   const [placementFiles, setPlacementFiles] = useState<UploadedPlacementFile[]>([]);
 
   const [placementUrl, setPlacementUrl] = useState("");
-  const [placementMsg, setPlacementMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  /** Explicitly chosen account holder, or AUTO_CLIENT to infer from filenames. */
+  const [placementClient, setPlacementClient] = useState<string>(AUTO_CLIENT);
+  const [placementMsg, setPlacementMsg] = useState<{
+    type: "success" | "error";
+    text: string;
+    /** Secondary line: the fix for an error, or how a link was read on success. */
+    hint?: string;
+  } | null>(null);
   const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -81,6 +93,48 @@ export function PnlCalculatorClient() {
     const name = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
     return name.trim();
   };
+
+  /**
+   * The account holder whose allocation rows a Placement Tracker merge should
+   * use. A placement sheet lists every client in the placement, so picking the
+   * wrong rows — or all of them — inflates Buy Qty / Buy Price by the number of
+   * participants. Trade files are normally named after the account holder, so
+   * their names are the default hint; `placementClient` is the explicit override
+   * for when they are not.
+   */
+  const getClientHints = (
+    files: UploadedTradeFile[] = tradeFiles,
+    override: string = placementClient
+  ): string[] => {
+    if (override !== AUTO_CLIENT) return [override];
+    return files.map((tf) => getFilenameStem(tf.name)).filter(Boolean);
+  };
+
+  /** Human-readable label for whichever account holder the merge resolved to. */
+  const describeClientHints = (hints: string[]): string =>
+    hints.length === 0 ? "client" : hints.join(", ");
+
+  /**
+   * Explains tickers the merge deliberately skipped: the sheet lists several
+   * account holders and none matched, so filling Buy Qty would have summed
+   * everyone's allocation instead of this client's.
+   */
+  const ambiguityHint = (ambiguousTickers?: string[]): string | undefined => {
+    if (!ambiguousTickers || ambiguousTickers.length === 0) return undefined;
+    const shown = ambiguousTickers.slice(0, 6).join(", ");
+    const more = ambiguousTickers.length > 6 ? ` +${ambiguousTickers.length - 6} more` : "";
+    return `Left ${ambiguousTickers.length} ticker(s) unfilled (${shown}${more}) — the sheet lists multiple account holders and none matched the trade file name. Pick the account holder above to fill them.`;
+  };
+
+  /** Every account holder named across the active placement sheets. */
+  const placementClientNames = parsedPlacementMap
+    ? collectPlacementClientNames(parsedPlacementMap)
+    : [];
+
+  /** Which of those the trade-file names resolve to on their own. */
+  const autoDetectedClients = placementClientNames.filter((name) =>
+    getClientHints(tradeFiles, AUTO_CLIENT).some((hint) => isClientMatch(name, hint))
+  );
 
   const handleSyncDbHoldings = (currentResult?: ParseResult | null, targetAcc?: string) => {
     const res = currentResult || result;
@@ -130,8 +184,11 @@ export function PnlCalculatorClient() {
     let finalTotalPnl = Math.round(newSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
     if (parsedPlacementMap && parsedPlacementMap.size > 0) {
-      const fileStem = getFilenameStem(file?.name);
-      const merged = mergePlacementTrackerIntoSummary(newSummary, parsedPlacementMap, fileStem);
+      const merged = mergePlacementTrackerIntoSummary(
+        newSummary,
+        parsedPlacementMap,
+        getClientHints()
+      );
       finalSummary = merged.summary;
       finalTotalPnl = merged.totalPnl;
     }
@@ -153,27 +210,50 @@ export function PnlCalculatorClient() {
     setPlacementMsg(null);
     startFetchingUrl(async () => {
       const res = await fetchPlacementTrackerUrlAction(placementUrl);
-      if (res.ok && res.placementItems) {
-        const placementMap = placementArrayToMap(res.placementItems);
-        setParsedPlacementMap(placementMap);
-        const fileStem = getFilenameStem(file?.name);
-        const merged = mergePlacementTrackerIntoSummary(result.summary, placementMap, fileStem);
-        setResult({
-          ...result,
-          summary: merged.summary,
-          totalPnl: merged.totalPnl,
-        });
-        setPlacementMsg({
-          type: "success",
-          text: `Enriched Placement Tracker data for ${fileStem || "client"}! Matched/merged ${merged.mergedCount} tickers.`,
-        });
-        setPlacementUrl("");
-      } else {
+      if (!res.ok || !res.placementItems.length) {
         setPlacementMsg({
           type: "error",
           text: res.error || "Failed to fetch/parse Placement Tracker URL.",
+          hint: res.hint,
         });
+        return;
       }
+
+      // Register the linked tracker alongside uploaded ones so it survives a
+      // later upload/removal (reapplyPlacementMerges rebuilds from this list)
+      // and can be removed from the same chip row.
+      const placementMap = placementArrayToMap(res.placementItems);
+      const linkedFile: UploadedPlacementFile = {
+        id: `link-${placementUrl}-${Date.now()}`,
+        name: res.filename || "Linked Placement Tracker",
+        map: placementMap,
+        tickerCount: placementMap.size,
+      };
+
+      const updatedFileList = [...placementFiles, linkedFile];
+      setPlacementFiles(updatedFileList);
+      const stats = reapplyPlacementMerges(updatedFileList);
+
+      const readNote =
+        res.source === "public-link"
+          ? undefined
+          : `Read privately via ${
+              res.source === "google-service-account"
+                ? "the Google service account"
+                : "Microsoft Graph"
+            }.`;
+
+      setPlacementMsg({
+        type: "success",
+        text: `Enriched Placement Tracker data for ${describeClientHints(
+          getClientHints()
+        )}! Matched/merged ${stats?.mergedCount ?? 0} tickers.`,
+        hint:
+          [readNote, ambiguityHint(stats?.ambiguousTickers)]
+            .filter(Boolean)
+            .join(" ") || undefined,
+      });
+      setPlacementUrl("");
     });
   };
 
@@ -208,12 +288,18 @@ export function PnlCalculatorClient() {
     return combined;
   };
 
+  /**
+   * Rebuilds the summary from the raw trades and re-merges the active placement
+   * files. Returns the merge stats so callers can report them without running
+   * the merge a second time.
+   */
   const reapplyPlacementMerges = (
     files: UploadedPlacementFile[],
-    baseRes?: ParseResult | null
-  ) => {
+    baseRes?: ParseResult | null,
+    clientOverride: string = placementClient
+  ): { mergedCount: number; ambiguousTickers: string[] } | null => {
     const res = baseRes || result;
-    if (!res) return;
+    if (!res) return null;
 
     const tradesToUse =
       selectedAccount === "all"
@@ -234,14 +320,17 @@ export function PnlCalculatorClient() {
       };
       setResult(resetRes);
       handleSyncDbHoldings(resetRes, selectedAccount);
-      return;
+      return { mergedCount: 0, ambiguousTickers: [] };
     }
 
     const combinedMap = combinePlacementMaps(files);
     setParsedPlacementMap(combinedMap);
 
-    const fileStem = getFilenameStem(file?.name);
-    const merged = mergePlacementTrackerIntoSummary(baseSummary, combinedMap, fileStem);
+    const merged = mergePlacementTrackerIntoSummary(
+      baseSummary,
+      combinedMap,
+      getClientHints(tradeFiles, clientOverride)
+    );
 
     const updatedRes: ParseResult = {
       ...res,
@@ -252,6 +341,8 @@ export function PnlCalculatorClient() {
     };
     setResult(updatedRes);
     handleSyncDbHoldings(updatedRes, selectedAccount);
+
+    return { mergedCount: merged.mergedCount, ambiguousTickers: merged.ambiguousTickers };
   };
 
   const handleMergePlacementFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -286,11 +377,14 @@ export function PnlCalculatorClient() {
 
         const updatedFileList = [...placementFiles, ...newUploadedFiles];
         setPlacementFiles(updatedFileList);
-        reapplyPlacementMerges(updatedFileList);
+        const stats = reapplyPlacementMerges(updatedFileList);
 
         setPlacementMsg({
-          type: "success",
-          text: `Merged ${newUploadedFiles.length} placement file(s)! Total active placement files: ${updatedFileList.length}.`,
+          type: stats?.ambiguousTickers.length ? "error" : "success",
+          text: `Merged ${newUploadedFiles.length} placement file(s) for ${describeClientHints(
+            getClientHints()
+          )} — filled ${stats?.mergedCount ?? 0} ticker(s). Total active placement files: ${updatedFileList.length}.`,
+          hint: ambiguityHint(stats?.ambiguousTickers),
         });
 
         if (placementFileInputRef.current) {
@@ -303,6 +397,22 @@ export function PnlCalculatorClient() {
           text: err.message || "Failed to parse placement file(s).",
         });
       }
+    });
+  };
+
+  /** Re-runs the merge against a different account holder. */
+  const handleSelectPlacementClient = (name: string) => {
+    setPlacementClient(name);
+    if (placementFiles.length === 0) return;
+
+    const stats = reapplyPlacementMerges(placementFiles, null, name);
+    setPlacementMsg({
+      type: stats?.ambiguousTickers.length ? "error" : "success",
+      text:
+        name === AUTO_CLIENT
+          ? `Account holder set to auto-detect from trade file names — filled ${stats?.mergedCount ?? 0} ticker(s).`
+          : `Using ${name}'s placement allocations — filled ${stats?.mergedCount ?? 0} ticker(s).`,
+      hint: ambiguityHint(stats?.ambiguousTickers),
     });
   };
 
@@ -350,13 +460,25 @@ export function PnlCalculatorClient() {
     let finalSummary = aggregatedSummary;
     let finalTotalPnl = aggregatedPnl;
 
+    // Hints come from `activeTradeFiles`, not the `tradeFiles` state — this runs
+    // in the same tick as setTradeFiles, so the state has not updated yet.
+    const clientHints = getClientHints(activeTradeFiles);
+
     if (placementFiles.length > 0) {
       const combinedPlacementMap = combinePlacementMaps(placementFiles);
-      const merged = mergePlacementTrackerIntoSummary(aggregatedSummary, combinedPlacementMap);
+      const merged = mergePlacementTrackerIntoSummary(
+        aggregatedSummary,
+        combinedPlacementMap,
+        clientHints
+      );
       finalSummary = merged.summary;
       finalTotalPnl = merged.totalPnl;
     } else if (parsedPlacementMap && parsedPlacementMap.size > 0) {
-      const merged = mergePlacementTrackerIntoSummary(aggregatedSummary, parsedPlacementMap);
+      const merged = mergePlacementTrackerIntoSummary(
+        aggregatedSummary,
+        parsedPlacementMap,
+        clientHints
+      );
       finalSummary = merged.summary;
       finalTotalPnl = merged.totalPnl;
     }
@@ -878,7 +1000,7 @@ export function PnlCalculatorClient() {
                   </span>
                 </h3>
                 <p className="text-2xs text-mut mt-0.5">
-                  Paste a Google Sheets / Excel URL or upload a Placement Tracker file to auto-fill missing Buy Qty (Round Shares), Buy Price (ACTUAL $), and client breakdowns.
+                  Paste a Google Sheets / SharePoint / Excel URL — private links included — or upload a Placement Tracker file to auto-fill missing Buy Qty (Round Shares), Buy Price (ACTUAL $), and client breakdowns.
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -950,13 +1072,46 @@ export function PnlCalculatorClient() {
               </div>
             )}
 
+            {/* Account holder selector — a placement sheet lists every client in
+                the placement, so this picks whose allocation rows to merge. */}
+            {placementClientNames.length > 0 && (
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 pt-0.5">
+                <label
+                  htmlFor="placement-client"
+                  className="text-3xs font-semibold text-mut uppercase tracking-wider whitespace-nowrap"
+                >
+                  Account Holder
+                </label>
+                <select
+                  id="placement-client"
+                  value={placementClient}
+                  onChange={(e) => handleSelectPlacementClient(e.target.value)}
+                  className="w-full sm:w-auto sm:min-w-[260px] bg-paper-2/60 border border-paper-border rounded-xl px-3 py-1.5 text-xs font-semibold text-navy focus:outline-none focus:border-navy cursor-pointer"
+                >
+                  <option value={AUTO_CLIENT}>
+                    Auto-detect from trade file name
+                    {autoDetectedClients.length > 0 ? ` (${autoDetectedClients.join(", ")})` : ""}
+                  </option>
+                  {placementClientNames.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-3xs text-mut leading-relaxed">
+                  Whose Round Shares / ACTUAL $ to fill in. Only this holder&apos;s allocation is
+                  used — never the placement total.
+                </span>
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row items-center gap-3">
               <div className="relative flex-1 w-full">
                 <input
                   type="url"
                   value={placementUrl}
                   onChange={(e) => setPlacementUrl(e.target.value)}
-                  placeholder="Paste Placement Tracker Link (Google Sheets or Excel URL)..."
+                  placeholder="Paste Placement Tracker Link (Google Sheets, SharePoint/OneDrive, or direct .xlsx URL)..."
                   className="w-full bg-paper-2/60 border border-paper-border rounded-xl px-3.5 py-2 text-xs font-mono text-navy focus:outline-none focus:border-navy"
                 />
               </div>
@@ -982,14 +1137,22 @@ export function PnlCalculatorClient() {
 
             {placementMsg && (
               <div
-                className={`text-2xs p-3 rounded-xl flex items-center justify-between ${
+                className={`text-2xs p-3 rounded-xl flex items-start justify-between gap-3 ${
                   placementMsg.type === "success"
                     ? "bg-green-bg text-green-d border border-green/20"
                     : "bg-loss-bg text-loss-d border border-loss/20"
                 }`}
               >
-                <span>{placementMsg.text}</span>
-                <button onClick={() => setPlacementMsg(null)} className="text-3xs underline font-semibold cursor-pointer">
+                <div className="space-y-1">
+                  <span>{placementMsg.text}</span>
+                  {placementMsg.hint && (
+                    <p className="text-3xs opacity-80 leading-relaxed">{placementMsg.hint}</p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setPlacementMsg(null)}
+                  className="text-3xs underline font-semibold cursor-pointer flex-shrink-0"
+                >
                   Dismiss
                 </button>
               </div>
