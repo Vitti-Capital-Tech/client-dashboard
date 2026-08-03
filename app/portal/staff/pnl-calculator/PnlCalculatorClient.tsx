@@ -18,6 +18,8 @@ import {
   isClientMatch,
   aggregateTradesToSummary,
   normalizeAccountNo,
+  isOptionRow,
+  summaryParentTicker,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
@@ -54,7 +56,9 @@ export function PnlCalculatorClient() {
   const [isSyncingDb, startSyncingDb] = useTransition();
   const [result, setResult] = useState<ParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterType, setFilterType] = useState<"all" | "matched" | "profit" | "loss" | "unmatched" | "options">("all");
+  const [filterType, setFilterType] = useState<
+    "all" | "equity" | "options" | "matched" | "profit" | "loss" | "unmatched"
+  >("all");
 
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
   const [parsedPlacementMap, setParsedPlacementMap] = useState<Map<string, PlacementTickerInfo> | null>(null);
@@ -727,7 +731,6 @@ export function PnlCalculatorClient() {
     const updatedSummary = result.summary.map((item) => {
       if (item.ticker === ticker) {
         const isMatched = bQty === finalSellQty && bQty > 0;
-        const isOption = bQty === 0 || Boolean(item.hasOptionCode);
         const pnlCalculated = Math.round((sPrice - bPrice) * 100) / 100;
         return {
           ...item,
@@ -739,7 +742,6 @@ export function PnlCalculatorClient() {
           totalSellValue: Math.round(sPrice * 100) / 100,
           pnlCalculated,
           isMatched,
-          isOption,
           isEdited: true,
           openQty: bQty - finalSellQty,
         };
@@ -772,7 +774,8 @@ export function PnlCalculatorClient() {
     if (filterType === "profit") return item.pnlCalculated > 0;
     if (filterType === "loss") return item.pnlCalculated < 0;
     if (filterType === "unmatched") return !item.isMatched;
-    if (filterType === "options") return Boolean(item.hasOptionCode);
+    if (filterType === "options") return isOptionRow(item);
+    if (filterType === "equity") return !isOptionRow(item);
     return true;
   });
 
@@ -780,21 +783,31 @@ export function PnlCalculatorClient() {
   const totalBuyVolume = summaryList.reduce((acc, curr) => acc + curr.totalBuyValue, 0);
   const totalSellVolume = summaryList.reduce((acc, curr) => acc + curr.totalSellValue, 0);
 
+  const equityRows = summaryList.filter((i) => !isOptionRow(i));
+  const optionRows = summaryList.filter((i) => isOptionRow(i));
+
+  /** Equity and options are reported as separate books, then combined. */
+  const subtotalFor = (rows: PnlSummaryItem[]) => ({
+    count: rows.length,
+    buyQty: rows.reduce((s, i) => s + i.buyQty, 0),
+    sellQty: rows.reduce((s, i) => s + i.sellQty, 0),
+    buyPrice: rows.reduce((s, i) => s + i.buyPrice, 0),
+    sellPrice: rows.reduce((s, i) => s + i.sellPrice, 0),
+    pnl: rows.reduce((s, i) => s + i.pnlCalculated, 0),
+  });
+
+  const equityTotals = subtotalFor(equityRows);
+  const optionTotals = subtotalFor(optionRows);
+
   const tabCounts = {
     all: summaryList.length,
+    equity: equityRows.length,
+    options: optionRows.length,
     matched: summaryList.filter((i) => i.isMatched).length,
     profit: summaryList.filter((i) => i.pnlCalculated > 0).length,
     loss: summaryList.filter((i) => i.pnlCalculated < 0).length,
     unmatched: summaryList.filter((i) => !i.isMatched).length,
-    options: summaryList.filter((i) => Boolean(i.hasOptionCode)).length,
   };
-
-  // Dynamic Grand Totals for currently visible tab rows
-  const filteredTotalBuyQty = filteredSummary.reduce((s, i) => s + i.buyQty, 0);
-  const filteredTotalSellQty = filteredSummary.reduce((s, i) => s + i.sellQty, 0);
-  const filteredTotalBuyPrice = filteredSummary.reduce((s, i) => s + i.buyPrice, 0);
-  const filteredTotalSellPrice = filteredSummary.reduce((s, i) => s + i.sellPrice, 0);
-  const filteredTotalPnl = filteredSummary.reduce((s, i) => s + i.pnlCalculated, 0);
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -952,6 +965,16 @@ export function PnlCalculatorClient() {
               </p>
               <p className="text-xs text-mut">
                 {result.matchedTickers} matched ({tabCounts.profit} profit, {tabCounts.loss} loss)
+              </p>
+              <p className="text-2xs text-mut">
+                Equity{" "}
+                <span className={equityTotals.pnl >= 0 ? "text-green font-semibold" : "text-loss font-semibold"}>
+                  {fmtCurrency(equityTotals.pnl)}
+                </span>{" "}
+                · Options{" "}
+                <span className={optionTotals.pnl >= 0 ? "text-green font-semibold" : "text-loss font-semibold"}>
+                  {fmtCurrency(optionTotals.pnl)}
+                </span>
               </p>
             </div>
 
@@ -1249,16 +1272,17 @@ export function PnlCalculatorClient() {
 
             {/* Filter Pills Bar — Full width on Desktop so all tabs fit with ZERO scrolling */}
             <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-paper-border text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
-              {(["all", "matched", "profit", "loss", "unmatched", "options"] as const).map((f) => {
+              {(["all", "equity", "options", "matched", "profit", "loss", "unmatched"] as const).map((f) => {
                 const active = filterType === f;
                 const count = tabCounts[f];
                 const labels: Record<string, string> = {
                   all: "All Tickers",
+                  equity: "Equity",
+                  options: "Options",
                   matched: "Matched P&L",
                   profit: "Profit Only",
                   loss: "Loss Only",
                   unmatched: "Unmatched",
-                  options: "Options",
                 };
                 return (
                   <button
@@ -1518,11 +1542,22 @@ export function PnlCalculatorClient() {
                                   Edited
                                 </span>
                               )}
-                              {item.hasOptionCode ? (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold" title="Option contract derivative security">
+                              {isOptionRow(item) ? (
+                                <span
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold"
+                                  title={`Option line — reported separately from the ${summaryParentTicker(item)} equity line`}
+                                >
                                   Option
                                 </span>
-                              ) : item.isMatched ? (
+                              ) : (
+                                <span
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-semibold"
+                                  title="Ordinary equity line (includes non-option derivatives)"
+                                >
+                                  Equity
+                                </span>
+                              )}
+                              {item.isMatched ? (
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
                                   Matched
                                 </span>
@@ -1532,6 +1567,11 @@ export function PnlCalculatorClient() {
                                 </span>
                               )}
                             </div>
+                            {isOptionRow(item) && (
+                              <span className="text-3xs font-normal text-mut">
+                                Underlying {summaryParentTicker(item)}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 text-mut truncate max-w-[200px]" title={item.company}>
                             {item.company}
@@ -1580,6 +1620,36 @@ export function PnlCalculatorClient() {
                 </tbody>
                 {filteredSummary.length > 0 && (
                   <tfoot>
+                    {/* Equity and options are subtotalled separately — GED and
+                        GEDO are different books, then combined below. */}
+                    {([
+                      { label: "Equity Subtotal", totals: equityTotals },
+                      { label: "Options Subtotal", totals: optionTotals },
+                    ] as const)
+                      .filter(({ totals }) => totals.count > 0)
+                      .map(({ label, totals }) => (
+                        <tr
+                          key={label}
+                          className="bg-paper-2/50 font-semibold text-navy border-t border-paper-border text-xs"
+                        >
+                          <td className="py-3 px-4" colSpan={2}>
+                            {label} ({totals.count} ticker{totals.count === 1 ? "" : "s"})
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono">{fmtQty(totals.buyQty)}</td>
+                          <td className="py-3 px-4 text-right font-mono">{fmtQty(totals.sellQty)}</td>
+                          <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.buyPrice)}</td>
+                          <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.sellPrice)}</td>
+                          <td className="py-3 px-4 text-right font-mono" colSpan={2}>
+                            <span
+                              className={`inline-block px-2.5 py-1 rounded-lg ${
+                                totals.pnl >= 0 ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"
+                              }`}
+                            >
+                              {fmtCurrency(totals.pnl)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
                     <tr className="bg-paper-2 font-bold text-navy border-t border-paper-border text-xs">
                       <td className="py-4 px-4" colSpan={2}>
                         Grand Total ({summaryList.length} total tickers)

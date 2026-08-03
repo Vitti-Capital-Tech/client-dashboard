@@ -199,7 +199,7 @@ export async function fetchDatabaseHoldingsAction(
 ): Promise<{ ok: boolean; holdings: DbHoldingInfo[]; error?: string }> {
   try {
     const { createClient } = await import("@/lib/supabase/server");
-    const { getParentTicker, normalizeAccountNo } = await import("@/lib/pnl-calculator");
+    const { getParentTicker, getSummaryGroupKey, normalizeAccountNo } = await import("@/lib/pnl-calculator");
     const supabase = await createClient();
 
     // Query positions, accounts, securities in parallel — clean plain table queries
@@ -269,12 +269,15 @@ export async function fetchDatabaseHoldingsAction(
       return { ok: true, holdings: [] };
     }
 
-    // Aggregate DB holdings by 3-character parentTicker (e.g. ENV, NVO)
+    // Aggregate DB holdings the same way the P&L table groups rows: options keep
+    // their own code (ENVO) while ordinaries roll up to the parent (ENV, NVO), so
+    // an option row is never valued off the underlying's share price.
     const holdingMap = new Map<string, DbHoldingInfo>();
 
     for (const p of filteredPositions) {
       const code = String(p.security_code || "").trim().toUpperCase();
       const parent = getParentTicker(code);
+      const groupKey = getSummaryGroupKey(code);
       const qty = Number(p.qty) || 0;
       const avgCost = Number(p.avg_cost) || 0;
       const costBase = Math.round(qty * avgCost * 100) / 100;
@@ -292,13 +295,13 @@ export async function fetchDatabaseHoldingsAction(
       const unrealizedPnl = Math.round((marketValue - costBase) * 100) / 100;
       const accountRefStr = accMap.get(p.account_id || "") || "";
 
-      const existing = holdingMap.get(parent);
+      const existing = holdingMap.get(groupKey);
       if (!existing) {
-        holdingMap.set(parent, {
+        holdingMap.set(groupKey, {
           accountRef: accountRefStr,
-          ticker: parent,
+          ticker: groupKey,
           parentTicker: parent,
-          companyName: secInfo?.name || parent,
+          companyName: secInfo?.name || groupKey,
           qty,
           costBase,
           marketValue,

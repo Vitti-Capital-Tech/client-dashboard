@@ -39,8 +39,13 @@ export interface PlacementTickerInfo {
   clientAllocations: PlacementClientAllocation[];
 }
 
+/** Equity/ordinary line vs a listed option line — kept as separate P&L rows. */
+export type PnlInstrument = "EQUITY" | "OPTION";
+
 export interface PnlSummaryItem {
-  ticker: string;
+  ticker: string; // Option rows keep their full option code (e.g. GEDO); equity rows use the 3-char parent (GED)
+  parentTicker?: string; // Underlying 3-char code — same for GED and GEDO
+  instrument?: PnlInstrument;
   company: string;
   buyQty: number;
   sellQty: number;
@@ -103,6 +108,43 @@ export function isOptionCode(rawCode: string): boolean {
     return suffix.includes("O");
   }
   return false;
+}
+
+/**
+ * The row a raw security code belongs to in the P&L table.
+ *
+ * Options are reported on their own line, so they key on the full option code
+ * (GEDO stays GEDO). Everything else — ordinaries and non-option derivatives
+ * like GEDXX — rolls up into the 3-char parent (GED).
+ */
+export function getSummaryGroupKey(rawCode: string): string {
+  const code = String(rawCode || "").trim().toUpperCase();
+  return isOptionCode(code) ? code : getParentTicker(code);
+}
+
+/** Whether a summary row represents an option line rather than the equity line. */
+export function isOptionRow(item: Pick<PnlSummaryItem, "ticker" | "instrument" | "hasOptionCode">): boolean {
+  if (item.instrument) return item.instrument === "OPTION";
+  return Boolean(item.hasOptionCode) || isOptionCode(item.ticker);
+}
+
+/** The underlying 3-char code for a summary row (GEDO -> GED). */
+export function summaryParentTicker(item: Pick<PnlSummaryItem, "ticker" | "parentTicker">): string {
+  return item.parentTicker || getParentTicker(item.ticker);
+}
+
+/**
+ * Orders the P&L table so each underlying's equity line is followed by its
+ * option lines (GED, then GEDO) instead of the two drifting apart.
+ */
+export function compareSummaryItems(a: PnlSummaryItem, b: PnlSummaryItem): number {
+  const parentDiff = summaryParentTicker(a).localeCompare(summaryParentTicker(b));
+  if (parentDiff !== 0) return parentDiff;
+
+  const optionDiff = Number(isOptionRow(a)) - Number(isOptionRow(b));
+  if (optionDiff !== 0) return optionDiff;
+
+  return a.ticker.localeCompare(b.ticker);
 }
 
 /**
@@ -548,18 +590,26 @@ function parsePnlSheetJsMatrix(buffer: Buffer): ParseResult | null {
 
 /**
  * Aggregates an array of parsed trade rows into ticker-level summary items.
+ *
+ * Equity and options on the same underlying are separate rows: GED (ordinary,
+ * incl. non-option derivatives like GEDXX) and GEDO (option) each get their own
+ * line, so their P&L is never netted against each other.
  */
 export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary: PnlSummaryItem[]; totalPnl: number } {
   const tickerMap = new Map<string, PnlSummaryItem>();
 
   for (const t of rawTrades) {
-    const parent = getParentTicker(t.ticker);
-    const isOpt = isOptionCode(t.ticker);
-    let item = tickerMap.get(parent);
+    const rawCode = String(t.ticker || "").trim().toUpperCase();
+    const parent = getParentTicker(rawCode);
+    const isOpt = isOptionCode(rawCode);
+    const key = getSummaryGroupKey(rawCode);
+    let item = tickerMap.get(key);
     if (!item) {
       item = {
-        ticker: parent,
-        company: t.company || parent,
+        ticker: key,
+        parentTicker: parent,
+        instrument: isOpt ? "OPTION" : "EQUITY",
+        company: t.company || key,
         buyQty: 0,
         sellQty: 0,
         buyPrice: 0,
@@ -568,20 +618,15 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
         totalSellValue: 0,
         pnlCalculated: 0,
         isMatched: false,
-        isOption: true,
+        isOption: isOpt,
         hasOptionCode: isOpt,
         openQty: 0,
         tradeCount: 0,
       };
-      tickerMap.set(parent, item);
-    } else {
-      if (isOpt) {
-        item.hasOptionCode = true;
-      }
-      if (t.ticker.length === 3 && t.company) {
-        // Prefer cleaner company name from ordinary 3-char security
-        item.company = t.company;
-      }
+      tickerMap.set(key, item);
+    } else if (rawCode.length === 3 && t.company) {
+      // Prefer cleaner company name from ordinary 3-char security
+      item.company = t.company;
     }
 
     item.tradeCount += 1;
@@ -600,7 +645,7 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
     const buyPrice = Math.round(item.totalBuyValue * 100) / 100;
     const sellPrice = Math.round(item.totalSellValue * 100) / 100;
     const isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
-    const isOption = item.buyQty === 0 || Boolean(item.hasOptionCode);
+    const isOption = item.instrument === "OPTION";
 
     // Calculate PnL for all positions regardless of qty match
     const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
@@ -619,8 +664,8 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
     };
   });
 
-  // Sort summary by ticker symbol ascending
-  summary.sort((a, b) => a.ticker.localeCompare(b.ticker));
+  // Sort by underlying, equity line before its option lines
+  summary.sort(compareSummaryItems);
 
   const totalPnl = Math.round(summary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
@@ -646,6 +691,8 @@ export async function buildPnlExportXlsxBuffer(
   ws.columns = [
     { header: "Ticker", key: "ticker", width: 14 },
     { header: "Company", key: "company", width: 32 },
+    { header: "Instrument", key: "instrument", width: 13 },
+    { header: "Underlying", key: "underlying", width: 13 },
     { header: "Buy Qty (Sum)", key: "buyQty", width: 16, style: { numFmt: QTY_FMT } },
     { header: "Sell Qty (Sum)", key: "sellQty", width: 16, style: { numFmt: QTY_FMT } },
     { header: "Buy Price (Sum)", key: "buyPrice", width: 18, style: { numFmt: MONEY_FMT } },
@@ -665,18 +712,20 @@ export async function buildPnlExportXlsxBuffer(
   };
   headerRow.height = 24;
 
-  const sortedSummary = [...summary].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  const sortedSummary = [...summary].sort(compareSummaryItems);
 
   for (const item of sortedSummary) {
     const row = ws.addRow({
       ticker: item.ticker,
       company: item.company,
+      instrument: isOptionRow(item) ? "Option" : "Equity",
+      underlying: summaryParentTicker(item),
       buyQty: item.buyQty,
       sellQty: item.sellQty,
       buyPrice: item.buyPrice,
       sellPrice: item.sellPrice,
       pnlCalculated: item.pnlCalculated,
-      status: item.isMatched ? "Matched" : "Option / Unmatched",
+      status: item.isMatched ? "Matched" : "Unmatched",
       openQty: item.openQty,
     });
 
@@ -701,6 +750,8 @@ export async function buildPnlExportXlsxBuffer(
   const totalRow = ws.addRow({
     ticker: "Grand Total",
     company: "",
+    instrument: "",
+    underlying: "",
     buyQty: "",
     sellQty: "",
     buyPrice: totalBuyPrice,
@@ -730,6 +781,8 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
   const headers = [
     "Ticker",
     "Company",
+    "Instrument",
+    "Underlying",
     "Buy Qty (Sum)",
     "Sell Qty (Sum)",
     "Buy Price",
@@ -747,7 +800,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     return s;
   };
 
-  const sortedSummary = [...summary].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  const sortedSummary = [...summary].sort(compareSummaryItems);
 
   const lines = [
     headers.join(","),
@@ -755,12 +808,14 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
       [
         item.ticker,
         item.company,
+        isOptionRow(item) ? "Option" : "Equity",
+        summaryParentTicker(item),
         item.buyQty,
         item.sellQty,
         item.buyPrice.toFixed(2),
         item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
-        item.isMatched ? "Matched" : item.isEdited ? "Edited" : "Option / Unmatched",
+        item.isMatched ? "Matched" : item.isEdited ? "Edited" : "Unmatched",
         item.openQty,
       ]
         .map(escapeCsv)
@@ -775,6 +830,8 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
   lines.push(
     [
       "Grand Total",
+      "",
+      "",
       "",
       "",
       "",
@@ -1046,7 +1103,11 @@ export function mergePlacementTrackerIntoSummary(
 
   for (const [rawTicker, info] of placementData.entries()) {
     const parentTicker = getParentTicker(rawTicker);
-    const existing = updatedSummary.find((s) => getParentTicker(s.ticker) === parentTicker);
+    // A placement allocates ordinary shares, so it fills the equity row only —
+    // never the option row that now sits alongside it under the same underlying.
+    const existing = updatedSummary.find(
+      (s) => summaryParentTicker(s) === parentTicker && !isOptionRow(s)
+    );
 
     if (existing) {
       // Keep only the allocation rows belonging to the account holder(s) in play.
@@ -1088,7 +1149,6 @@ export function mergePlacementTrackerIntoSummary(
           existing.pnlCalculated = Math.round((existing.sellPrice - existing.buyPrice) * 100) / 100;
           existing.openQty = existing.buyQty - existing.sellQty;
           existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
-          existing.isOption = existing.buyQty === 0 || Boolean(existing.hasOptionCode);
           existing.isEnriched = true;
           existing.clientAllocations = matchedAllocations;
           mergedCount++;
@@ -1097,8 +1157,7 @@ export function mergePlacementTrackerIntoSummary(
     }
   }
 
-  // Sort by ticker symbol ascending
-  updatedSummary.sort((a, b) => a.ticker.localeCompare(b.ticker));
+  updatedSummary.sort(compareSummaryItems);
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
@@ -1144,10 +1203,15 @@ export function mergeDbHoldingsIntoSummary(
 
   for (const item of updatedSummary) {
     if (item.sellQty === 0 || item.sellPrice === 0) {
-      const parent = getParentTicker(item.ticker);
+      const parent = summaryParentTicker(item);
+      const wantOption = isOptionRow(item);
+      // An option row can only be valued by an option holding of the same code —
+      // valuing GEDO at the GED share price would be wildly wrong.
       const match = dbHoldings.find((h) => {
-        const hParent = getParentTicker(h.ticker);
-        return (hParent === parent || h.ticker.toUpperCase().includes(parent)) && (h.qty > 0 || h.marketValue > 0);
+        const hCode = String(h.ticker || "").trim().toUpperCase();
+        if (isOptionCode(hCode) !== wantOption) return false;
+        if (wantOption ? hCode !== item.ticker.toUpperCase() : getParentTicker(hCode) !== parent) return false;
+        return h.qty > 0 || h.marketValue > 0;
       });
 
       if (match) {
@@ -1161,15 +1225,13 @@ export function mergeDbHoldingsIntoSummary(
         item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
         item.openQty = item.buyQty - item.sellQty;
         item.isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
-        item.isOption = item.buyQty === 0 || Boolean(item.hasOptionCode);
         item.isDbMarketValued = true;
         mergedCount++;
       }
     }
   }
 
-  // Sort by ticker symbol ascending
-  updatedSummary.sort((a, b) => a.ticker.localeCompare(b.ticker));
+  updatedSummary.sort(compareSummaryItems);
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
