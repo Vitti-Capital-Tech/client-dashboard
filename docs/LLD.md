@@ -573,10 +573,17 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
   - `isClientMatch(clientName, fileStem)`: Extracts initial trade filename stem (e.g., `Mr Akshit Verma.xlsx` → `"Mr Akshit Verma"`) and matches client names using case-insensitive substring and word token matching with fallback.
   - Combines allocations across multiple uploaded Placement Tracker files via `combinePlacementMaps`.
   - Directly adds matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in summary table.
-  - Recomputes `pnlCalculated = sellPrice - buyPrice`, `openQty = buyQty - sellQty`, `isMatched`, and tags rows with `isEnriched = true`.
+  - **Blank buy side** (`buyQty = 0` / `buyPrice = 0`): *fills* from the allocation.
+  - **Short buy side** (`0 < buyQty < sellQty`): *adds* the allocation on top of the recorded buys — more units were sold than the ledger saw bought, so the placement is the missing parcel. The old `buyQty = 0` gate skipped these rows, leaving P&L **overstated** by the unrecorded parcel's whole cost. Tagged `isPartialBuy = true`. A row with `buyQty > sellQty` is an ordinary open position, not a short buy, and is left alone (so the existing "does not double a matched row" guarantee holds).
+  - Recomputes `pnlCalculated = sellPrice - buyPrice`, `openQty = buyQty - sellQty`, `isMatched`, and tags rows with `isEnriched = true`; returns `partialBuyCount` alongside `mergedCount`.
+  - `comment` is **derived** from `isPartialBuy` / `isPartialExit` by `applyPartialComment()`, not assigned in place, so the placement and DB merges are order-independent — a row short on both sides reads `Partial Buy · Partial Exit` whichever ran last.
 - **Database Portfolio Holdings Sync (`mergeDbHoldingsIntoSummary`):**
   - `fetchDatabaseHoldingsAction(accountRef)`: Queries `positions`, `accounts`, and `securities` in parallel. Strictly scopes database positions to target account number(s) (e.g., `["1103199"]`) to prevent cross-account position leakage.
-  - Auto-fills `sellQty` and `sellPrice` (current DB portfolio market value) for open positions (`sellQty = 0`), tagging matched rows with `isDbMarketValued = true`.
+  - **Fully open** (`sellQty = 0 || sellPrice = 0`): *fills* `sellQty` and `sellPrice` from the DB portfolio market value.
+  - **Partial exit** (`0 < sellQty < buyQty`, `buyQty > 0`): *adds* the still-held parcel on top of the realised sale — `sellQty += heldQty`, `sellPrice += marketValue`. Filling would discard the cash actually received; skipping (the pre-existing `sellQty = 0` gate) understated P&L by the whole remaining parcel. Legal because `buyPrice`/`sellPrice` are **value sums**, not per-unit prices, so no weighted average is involved. These rows are tagged `isPartialExit = true` and carry `comment = "Partial Exit"`, surfaced as a **Comments** column in the table and both exports.
+  - Held qty is taken **verbatim** from the snapshot, never back-solved from `buyQty - sellQty`: a DB/file disagreement leaves the row `Unmatched` with a non-zero `Open Qty` rather than silently balancing it.
+  - A sell-only row (`buyQty = 0`) is never a partial exit — there is no parcel to be partially out of.
+  - Both paths tag matched rows `isDbMarketValued = true`; the return value carries `mergedCount` and `partialExitCount`.
 - **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
   - `fetchDatabaseHoldingsAction(accountRef)`: Account-scoped server action returning `DbHoldingInfo[]` array.
   - `fetchPlacementTrackerUrlAction(url, googleAccessToken?, microsoftAccessToken?)`: URL action with OAuth token fallbacks returning lightweight `PlacementTickerInfo[]` array.
@@ -590,4 +597,7 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
   - Dedicated **Sync DB Market Value** action button with automated notifications.
   - Inline row editing with **Edit / Save / Cancel** controls.
   - 6 Filter Tabs (`All Tickers`, `Matched P&L`, `Profit Only`, `Loss Only`, `Unmatched`, `Options`).
+  - **Comments** column between `PnL Calculated` and `Action`, carrying the derived partial-merge note (`Partial Buy`, `Partial Exit`, or both). Present in the `.xlsx` and `.csv` exports as a trailing `Comments` column.
+  - Row badges: `Enriched` (placement merge), `Valued from Holdings` (sell side includes units still held, priced off the DB snapshot rather than sold — was `DB Mkt Valued`), `Edited`, `Option`/`Equity`, `Matched`/`Unmatched`.
+  - **Option rows never show the `Unmatched` badge.** An option line's buy and sell legs are not expected to balance, so the flag was noise on every option row. The `Unmatched` *filter tab* still includes them — the badge is suppressed, not the underlying `isMatched` value.
   - Fixed Grand Total row in table footer showing the overall summary across all tickers regardless of active tab view.

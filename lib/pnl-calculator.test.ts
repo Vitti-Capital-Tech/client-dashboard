@@ -597,6 +597,178 @@ test("PNL Calculator - DB market value never prices an option row off the underl
   assert.equal(both.mergedCount, 2);
 });
 
+/** A part-sold parcel: 121,213 bought, 50,000 sold, 71,213 still held. */
+const partialExitRow = () => [
+  {
+    ticker: "GRV",
+    parentTicker: "GRV",
+    instrument: "EQUITY" as const,
+    company: "GREENVALE ENERGY LTD",
+    buyQty: 121213,
+    sellQty: 50000,
+    buyPrice: 4000.03,
+    sellPrice: 1650.0,
+    totalBuyValue: 4000.03,
+    totalSellValue: 1650.0,
+    pnlCalculated: -2350.03,
+    isMatched: false,
+    isOption: false,
+    hasOptionCode: false,
+    openQty: 71213,
+    tradeCount: 2,
+  },
+];
+
+test("PNL Calculator - partial exit ADDS the still-held parcel on top of the realised sale", async () => {
+  const merged = mergeDbHoldingsIntoSummary(partialExitRow(), [
+    { ticker: "GRV", parentTicker: "GRV", qty: 71213, marketValue: 2350.02 },
+  ]);
+
+  const grv = merged.summary.find((s) => s.ticker === "GRV");
+  assert.ok(grv);
+  // Added, not replaced: 50,000 realised + 71,213 still held.
+  assert.equal(grv.sellQty, 121213);
+  // Value sums add too: $1,650.00 proceeds + $2,350.02 market value.
+  assert.equal(grv.sellPrice, 4000.02);
+  assert.equal(grv.totalSellValue, 4000.02);
+  assert.equal(grv.pnlCalculated, -0.01);
+  assert.equal(grv.openQty, 0);
+  assert.equal(grv.isMatched, true);
+  assert.equal(grv.isPartialExit, true);
+  assert.equal(grv.comment, "Partial Exit");
+  assert.equal(merged.partialExitCount, 1);
+  assert.equal(merged.mergedCount, 1);
+});
+
+test("PNL Calculator - partial exit keeps a DB/file discrepancy visible instead of balancing the row", async () => {
+  // DB holds only 60,000 of the 71,213 units the file says are still open.
+  const merged = mergeDbHoldingsIntoSummary(partialExitRow(), [
+    { ticker: "GRV", parentTicker: "GRV", qty: 60000, marketValue: 1980.0 },
+  ]);
+
+  const grv = merged.summary.find((s) => s.ticker === "GRV");
+  assert.ok(grv);
+  // The held qty is taken verbatim — never back-solved from buyQty - sellQty.
+  assert.equal(grv.sellQty, 110000);
+  assert.equal(grv.openQty, 11213);
+  assert.equal(grv.isMatched, false);
+  assert.equal(grv.comment, "Partial Exit");
+});
+
+test("PNL Calculator - fully open rows still FILL rather than add, and matched rows are untouched", async () => {
+  const rows = [
+    // Fully open: nothing sold, so the blank sell side is filled.
+    {
+      ticker: "ABC",
+      parentTicker: "ABC",
+      instrument: "EQUITY" as const,
+      company: "ABC CORP",
+      buyQty: 1000,
+      sellQty: 0,
+      buyPrice: 500,
+      sellPrice: 0,
+      totalBuyValue: 500,
+      totalSellValue: 0,
+      pnlCalculated: -500,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 1000,
+      tradeCount: 1,
+    },
+    // Fully closed: buy === sell, so the DB must not touch it.
+    {
+      ticker: "XYZ",
+      parentTicker: "XYZ",
+      instrument: "EQUITY" as const,
+      company: "XYZ LTD",
+      buyQty: 400,
+      sellQty: 400,
+      buyPrice: 300,
+      sellPrice: 350,
+      totalBuyValue: 300,
+      totalSellValue: 350,
+      pnlCalculated: 50,
+      isMatched: true,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 0,
+      tradeCount: 2,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(rows, [
+    { ticker: "ABC", parentTicker: "ABC", qty: 1000, marketValue: 700 },
+    { ticker: "XYZ", parentTicker: "XYZ", qty: 999, marketValue: 9999 },
+  ]);
+
+  const abc = merged.summary.find((s) => s.ticker === "ABC");
+  assert.equal(abc?.sellQty, 1000); // filled, not 0 + 1000 counted twice
+  assert.equal(abc?.sellPrice, 700);
+  assert.equal(abc?.comment, undefined); // not a partial exit
+  assert.equal(abc?.isPartialExit, undefined);
+
+  const xyz = merged.summary.find((s) => s.ticker === "XYZ");
+  assert.equal(xyz?.sellQty, 400); // untouched
+  assert.equal(xyz?.sellPrice, 350);
+  assert.equal(xyz?.comment, undefined);
+
+  assert.equal(merged.partialExitCount, 0);
+  assert.equal(merged.mergedCount, 1);
+});
+
+test("PNL Calculator - a sell-only row is never treated as a partial exit", async () => {
+  const merged = mergeDbHoldingsIntoSummary(
+    [
+      {
+        ticker: "OPT",
+        parentTicker: "OPT",
+        instrument: "EQUITY" as const,
+        company: "SOLD WITHOUT A BUY",
+        buyQty: 0,
+        sellQty: 5000,
+        buyPrice: 0,
+        sellPrice: 900,
+        totalBuyValue: 0,
+        totalSellValue: 900,
+        pnlCalculated: 900,
+        isMatched: false,
+        isOption: false,
+        hasOptionCode: false,
+        openQty: -5000,
+        tradeCount: 1,
+      },
+    ],
+    [{ ticker: "OPT", parentTicker: "OPT", qty: 1000, marketValue: 200 }]
+  );
+
+  const row = merged.summary.find((s) => s.ticker === "OPT");
+  // buyQty 0 means there is no parcel to be partially out of — leave it alone.
+  assert.equal(row?.sellQty, 5000);
+  assert.equal(row?.sellPrice, 900);
+  assert.equal(row?.comment, undefined);
+  assert.equal(merged.partialExitCount, 0);
+});
+
+test("PNL Calculator - Comments column reaches both exports", async () => {
+  const merged = mergeDbHoldingsIntoSummary(partialExitRow(), [
+    { ticker: "GRV", parentTicker: "GRV", qty: 71213, marketValue: 2350.02 },
+  ]);
+
+  const csv = buildPnlExportCsvString(merged.summary);
+  const [header, firstRow] = csv.split("\r\n");
+  assert.ok(header.endsWith("Comments"), `header should end with Comments: ${header}`);
+  assert.ok(firstRow.endsWith("Partial Exit"), `row should carry the note: ${firstRow}`);
+
+  // Grand Total keeps the column count aligned with the header.
+  const lines = csv.split("\r\n");
+  const cols = (s: string) => s.split(",").length;
+  assert.equal(cols(lines[lines.length - 1]), cols(header));
+
+  const xlsx = await buildPnlExportXlsxBuffer(merged.summary);
+  assert.ok(xlsx.length > 0);
+});
+
 test("PNL Calculator - collectPlacementClientNames dedupes across sheets", async () => {
   const placementMap = new Map();
   placementMap.set("ABE", {
@@ -661,4 +833,150 @@ test("PNL Calculator - mergePlacementTrackerIntoSummary does NOT double buyQty/b
   assert.equal(zeu.buyQty, 3333333); // NOT doubled to 6666666!
   assert.equal(zeu.buyPrice, 20000.00); // NOT doubled to 40000!
   assert.equal(zeu.pnlCalculated, 4000.00);
+  assert.equal(zeu.isPartialBuy, undefined); // matched row is not a short buy
+  assert.equal(zeu.comment, undefined);
+  assert.equal(merged.partialBuyCount, 0);
+});
+
+/** A placement sheet allocating 40,000 ABE shares for $8,000 to one client. */
+const abePlacementMap = () => {
+  const m = new Map();
+  m.set("ABE", {
+    ticker: "ABE",
+    totalShares: 40000,
+    totalActualDollar: 8000,
+    clientAllocations: [
+      {
+        clientName: "Mr Akshit Verma",
+        advisor: "VTC",
+        askingBid: 8000,
+        allocationDollar: 8000,
+        roundShares: 40000,
+        actualDollar: 8000,
+      },
+    ],
+  });
+  return m;
+};
+
+test("PNL Calculator - short buy side (0 < buyQty < sellQty) ADDS the placement allocation", async () => {
+  // 10,000 units bought per the ledger but 50,000 sold — 40,000 were never
+  // recorded as a buy, which is exactly the placement parcel.
+  const merged = mergePlacementTrackerIntoSummary(
+    [
+      {
+        ticker: "ABE",
+        parentTicker: "ABE",
+        instrument: "EQUITY" as const,
+        company: "ABERDEEN",
+        buyQty: 10000,
+        sellQty: 50000,
+        buyPrice: 2000,
+        sellPrice: 12500,
+        totalBuyValue: 2000,
+        totalSellValue: 12500,
+        pnlCalculated: 10500,
+        isMatched: false,
+        isOption: false,
+        hasOptionCode: false,
+        openQty: -40000,
+        tradeCount: 3,
+      },
+    ],
+    abePlacementMap(),
+    "Mr Akshit Verma"
+  );
+
+  const abe = merged.summary.find((s) => s.ticker === "ABE");
+  assert.ok(abe);
+  assert.equal(abe.buyQty, 50000); // 10,000 recorded + 40,000 from the placement
+  assert.equal(abe.buyPrice, 10000); // $2,000 recorded + $8,000 ACTUAL $
+  assert.equal(abe.totalBuyValue, 10000);
+  // P&L drops from an overstated 10,500 to the real 2,500 once the cost is known.
+  assert.equal(abe.pnlCalculated, 2500);
+  assert.equal(abe.openQty, 0);
+  assert.equal(abe.isMatched, true);
+  assert.equal(abe.isPartialBuy, true);
+  assert.equal(abe.isEnriched, true);
+  assert.equal(abe.comment, "Partial Buy");
+  assert.equal(merged.partialBuyCount, 1);
+});
+
+test("PNL Calculator - a blank buy side still FILLS, and an over-bought row is left alone", async () => {
+  const rows = [
+    // buyQty 0 → fill (pre-existing behaviour).
+    {
+      ticker: "ABE",
+      parentTicker: "ABE",
+      instrument: "EQUITY" as const,
+      company: "ABERDEEN",
+      buyQty: 0,
+      sellQty: 40000,
+      buyPrice: 0,
+      sellPrice: 9000,
+      totalBuyValue: 0,
+      totalSellValue: 9000,
+      pnlCalculated: 9000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: -40000,
+      tradeCount: 1,
+    },
+  ];
+
+  const filled = mergePlacementTrackerIntoSummary(rows, abePlacementMap(), "Mr Akshit Verma");
+  const abe = filled.summary.find((s) => s.ticker === "ABE");
+  assert.equal(abe?.buyQty, 40000);
+  assert.equal(abe?.buyPrice, 8000);
+  assert.equal(abe?.isPartialBuy, undefined); // a fill is not a top-up
+  assert.equal(abe?.comment, undefined);
+  assert.equal(filled.partialBuyCount, 0);
+
+  // buyQty > sellQty is an open position, not a short buy — adding cost would be wrong.
+  const overBought = mergePlacementTrackerIntoSummary(
+    [{ ...rows[0], buyQty: 60000, buyPrice: 12000, totalBuyValue: 12000, openQty: 20000 }],
+    abePlacementMap(),
+    "Mr Akshit Verma"
+  );
+  const held = overBought.summary.find((s) => s.ticker === "ABE");
+  assert.equal(held?.buyQty, 60000);
+  assert.equal(held?.buyPrice, 12000);
+  assert.equal(overBought.partialBuyCount, 0);
+});
+
+test("PNL Calculator - a row short on both sides reads both notes, whichever merge runs last", async () => {
+  const base = [
+    {
+      ticker: "ABE",
+      parentTicker: "ABE",
+      instrument: "EQUITY" as const,
+      company: "ABERDEEN",
+      buyQty: 10000,
+      sellQty: 50000,
+      buyPrice: 2000,
+      sellPrice: 12500,
+      totalBuyValue: 2000,
+      totalSellValue: 12500,
+      pnlCalculated: 10500,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: -40000,
+      tradeCount: 3,
+    },
+  ];
+
+  // Placement first → buyQty becomes 50,000 (matched), so the DB merge finds
+  // nothing partial. Bump the buy side further so a sell-side gap remains.
+  const placed = mergePlacementTrackerIntoSummary(base, abePlacementMap(), "Mr Akshit Verma");
+  const stretched = placed.summary.map((s) => ({ ...s, buyQty: 70000, openQty: 20000, isMatched: false }));
+
+  const then = mergeDbHoldingsIntoSummary(stretched, [
+    { ticker: "ABE", parentTicker: "ABE", qty: 20000, marketValue: 5000 },
+  ]);
+  const row = then.summary.find((s) => s.ticker === "ABE");
+  assert.equal(row?.isPartialBuy, true);
+  assert.equal(row?.isPartialExit, true);
+  assert.equal(row?.comment, "Partial Buy · Partial Exit");
 });

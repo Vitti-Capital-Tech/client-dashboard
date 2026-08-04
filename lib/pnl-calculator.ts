@@ -60,6 +60,9 @@ export interface PnlSummaryItem {
   isEdited?: boolean; // true if manually adjusted by staff
   isEnriched?: boolean; // true if merged with placement tracker data
   isDbMarketValued?: boolean; // true if sellQty/sellPrice auto-filled from database portfolio market value
+  isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
+  isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
+  comment?: string; // Derived from the flags above — surfaced in the table and both exports
   openQty: number; // buyQty - sellQty
   tradeCount: number;
   clientAllocations?: PlacementClientAllocation[];
@@ -700,6 +703,7 @@ export async function buildPnlExportXlsxBuffer(
     { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "Status", key: "status", width: 16 },
     { header: "Open Qty", key: "openQty", width: 14, style: { numFmt: QTY_FMT } },
+    { header: "Comments", key: "comment", width: 18 },
   ];
 
   // Header formatting
@@ -727,6 +731,7 @@ export async function buildPnlExportXlsxBuffer(
       pnlCalculated: item.pnlCalculated,
       status: item.isMatched ? "Matched" : "Unmatched",
       openQty: item.openQty,
+      comment: item.comment ?? "",
     });
 
     // PnL cell highlighting
@@ -759,6 +764,7 @@ export async function buildPnlExportXlsxBuffer(
     pnlCalculated: totalPnl,
     status: "",
     openQty: "",
+    comment: "",
   });
 
   totalRow.font = { bold: true };
@@ -790,6 +796,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     "PnL Calculated",
     "Status",
     "Open Qty",
+    "Comments",
   ];
 
   const escapeCsv = (val: any) => {
@@ -817,6 +824,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.pnlCalculated.toFixed(2),
         item.isMatched ? "Matched" : item.isEdited ? "Edited" : "Unmatched",
         item.openQty,
+        item.comment ?? "",
       ]
         .map(escapeCsv)
         .join(",")
@@ -838,6 +846,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
       totalBuyPrice.toFixed(2),
       totalSellPrice.toFixed(2),
       totalPnl.toFixed(2),
+      "",
       "",
       "",
     ]
@@ -1067,6 +1076,21 @@ export function isClientMatch(clientName: string, fileStem: string): boolean {
 }
 
 /**
+ * Rebuilds `comment` from the partial-merge flags.
+ *
+ * Derived rather than assigned so the two merges stay order-independent: a row
+ * that is topped up on both sides (short buy from the Placement Tracker, part-sale
+ * valued from the DB) ends up reading "Partial Buy · Partial Exit" whichever merge
+ * ran last, instead of one clobbering the other's note.
+ */
+function applyPartialComment(item: PnlSummaryItem): void {
+  const notes: string[] = [];
+  if (item.isPartialBuy) notes.push("Partial Buy");
+  if (item.isPartialExit) notes.push("Partial Exit");
+  if (notes.length > 0) item.comment = notes.join(" · ");
+}
+
+/**
  * Merges parsed Placement Tracker data into an existing PNL Summary.
  * Fills missing Buy Qty (from Round Shares) & Buy Price (from ACTUAL $) from the
  * allocation rows belonging to the account holder(s) whose trades the summary
@@ -1082,6 +1106,15 @@ export function isClientMatch(clientName: string, fileStem: string): boolean {
  * allocation (where "which client" is not in question). Otherwise it is left
  * untouched and reported in `ambiguousTickers` so the caller can ask which
  * account holder to use, rather than filling in a wrong number.
+ *
+ * Two fill modes, mirroring `mergeDbHoldingsIntoSummary` on the sell side:
+ *
+ *  - BLANK buy side (`buyQty === 0` / `buyPrice === 0`) — the allocation FILLS it.
+ *  - SHORT buy side (`0 < buyQty < sellQty`) — more units were sold than the
+ *    ledger ever saw bought, yet some buys are recorded, so the allocation is
+ *    ADDED on top. Filling would throw away the recorded buys; the old
+ *    `buyQty === 0` gate skipped these rows entirely, leaving P&L overstated by
+ *    the whole unrecorded parcel's cost. Rows are flagged `isPartialBuy`.
  */
 export function mergePlacementTrackerIntoSummary(
   summary: PnlSummaryItem[],
@@ -1090,11 +1123,13 @@ export function mergePlacementTrackerIntoSummary(
 ): {
   summary: PnlSummaryItem[];
   mergedCount: number;
+  partialBuyCount: number;
   totalPnl: number;
   ambiguousTickers: string[];
 } {
   const updatedSummary = summary.map((item) => ({ ...item }));
   let mergedCount = 0;
+  let partialBuyCount = 0;
   const ambiguousTickers: string[] = [];
 
   const hints = (Array.isArray(clientHints) ? clientHints : [clientHints])
@@ -1132,16 +1167,34 @@ export function mergePlacementTrackerIntoSummary(
 
         let updated = false;
 
-        // Only fill buyQty from Placement Tracker if currently 0
+        // A SHORT BUY side: units were sold that the ledger never saw bought, but
+        // some buys ARE recorded — so the row is not simply blank. The placement
+        // allocation is the missing parcel and is ADDED on top of what is already
+        // there. Evaluated up front because the qty branch below mutates buyQty,
+        // which would otherwise change the answer for the price branch.
+        const isShortBuy =
+          existing.buyQty > 0 && existing.sellQty > 0 && existing.buyQty < existing.sellQty;
+
         if (existing.buyQty === 0 && placementQty > 0) {
+          // Blank buy side — fill it.
           existing.buyQty = placementQty;
+          updated = true;
+        } else if (isShortBuy && placementQty > 0) {
+          existing.buyQty += placementQty;
+          existing.isPartialBuy = true;
           updated = true;
         }
 
-        // Only fill buyPrice from Placement Tracker if currently 0
         if (existing.buyPrice === 0 && placementPrice > 0) {
+          // Blank buy value — fill it.
           existing.buyPrice = Math.round(placementPrice * 100) / 100;
           existing.totalBuyValue = existing.buyPrice;
+          updated = true;
+        } else if (isShortBuy && placementPrice > 0) {
+          // buyPrice is a VALUE sum, not a per-unit price, so ACTUAL $ adds.
+          existing.buyPrice = Math.round((existing.buyPrice + placementPrice) * 100) / 100;
+          existing.totalBuyValue = existing.buyPrice;
+          existing.isPartialBuy = true;
           updated = true;
         }
 
@@ -1151,6 +1204,8 @@ export function mergePlacementTrackerIntoSummary(
           existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
           existing.isEnriched = true;
           existing.clientAllocations = matchedAllocations;
+          if (existing.isPartialBuy) partialBuyCount++;
+          applyPartialComment(existing);
           mergedCount++;
         }
       }
@@ -1161,7 +1216,7 @@ export function mergePlacementTrackerIntoSummary(
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
-  return { summary: updatedSummary, mergedCount, totalPnl, ambiguousTickers };
+  return { summary: updatedSummary, mergedCount, partialBuyCount, totalPnl, ambiguousTickers };
 }
 
 /**
@@ -1185,8 +1240,27 @@ export function collectPlacementClientNames(
 }
 
 /**
- * Merges database portfolio holdings (units & market value) into PNL summary
- * for open positions where sellQty === 0 or sellPrice === 0.
+ * Merges database portfolio holdings (units & market value) into the PNL summary
+ * so an open parcel is valued instead of being counted against zero proceeds.
+ *
+ * Two distinct cases, because they are not the same arithmetic:
+ *
+ *  - FULLY OPEN (`sellQty === 0 || sellPrice === 0`) — nothing has been sold, so
+ *    the blank sell side is FILLED from the holding.
+ *
+ *  - PARTIAL EXIT (`0 < sellQty < buyQty`) — part of the parcel was genuinely
+ *    sold and the rest is still held, so the holding is ADDED on top of the
+ *    realised sale. Filling would throw away the cash actually received;
+ *    replacing it understated P&L by the whole remaining parcel, which is why
+ *    these rows used to be skipped by the `sellQty === 0` gate entirely.
+ *
+ * `buyPrice`/`sellPrice` are VALUE sums (see `PnlSummaryItem`), not per-unit
+ * prices, so adding market value to proceeds is correct — no weighted average.
+ *
+ * The DB's held qty is added VERBATIM; it is never back-solved from
+ * `buyQty - sellQty`. If the snapshot disagrees with that gap the row stays
+ * Unmatched with a non-zero Open Qty, which is the discrepancy worth seeing
+ * rather than a balanced row hiding it.
  */
 export function mergeDbHoldingsIntoSummary(
   summary: PnlSummaryItem[],
@@ -1197,43 +1271,64 @@ export function mergeDbHoldingsIntoSummary(
     qty: number;
     marketValue: number;
   }>
-): { summary: PnlSummaryItem[]; mergedCount: number; totalPnl: number } {
+): { summary: PnlSummaryItem[]; mergedCount: number; partialExitCount: number; totalPnl: number } {
   const updatedSummary = summary.map((item) => ({ ...item }));
   let mergedCount = 0;
+  let partialExitCount = 0;
 
   for (const item of updatedSummary) {
-    if (item.sellQty === 0 || item.sellPrice === 0) {
-      const parent = summaryParentTicker(item);
-      const wantOption = isOptionRow(item);
-      // An option row can only be valued by an option holding of the same code —
-      // valuing GEDO at the GED share price would be wildly wrong.
-      const match = dbHoldings.find((h) => {
-        const hCode = String(h.ticker || "").trim().toUpperCase();
-        if (isOptionCode(hCode) !== wantOption) return false;
-        if (wantOption ? hCode !== item.ticker.toUpperCase() : getParentTicker(hCode) !== parent) return false;
-        return h.qty > 0 || h.marketValue > 0;
-      });
+    const isFullyOpen = item.sellQty === 0 || item.sellPrice === 0;
+    // A part-sale still holding a remainder. Requires a real buy side to compare
+    // against, so a sell-only row (buyQty 0) never qualifies.
+    const isPartialExit =
+      !isFullyOpen && item.buyQty > 0 && item.sellQty > 0 && item.sellQty < item.buyQty;
 
-      if (match) {
-        if (item.sellQty === 0 && match.qty > 0) {
-          item.sellQty = match.qty;
-        }
-        if (item.sellPrice === 0 && match.marketValue > 0) {
-          item.sellPrice = Math.round(match.marketValue * 100) / 100;
-          item.totalSellValue = item.sellPrice;
-        }
-        item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
-        item.openQty = item.buyQty - item.sellQty;
-        item.isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
-        item.isDbMarketValued = true;
-        mergedCount++;
+    if (!isFullyOpen && !isPartialExit) continue;
+
+    const parent = summaryParentTicker(item);
+    const wantOption = isOptionRow(item);
+    // An option row can only be valued by an option holding of the same code —
+    // valuing GEDO at the GED share price would be wildly wrong.
+    const match = dbHoldings.find((h) => {
+      const hCode = String(h.ticker || "").trim().toUpperCase();
+      if (isOptionCode(hCode) !== wantOption) return false;
+      if (wantOption ? hCode !== item.ticker.toUpperCase() : getParentTicker(hCode) !== parent) return false;
+      return h.qty > 0 || h.marketValue > 0;
+    });
+
+    if (!match) continue;
+
+    if (isPartialExit) {
+      if (match.qty > 0) {
+        item.sellQty += match.qty;
+      }
+      if (match.marketValue > 0) {
+        item.sellPrice = Math.round((item.sellPrice + match.marketValue) * 100) / 100;
+        item.totalSellValue = item.sellPrice;
+      }
+      item.isPartialExit = true;
+      applyPartialComment(item);
+      partialExitCount++;
+    } else {
+      if (item.sellQty === 0 && match.qty > 0) {
+        item.sellQty = match.qty;
+      }
+      if (item.sellPrice === 0 && match.marketValue > 0) {
+        item.sellPrice = Math.round(match.marketValue * 100) / 100;
+        item.totalSellValue = item.sellPrice;
       }
     }
+
+    item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
+    item.openQty = item.buyQty - item.sellQty;
+    item.isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
+    item.isDbMarketValued = true;
+    mergedCount++;
   }
 
   updatedSummary.sort(compareSummaryItems);
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
-  return { summary: updatedSummary, mergedCount, totalPnl };
+  return { summary: updatedSummary, mergedCount, partialExitCount, totalPnl };
 }

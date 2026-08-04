@@ -130,6 +130,15 @@ export function PnlCalculatorClient() {
     return `Left ${ambiguousTickers.length} ticker(s) unfilled (${shown}${more}) — the sheet lists multiple account holders and none matched the trade file name. Pick the account holder above to fill them.`;
   };
 
+  /**
+   * A short-buy top-up changes an already-populated Buy side, so it is called out
+   * separately from a plain fill into a blank one.
+   */
+  const partialBuyNote = (partialBuyCount?: number): string =>
+    partialBuyCount && partialBuyCount > 0
+      ? ` ${partialBuyCount} had a short buy side — the placement allocation was added on top of the recorded buys (tagged "Partial Buy").`
+      : "";
+
   /** Every account holder named across the active placement sheets. */
   const placementClientNames = parsedPlacementMap
     ? collectPlacementClientNames(parsedPlacementMap)
@@ -165,9 +174,13 @@ export function PnlCalculatorClient() {
         });
         setPlacementMsg({
           type: "success",
-          text: `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
-            Array.isArray(targetAccountsScope) ? targetAccountsScope.join(", ") : targetAccountsScope
-          })!`,
+          text:
+            `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
+              Array.isArray(targetAccountsScope) ? targetAccountsScope.join(", ") : targetAccountsScope
+            })!` +
+            (merged.partialExitCount > 0
+              ? ` ${merged.partialExitCount} of them were partial exits — the still-held parcel was added on top of the realised sale.`
+              : ""),
         });
       }
     });
@@ -251,7 +264,7 @@ export function PnlCalculatorClient() {
         type: "success",
         text: `Enriched Placement Tracker data for ${describeClientHints(
           getClientHints()
-        )}! Matched/merged ${stats?.mergedCount ?? 0} tickers.`,
+        )}! Matched/merged ${stats?.mergedCount ?? 0} tickers.${partialBuyNote(stats?.partialBuyCount)}`,
         hint:
           [readNote, ambiguityHint(stats?.ambiguousTickers)]
             .filter(Boolean)
@@ -301,7 +314,7 @@ export function PnlCalculatorClient() {
     files: UploadedPlacementFile[],
     baseRes?: ParseResult | null,
     clientOverride: string = placementClient
-  ): { mergedCount: number; ambiguousTickers: string[] } | null => {
+  ): { mergedCount: number; partialBuyCount: number; ambiguousTickers: string[] } | null => {
     const res = baseRes || result;
     if (!res) return null;
 
@@ -324,7 +337,7 @@ export function PnlCalculatorClient() {
       };
       setResult(resetRes);
       handleSyncDbHoldings(resetRes, selectedAccount);
-      return { mergedCount: 0, ambiguousTickers: [] };
+      return { mergedCount: 0, partialBuyCount: 0, ambiguousTickers: [] };
     }
 
     const combinedMap = combinePlacementMaps(files);
@@ -346,7 +359,11 @@ export function PnlCalculatorClient() {
     setResult(updatedRes);
     handleSyncDbHoldings(updatedRes, selectedAccount);
 
-    return { mergedCount: merged.mergedCount, ambiguousTickers: merged.ambiguousTickers };
+    return {
+      mergedCount: merged.mergedCount,
+      partialBuyCount: merged.partialBuyCount,
+      ambiguousTickers: merged.ambiguousTickers,
+    };
   };
 
   const handleMergePlacementFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -387,7 +404,9 @@ export function PnlCalculatorClient() {
           type: stats?.ambiguousTickers.length ? "error" : "success",
           text: `Merged ${newUploadedFiles.length} placement file(s) for ${describeClientHints(
             getClientHints()
-          )} — filled ${stats?.mergedCount ?? 0} ticker(s). Total active placement files: ${updatedFileList.length}.`,
+          )} — filled ${stats?.mergedCount ?? 0} ticker(s).${partialBuyNote(
+            stats?.partialBuyCount
+          )} Total active placement files: ${updatedFileList.length}.`,
           hint: ambiguityHint(stats?.ambiguousTickers),
         });
 
@@ -414,8 +433,12 @@ export function PnlCalculatorClient() {
       type: stats?.ambiguousTickers.length ? "error" : "success",
       text:
         name === AUTO_CLIENT
-          ? `Account holder set to auto-detect from trade file names — filled ${stats?.mergedCount ?? 0} ticker(s).`
-          : `Using ${name}'s placement allocations — filled ${stats?.mergedCount ?? 0} ticker(s).`,
+          ? `Account holder set to auto-detect from trade file names — filled ${
+              stats?.mergedCount ?? 0
+            } ticker(s).${partialBuyNote(stats?.partialBuyCount)}`
+          : `Using ${name}'s placement allocations — filled ${
+              stats?.mergedCount ?? 0
+            } ticker(s).${partialBuyNote(stats?.partialBuyCount)}`,
       hint: ambiguityHint(stats?.ambiguousTickers),
     });
   };
@@ -1412,13 +1435,14 @@ export function PnlCalculatorClient() {
                     <th className="py-3.5 px-4 text-right">Buy Price (Sum)</th>
                     <th className="py-3.5 px-4 text-right">Sell Price (Sum)</th>
                     <th className="py-3.5 px-4 text-right">PnL Calculated</th>
+                    <th className="py-3.5 px-4">Comments</th>
                     <th className="py-3.5 px-4 text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-paper-border text-xs">
                   {filteredSummary.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-mut">
+                      <td colSpan={9} className="py-12 text-center text-mut">
                         No ticker records found matching your filters.
                       </td>
                     </tr>
@@ -1496,6 +1520,9 @@ export function PnlCalculatorClient() {
                             <td className="py-3 px-4 text-right text-2xs italic text-mut">
                               Auto-calculated on save
                             </td>
+                            <td className="py-3 px-4 text-2xs text-mut">
+                              {item.comment || ""}
+                            </td>
                             <td className="py-3 px-4 text-center">
                               <div className="flex items-center justify-center gap-1.5">
                                 <button
@@ -1533,8 +1560,11 @@ export function PnlCalculatorClient() {
                                 </span>
                               )}
                               {item.isDbMarketValued && (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold" title="Valued using DB Portfolio Market Value for open position">
-                                  DB Mkt Valued
+                                <span
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold"
+                                  title="The sell side is not all realised cash: units still held were valued at the latest market price from the holdings snapshot in the database, not sold."
+                                >
+                                  Valued from Holdings
                                 </span>
                               )}
                               {item.isEdited && (
@@ -1561,7 +1591,10 @@ export function PnlCalculatorClient() {
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
                                   Matched
                                 </span>
-                              ) : (
+                              ) : isOptionRow(item) ? null : (
+                                // Options are deliberately exempt: an option line's
+                                // buy and sell legs are not expected to balance, so
+                                // an Unmatched flag on it is noise, not a finding.
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities">
                                   Unmatched ({fmtQty(Math.abs(item.openQty))})
                                 </span>
@@ -1601,6 +1634,16 @@ export function PnlCalculatorClient() {
                               {fmtCurrency(item.pnlCalculated)}
                             </span>
                           </td>
+                          <td className="py-3.5 px-4">
+                            {item.comment && (
+                              <span
+                                className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d border border-amber-200 font-semibold whitespace-nowrap"
+                                title="Part of this parcel was sold; the remainder was valued from the DB holdings snapshot and added to the sell side"
+                              >
+                                {item.comment}
+                              </span>
+                            )}
+                          </td>
                           <td className="py-3.5 px-4 text-center">
                             <button
                               onClick={() => handleStartEdit(item)}
@@ -1639,7 +1682,7 @@ export function PnlCalculatorClient() {
                           <td className="py-3 px-4 text-right font-mono">{fmtQty(totals.sellQty)}</td>
                           <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.buyPrice)}</td>
                           <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.sellPrice)}</td>
-                          <td className="py-3 px-4 text-right font-mono" colSpan={2}>
+                          <td className="py-3 px-4 text-right font-mono" colSpan={3}>
                             <span
                               className={`inline-block px-2.5 py-1 rounded-lg ${
                                 totals.pnl >= 0 ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"
@@ -1666,7 +1709,7 @@ export function PnlCalculatorClient() {
                       <td className="py-4 px-4 text-right font-mono">
                         {fmtCurrency(totalSellVolume)}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono" colSpan={2}>
+                      <td className="py-4 px-4 text-right font-mono" colSpan={3}>
                         <span
                           className={`inline-block px-2.5 py-1 rounded-lg ${
                             result.totalPnl >= 0 ? "bg-green-bg text-green-d" : "bg-loss-bg text-loss-d"
