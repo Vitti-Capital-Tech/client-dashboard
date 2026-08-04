@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --test \"lib/**/*.test.ts\"",
+    "test": "node --test \"lib/**/*.test.ts\" \"store/**/*.test.ts\"",
     "import:holdings": "node --env-file=.env.local scripts/import-holdings.mjs",
     "import:trades": "node --env-file=.env.local scripts/import-trades.mjs"
   },

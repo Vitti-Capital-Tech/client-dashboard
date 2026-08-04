@@ -28,29 +28,49 @@ import {
   type PnlSummaryItem,
   type PlacementTickerInfo,
 } from "@/lib/pnl-calculator";
+import {
+  usePnlCalculatorStore,
+  AUTO_CLIENT,
+  type UploadedPlacementFile,
+  type UploadedTradeFile,
+} from "@/store/usePnlCalculatorStore";
 
-export interface UploadedPlacementFile {
-  id: string;
-  name: string;
-  map: Map<string, PlacementTickerInfo>;
-  tickerCount: number;
-}
-
-export interface UploadedTradeFile {
-  id: string;
-  name: string;
-  rawTrades: any[];
-  tradeCount: number;
-  accounts: string[];
-}
-
-/** Sentinel for "derive the account holder from the trade-file names". */
-const AUTO_CLIENT = "__auto__";
+export type { UploadedPlacementFile, UploadedTradeFile } from "@/store/usePnlCalculatorStore";
 
 export function PnlCalculatorClient() {
+  /**
+   * Everything worth keeping when the user leaves the tab lives in a module-scope
+   * store, because navigating away unmounts this route and would otherwise discard
+   * the uploaded files, the merges and the filters. See the store for why it is
+   * deliberately memory-only.
+   *
+   * Selected field-by-field so a change to one slice does not re-render on the
+   * others' account.
+   */
+  const tradeFiles = usePnlCalculatorStore((s) => s.tradeFiles);
+  const setTradeFiles = usePnlCalculatorStore((s) => s.setTradeFiles);
+  const result = usePnlCalculatorStore((s) => s.result);
+  const setResult = usePnlCalculatorStore((s) => s.setResult);
+  const placementFiles = usePnlCalculatorStore((s) => s.placementFiles);
+  const setPlacementFiles = usePnlCalculatorStore((s) => s.setPlacementFiles);
+  const parsedPlacementMap = usePnlCalculatorStore((s) => s.parsedPlacementMap);
+  const setParsedPlacementMap = usePnlCalculatorStore((s) => s.setParsedPlacementMap);
+  const selectedAccount = usePnlCalculatorStore((s) => s.selectedAccount);
+  const setSelectedAccount = usePnlCalculatorStore((s) => s.setSelectedAccount);
+  const placementClient = usePnlCalculatorStore((s) => s.placementClient);
+  const setPlacementClient = usePnlCalculatorStore((s) => s.setPlacementClient);
+  const placementUrl = usePnlCalculatorStore((s) => s.placementUrl);
+  const setPlacementUrl = usePnlCalculatorStore((s) => s.setPlacementUrl);
+  const filterType = usePnlCalculatorStore((s) => s.filterType);
+  const setFilterType = usePnlCalculatorStore((s) => s.setFilterType);
+  const searchQuery = usePnlCalculatorStore((s) => s.searchQuery);
+  const setSearchQuery = usePnlCalculatorStore((s) => s.setSearchQuery);
+  const resetStore = usePnlCalculatorStore((s) => s.reset);
+
+  // Transient UI state stays local — a half-finished drag, an open tooltip or a
+  // row mid-edit should NOT survive leaving the page.
   const [file, setFile] = useState<File | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [tradeFiles, setTradeFiles] = useState<UploadedTradeFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isProcessing, startProcessing] = useTransition();
   const [isExportingXlsx, startExportingXlsx] = useTransition();
@@ -58,8 +78,6 @@ export function PnlCalculatorClient() {
   const [isFetchingUrl, startFetchingUrl] = useTransition();
   const [isMergingPlacementFile, startMergingPlacementFile] = useTransition();
   const [isSyncingDb, startSyncingDb] = useTransition();
-  const [result, setResult] = useState<ParseResult | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   /**
    * Hovered unlisted-option row and where to draw its card.
    *
@@ -73,25 +91,6 @@ export function PnlCalculatorClient() {
     left: number;
     top: number;
   } | null>(null);
-  const [filterType, setFilterType] = useState<
-    | "all"
-    | "equity"
-    | "options"
-    | "unlisted"
-    | "open"
-    | "matched"
-    | "profit"
-    | "loss"
-    | "unmatched"
-  >("all");
-
-  const [selectedAccount, setSelectedAccount] = useState<string>("all");
-  const [parsedPlacementMap, setParsedPlacementMap] = useState<Map<string, PlacementTickerInfo> | null>(null);
-  const [placementFiles, setPlacementFiles] = useState<UploadedPlacementFile[]>([]);
-
-  const [placementUrl, setPlacementUrl] = useState("");
-  /** Explicitly chosen account holder, or AUTO_CLIENT to infer from filenames. */
-  const [placementClient, setPlacementClient] = useState<string>(AUTO_CLIENT);
   const [placementMsg, setPlacementMsg] = useState<{
     type: "success" | "error";
     text: string;
@@ -752,13 +751,15 @@ export function PnlCalculatorClient() {
   };
 
   const handleReset = () => {
+    // One call for every persisted slice. Listing them individually used to be good
+    // enough because leaving the page cleared the rest anyway; now that the store
+    // survives navigation, a partial reset would strand the old account filter,
+    // filter tab and account holder on a freshly uploaded file.
+    resetStore();
     setFile(null);
     setSelectedFiles([]);
-    setTradeFiles([]);
-    setResult(null);
-    setSearchQuery("");
-    setPlacementFiles([]);
-    setParsedPlacementMap(null);
+    setPlacementMsg(null);
+    setEditingTicker(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
     if (placementFileInputRef.current) placementFileInputRef.current.value = "";
@@ -1774,8 +1775,13 @@ export function PnlCalculatorClient() {
                                 // Options are deliberately exempt: an option line's
                                 // buy and sell legs are not expected to balance, so
                                 // an Unmatched flag on it is noise, not a finding.
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold" title="Unmatched buy/sell quantities">
-                                  Unmatched ({fmtQty(Math.abs(item.openQty))})
+                                <span
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold"
+                                  title={`Unmatched buy/sell quantities — ${fmtQty(Math.abs(item.openQty))} ${
+                                    item.openQty > 0 ? "unsold" : "sold without a recorded buy"
+                                  }`}
+                                >
+                                  Unmatched
                                 </span>
                               )}
                             </div>

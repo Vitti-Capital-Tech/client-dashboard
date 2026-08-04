@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
 import { signOut, setActiveAccount } from "@/app/actions/session";
+import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 
 type AccountOption = { id: string; label: string; accountType: string };
 
@@ -55,6 +56,11 @@ export function PortalShell({
   const [isSwitching, startTransition] = useTransition();
 
   const handleSignOut = async () => {
+    // Sign-out is a client-side `router.push`, so module-scope stores are NOT torn
+    // down the way a full document load would tear them down. The P&L Calculator
+    // keeps parsed client trade data in one, so it has to be cleared explicitly or
+    // the next person to sign in on this browser inherits it.
+    usePnlCalculatorStore.getState().reset();
     await signOut();
     router.push("/");
   };
