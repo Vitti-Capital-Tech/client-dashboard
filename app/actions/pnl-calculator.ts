@@ -179,7 +179,9 @@ export async function parsePlacementTrackerFileAction(
   }
 }
 
-export type SpotSource = "yahoo" | "database" | "unavailable";
+// `SpotSource` and `LIVE_SPOT_SOURCES` live in lib/pnl-calculator.ts. They cannot be
+// re-exported from here: a "use server" module may only export async functions.
+import type { SpotSource } from "@/lib/pnl-calculator";
 
 export interface SpotPrice {
   ticker: string;
@@ -188,16 +190,53 @@ export interface SpotPrice {
 }
 
 /**
+ * Fetches one ASX code's last traded price from the ASX's own market-data API.
+ *
+ * This is the feed behind asx.com.au's company pages. The older
+ * `www.asx.com.au/asx/1/share/<CODE>` endpoint is gone (404s), so this is the
+ * current path. There is no batch form, hence one request per code.
+ *
+ * An unknown code answers 400, which is why a non-OK response resolves to null
+ * rather than throwing — a delisted name must not cost the whole batch.
+ */
+async function fetchAsxSpot(ticker: string): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `https://asx.api.markitdigital.com/asx-research/1.0/companies/${encodeURIComponent(ticker)}/header`,
+      {
+        headers: { "User-Agent": "Mozilla/5.0", Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) return null;
+
+    const json = await res.json();
+    // `priceLast` is what the ASX page shows; `priceClose` is the sibling field on
+    // their other endpoints, kept as a fallback in case the shape shifts again.
+    const price = Number(json?.data?.priceLast ?? json?.data?.priceClose);
+    return Number.isFinite(price) && price > 0 ? price : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Current spot price per ASX code, for valuing unlisted placement options.
  *
- * Yahoo first (a live last-traded price via `yahoo-finance2`), falling back to
- * `securities.last_price` from the most recent holdings snapshot. The fallback is
- * stale by construction — only as fresh as the last import — so the source is
- * returned alongside the price and shown in the UI rather than being quietly
- * interchangeable.
+ * Three sources, tried in order of authority:
  *
- * A name that resolves to neither comes back `unavailable` at price 0. It is never
- * defaulted to a strike or a cost base: a fabricated spot would produce a
+ *   1. `yahoo-finance2` — one batched request for the whole list.
+ *   2. The **ASX** market-data API — live too, but one request per code, so it only
+ *      runs for whatever Yahoo could not answer.
+ *   3. `securities.last_price` — the last holdings snapshot. Stale by construction:
+ *      only as fresh as the last import.
+ *
+ * The source rides back with each price and is shown in the UI, so a live quote and
+ * a month-old snapshot are never silently interchangeable.
+ *
+ * A name that resolves to none of the three comes back `unavailable` at price 0. It
+ * is never defaulted to a strike or a cost base: a fabricated spot would produce a
  * confident-looking option value with nothing behind it.
  */
 export async function fetchSpotPricesAction(
@@ -208,7 +247,7 @@ export async function fetchSpotPricesAction(
 
   const resolved = new Map<string, SpotPrice>();
 
-  // One batched request for the whole list. Unknown symbols are simply omitted
+  // 1. Yahoo. One batched request for the whole list. Unknown symbols are omitted
   // from the response rather than failing it, so a delisted name costs nothing.
   try {
     const { default: YahooFinance } = await import("yahoo-finance2");
@@ -231,6 +270,18 @@ export async function fetchSpotPricesAction(
     console.error("Yahoo spot price lookup failed:", err);
   }
 
+  // 2. ASX, for whatever Yahoo did not answer. Concurrent, each failure contained.
+  const missingAfterYahoo = wanted.filter((t) => !resolved.has(t));
+  if (missingAfterYahoo.length > 0) {
+    const asxPrices = await Promise.all(
+      missingAfterYahoo.map(async (ticker) => [ticker, await fetchAsxSpot(ticker)] as const)
+    );
+    for (const [ticker, price] of asxPrices) {
+      if (price !== null) resolved.set(ticker, { ticker, price, source: "asx" });
+    }
+  }
+
+  // 3. The last holdings snapshot, for anything still unresolved.
   const missing = wanted.filter((t) => !resolved.has(t));
 
   if (missing.length > 0) {

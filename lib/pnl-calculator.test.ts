@@ -1147,6 +1147,36 @@ test("buildUnlistedOptionRows - entitlement, Black-Scholes price and P&L", async
   assert.equal(v.addOn.strike, 0.14);
 });
 
+test("buildUnlistedOptionRows - an ASX-sourced spot prices normally and is not 'skipped'", async () => {
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spot = 0.2;
+
+  const viaAsx = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap(),
+    new Map([["GRV", { price: spot, source: "asx" as const }]]),
+    asOf
+  );
+  const viaYahoo = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap(),
+    new Map([["GRV", { price: spot, source: "yahoo" as const }]]),
+    asOf
+  );
+
+  const asxRow = viaAsx.summary.find((s) => s.isUnlistedOption);
+  const yahooRow = viaYahoo.summary.find((s) => s.isUnlistedOption);
+
+  // Same spot, same source-agnostic maths — only the recorded provenance differs.
+  assert.equal(asxRow?.unlistedOption?.spotSource, "asx");
+  assert.equal(asxRow?.sellPrice, yahooRow?.sellPrice);
+  assert.equal(asxRow?.pnlCalculated, yahooRow?.pnlCalculated);
+  assert.ok(asxRow!.sellPrice > 0);
+
+  // A real price means the name is NOT reported as unpriced.
+  assert.deepEqual(viaAsx.skipped, []);
+});
+
 test("buildUnlistedOptionRows - listed add-ons never become rows", async () => {
   const built = buildUnlistedOptionRows(
     grvEquityRow(),

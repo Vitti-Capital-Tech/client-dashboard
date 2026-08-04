@@ -8,7 +8,6 @@ import {
   fetchPlacementTrackerUrlAction,
   fetchDatabaseHoldingsAction,
   fetchSpotPricesAction,
-  type SpotSource,
 } from "@/app/actions/pnl-calculator";
 import {
   parsePnlFileBuffer,
@@ -24,9 +23,11 @@ import {
   normalizeAccountNo,
   isOptionRow,
   summaryParentTicker,
+  LIVE_SPOT_SOURCES,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
+  type SpotSource,
 } from "@/lib/pnl-calculator";
 import {
   usePnlCalculatorStore,
@@ -270,11 +271,15 @@ export function PnlCalculatorClient() {
         working = { ...working, summary: built.summary, totalPnl: built.totalPnl };
 
         if (built.addedCount > 0) {
+          const fromAsx = spotRes.prices.filter((p) => p.source === "asx").map((p) => p.ticker);
           const stale = spotRes.prices.filter((p) => p.source === "database").map((p) => p.ticker);
           notes.push(
             `Valued ${built.addedCount} unlisted option line(s) with Black-Scholes (vol 50%, rate 5%, div 0%).` +
+              (fromAsx.length > 0
+                ? ` ${fromAsx.join(", ")} priced from the ASX feed (Yahoo had no quote) — still a live price.`
+                : "") +
               (stale.length > 0
-                ? ` ${stale.join(", ")} used the last holdings-snapshot price — Yahoo had no quote, so it is as stale as the last import.`
+                ? ` ${stale.join(", ")} used the last holdings-snapshot price — neither Yahoo nor the ASX had a quote, so it is as stale as the last import.`
                 : "") +
               (built.skipped.length > 0
                 ? ` No price at all for ${built.skipped.join(", ")} — those rows are valued at $0 until a quote is available.`
@@ -1999,11 +2004,13 @@ export function PnlCalculatorClient() {
               </dd>
             </dl>
 
-            {unlistedTip.item.unlistedOption.spotSource !== "yahoo" && (
+            {/* `yahoo` and `asx` are both live quotes, so neither is warned about —
+                only a stale snapshot or no price at all. */}
+            {!LIVE_SPOT_SOURCES.includes(unlistedTip.item.unlistedOption.spotSource) && (
               <p className="mt-2 text-[10px] text-amber-d bg-amber-bg border border-amber rounded-lg px-2 py-1.5 leading-snug">
                 {unlistedTip.item.unlistedOption.spotSource === "database"
-                  ? "No live quote — priced off the last holdings snapshot, so it is as stale as the last import."
-                  : "No price from Yahoo or the database, so this row is valued at $0."}
+                  ? "No live quote from Yahoo or the ASX — priced off the last holdings snapshot, so it is as stale as the last import."
+                  : "No price from Yahoo, the ASX or the database, so this row is valued at $0."}
               </p>
             )}
           </div>

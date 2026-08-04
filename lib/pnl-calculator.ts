@@ -84,6 +84,25 @@ export interface PlacementTickerInfo {
 /** Equity/ordinary line vs a listed option line — kept as separate P&L rows. */
 export type PnlInstrument = "EQUITY" | "OPTION";
 
+/**
+ * Where an underlying's spot price came from.
+ *
+ * `yahoo` and `asx` are live quotes; `database` is the last holdings snapshot and is
+ * therefore only as fresh as the last import. Carried through to the UI so the two
+ * are never silently interchangeable on a valuation.
+ */
+export type SpotSource = "yahoo" | "asx" | "database" | "unavailable";
+
+/**
+ * Which sources are live quotes, so the UI warns only about a stale snapshot.
+ *
+ * Lives here rather than beside `fetchSpotPricesAction`: a `"use server"` module may
+ * only export async functions — every export becomes a server-action reference — so
+ * a plain array there fails at runtime with "can only export async functions, found
+ * object". Types are erased and are fine; values are not.
+ */
+export const LIVE_SPOT_SOURCES: readonly SpotSource[] = ["yahoo", "asx"];
+
 /** Everything that went into an unlisted option row's model price, for audit. */
 export interface UnlistedOptionValuation {
   addOn: PlacementAddOn;
@@ -95,7 +114,8 @@ export interface UnlistedOptionValuation {
   basisKind: "shares" | "base-options";
   /** Underlying spot used, and where it came from. */
   spot: number;
-  spotSource: "yahoo" | "database" | "unavailable";
+  /** `yahoo` / `asx` are live quotes; `database` is the last holdings snapshot. */
+  spotSource: SpotSource;
   /** Years to expiry at valuation time. */
   timeToExpiryYears: number;
   /** Black-Scholes value of ONE option. */
@@ -1693,7 +1713,7 @@ export function collectUnlistedOptionTickers(
 export function buildUnlistedOptionRows(
   summary: PnlSummaryItem[],
   placementData: Map<string, PlacementTickerInfo>,
-  spotPrices: Map<string, { price: number; source: "yahoo" | "database" | "unavailable" }>,
+  spotPrices: Map<string, { price: number; source: SpotSource }>,
   asOf: Date
 ): {
   summary: PnlSummaryItem[];
