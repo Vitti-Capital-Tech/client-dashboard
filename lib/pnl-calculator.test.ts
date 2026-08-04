@@ -7,7 +7,13 @@ import {
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
+  parseAddOnSpec,
+  parseAddOnSpecs,
+  buildUnlistedOptionRows,
+  collectUnlistedOptionTickers,
+  exportStatus,
 } from "./pnl-calculator.ts";
+import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
 
 test("PNL Calculator - parse CSV buffer and aggregate by ticker", async () => {
   const sampleCsv = `CNote,Account,Type,Security,Company,Description,Contract Date,Adviser,Units,Avg Price,Consideration,Brokerage,Other Charges,GST,Value,Brokerage%,Status
@@ -705,13 +711,16 @@ test("PNL Calculator - fully open rows still FILL rather than add, and matched r
   const abc = merged.summary.find((s) => s.ticker === "ABC");
   assert.equal(abc?.sellQty, 1000); // filled, not 0 + 1000 counted twice
   assert.equal(abc?.sellPrice, 700);
-  assert.equal(abc?.comment, undefined); // not a partial exit
   assert.equal(abc?.isPartialExit, undefined);
+  // Nothing was sold, so the row is flagged and noted as an open position.
+  assert.equal(abc?.isDbOpenValued, true);
+  assert.equal(abc?.comment, "Open");
 
   const xyz = merged.summary.find((s) => s.ticker === "XYZ");
   assert.equal(xyz?.sellQty, 400); // untouched
   assert.equal(xyz?.sellPrice, 350);
-  assert.equal(xyz?.comment, undefined);
+  assert.equal(xyz?.comment, undefined); // never touched, so never annotated
+  assert.equal(xyz?.isDbOpenValued, undefined);
 
   assert.equal(merged.partialExitCount, 0);
   assert.equal(merged.mergedCount, 1);
@@ -979,4 +988,515 @@ test("PNL Calculator - a row short on both sides reads both notes, whichever mer
   assert.equal(row?.isPartialBuy, true);
   assert.equal(row?.isPartialExit, true);
   assert.equal(row?.comment, "Partial Buy · Partial Exit");
+});
+
+// ---------------------------------------------------------------------------
+// Unlisted placement options
+// ---------------------------------------------------------------------------
+
+test("parseAddOnSpec - every shape the real Overview column contains", async () => {
+  // Verbatim strings pulled from the 2026 Placements workbook.
+  const listed = parseAddOnSpec("1:1 @$0.04 Listed Exp 30/11/28");
+  assert.ok(listed);
+  assert.equal(listed.listed, true);
+  assert.equal(listed.ratioOptions, 1);
+  assert.equal(listed.ratioPerShares, 1);
+  assert.equal(listed.strike, 0.04);
+  assert.equal(listed.expiry, "2028-11-30");
+
+  const unlisted = parseAddOnSpec("1:2 @$1.20 Unlisted Exp 31/12/27");
+  assert.ok(unlisted);
+  assert.equal(unlisted.listed, false);
+  assert.equal(unlisted.strike, 1.2);
+  assert.equal(unlisted.expiry, "2027-12-31");
+
+  // Spaces after @ and around $, seen on most 2026 rows.
+  const spaced = parseAddOnSpec("1:4 @ $ 0.035 Unlisted Exp 03/07/28");
+  assert.equal(spaced?.strike, 0.035);
+  assert.equal(spaced?.expiry, "2028-07-03");
+  assert.equal(spaced?.listed, false);
+
+  // Two-digit ratio, no space before @.
+  const wide = parseAddOnSpec("1:20 @$1.1 Unlisted Exp 31/01/29");
+  assert.equal(wide?.ratioPerShares, 20);
+  assert.equal(wide?.strike, 1.1);
+
+  // "Expiry" spelled out, no $ sign.
+  const spelled = parseAddOnSpec("1:3@0.14 Unlisted Expiry 31/12/27");
+  assert.equal(spelled?.ratioPerShares, 3);
+  assert.equal(spelled?.strike, 0.14);
+  assert.equal(spelled?.expiry, "2027-12-31");
+  assert.equal(spelled?.listed, false);
+
+  // "Unlisted" contains "listed" — the negative must win.
+  assert.equal(parseAddOnSpec("1:1 @$0.1 Unlisted Exp 01/01/29")?.listed, false);
+});
+
+test("parseAddOnSpec - rejects everything that is not an option grant", async () => {
+  for (const junk of [
+    "",
+    "   ",
+    "IPO",
+    "Entitlement Offer",
+    "Entitlement/Shortfall Offer",
+    "0:00", // a blank time cell, not a 0-for-0 ratio
+    "00:00",
+    "1:2 Unlisted Exp 31/12/27", // no strike
+    "1:2 @$0.10 Unlisted", // no expiry
+    "@$0.10 Unlisted Exp 31/12/27", // no ratio
+    "1:2 @$0.10 Unlisted Exp 31/02/27", // 31 February — never silently rolls to March
+  ]) {
+    assert.equal(parseAddOnSpec(junk), null, `should reject ${JSON.stringify(junk)}`);
+  }
+  assert.equal(parseAddOnSpec(null), null);
+  assert.equal(parseAddOnSpec(undefined), null);
+});
+
+/** Placement map with one unlisted 1:3 @ $0.14 add-on on GRV, expiring 31/12/27. */
+const unlistedPlacementMap = (overrides = {}) => {
+  const m = new Map();
+  m.set("GRV", {
+    ticker: "GRV",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    addOns: [
+      {
+        raw: "1:3@0.14 Unlisted Expiry 31/12/27",
+        tranche: 1,
+        ratioOptions: 1,
+        ratioPerShares: 3,
+        strike: 0.14,
+        expiry: "2027-12-31",
+        listed: false,
+        ...overrides,
+      },
+    ],
+  });
+  return m;
+};
+
+/** One equity row holding 10,000 GRV shares. */
+const grvEquityRow = (buyQty = 10000) => [
+  {
+    ticker: "GRV",
+    parentTicker: "GRV",
+    instrument: "EQUITY" as const,
+    company: "GREENVALE ENERGY LTD",
+    buyQty,
+    sellQty: 0,
+    buyPrice: 2000,
+    sellPrice: 0,
+    totalBuyValue: 2000,
+    totalSellValue: 0,
+    pnlCalculated: -2000,
+    isMatched: false,
+    isOption: false,
+    hasOptionCode: false,
+    openQty: buyQty,
+    tradeCount: 1,
+  },
+];
+
+test("buildUnlistedOptionRows - entitlement, Black-Scholes price and P&L", async () => {
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spot = 0.2;
+  const spots = new Map([["GRV", { price: spot, source: "yahoo" as const }]]);
+
+  const built = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
+
+  assert.equal(built.addedCount, 1);
+  assert.deepEqual(built.skipped, []);
+
+  const row = built.summary.find((s) => s.isUnlistedOption);
+  assert.ok(row);
+  assert.equal(row.ticker, "GRV-UO");
+  assert.equal(row.parentTicker, "GRV");
+  assert.equal(row.instrument, "OPTION");
+  assert.equal(row.comment, "Unlisted Options");
+
+  // 1 option per 3 shares on 10,000 shares -> 3,333 (floored, no part options).
+  assert.equal(row.sellQty, 3333);
+
+  // Free options: nothing paid, so the whole modelled value is the gain.
+  assert.equal(row.buyQty, 0);
+  assert.equal(row.buyPrice, 0);
+  assert.equal(row.totalBuyValue, 0);
+
+  const expectedPer = blackScholesCall({
+    spot,
+    strike: 0.14,
+    timeToExpiryYears: row.unlistedOption!.timeToExpiryYears,
+    ...UNLISTED_OPTION_ASSUMPTIONS,
+  });
+  const expectedValue = Math.round(expectedPer * 3333 * 100) / 100;
+
+  assert.equal(row.sellPrice, expectedValue);
+  assert.equal(row.totalSellValue, expectedValue);
+  assert.equal(row.pnlCalculated, expectedValue);
+  assert.ok(expectedValue > 0, "an ITM option 1.4 years out must be worth something");
+
+  // The valuation inputs are retained for audit.
+  const v = row.unlistedOption!;
+  assert.equal(v.spot, spot);
+  assert.equal(v.spotSource, "yahoo");
+  assert.equal(v.sharesHeld, 10000);
+  assert.equal(v.volatility, 0.5);
+  assert.equal(v.riskFreeRate, 0.05);
+  assert.equal(v.dividendYield, 0);
+  assert.equal(v.addOn.strike, 0.14);
+});
+
+test("buildUnlistedOptionRows - listed add-ons never become rows", async () => {
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(),
+    unlistedPlacementMap({ listed: true }),
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+  assert.equal(built.addedCount, 0);
+  assert.equal(built.summary.filter((s) => s.isUnlistedOption).length, 0);
+});
+
+test("buildUnlistedOptionRows - no spot still books the entitlement, at zero and reported", async () => {
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap(),
+    new Map(), // Yahoo and the DB both came back empty
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  const row = built.summary.find((s) => s.isUnlistedOption);
+  assert.ok(row, "the entitlement is real even without a price — hiding it understates the position");
+  assert.equal(row.sellQty, 3333);
+  assert.equal(row.sellPrice, 0);
+  assert.equal(row.pnlCalculated, 0);
+  assert.equal(row.unlistedOption?.spotSource, "unavailable");
+  assert.deepEqual(built.skipped, ["GRV"], "the desk must be told which names are unpriced");
+});
+
+test("buildUnlistedOptionRows - skips names with no shares, and is idempotent", async () => {
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spots = new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]);
+
+  // No shares bought -> no entitlement.
+  const none = buildUnlistedOptionRows(grvEquityRow(0), unlistedPlacementMap(), spots, asOf);
+  assert.equal(none.addedCount, 0);
+
+  // Fewer shares than the ratio needs -> floor(2/3) = 0 options, so no row.
+  const tooFew = buildUnlistedOptionRows(grvEquityRow(2), unlistedPlacementMap(), spots, asOf);
+  assert.equal(tooFew.addedCount, 0);
+
+  // Re-running over its own output replaces rather than stacks.
+  const first = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
+  const second = buildUnlistedOptionRows(first.summary, unlistedPlacementMap(), spots, asOf);
+  assert.equal(second.summary.filter((s) => s.isUnlistedOption).length, 1);
+  assert.equal(second.summary.length, first.summary.length);
+  assert.equal(second.totalPnl, first.totalPnl);
+});
+
+test("buildUnlistedOptionRows - an expired add-on is worth its intrinsic value only", async () => {
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(30000),
+    unlistedPlacementMap({ expiry: "2020-01-01" }),
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+  const row = built.summary.find((s) => s.isUnlistedOption);
+  // 10,000 options, intrinsic 0.20 - 0.14 = 0.06 each.
+  assert.equal(row?.sellQty, 10000);
+  assert.equal(row?.unlistedOption?.timeToExpiryYears, 0);
+  assert.equal(row?.sellPrice, 600);
+});
+
+test("collectUnlistedOptionTickers - only unlisted add-ons on names actually held", async () => {
+  const spots = unlistedPlacementMap();
+  assert.deepEqual(collectUnlistedOptionTickers(grvEquityRow(10000), spots), ["GRV"]);
+  // Nothing held -> nothing to price.
+  assert.deepEqual(collectUnlistedOptionTickers(grvEquityRow(0), spots), []);
+  // Listed add-on -> not our problem.
+  assert.deepEqual(collectUnlistedOptionTickers(grvEquityRow(10000), unlistedPlacementMap({ listed: true })), []);
+});
+
+test("parseAddOnSpecs - a multi-tranche cell yields one grant per tranche", async () => {
+  // Verbatim from the 2026 workbook's RCE row.
+  const specs = parseAddOnSpecs(
+    "1:2 @ $ 0.60 Unlisted Exp 30/06/27 +  1:2  @ $ 1.00 Unlisted Piggyback Exp 30/06/28"
+  );
+
+  assert.equal(specs.length, 2, "the piggyback tranche must not be dropped");
+
+  assert.equal(specs[0].tranche, 1);
+  assert.equal(specs[0].strike, 0.6);
+  assert.equal(specs[0].expiry, "2027-06-30");
+  assert.equal(specs[0].listed, false);
+  assert.equal(specs[0].note, undefined);
+
+  assert.equal(specs[1].tranche, 2);
+  assert.equal(specs[1].strike, 1);
+  assert.equal(specs[1].expiry, "2028-06-30");
+  assert.equal(specs[1].listed, false);
+  assert.equal(specs[1].note, "Piggyback");
+  assert.equal(specs[1].piggyback, true);
+  assert.equal(specs[0].piggyback, false);
+  // Each segment keeps only its own text, so the audit trail is per tranche.
+  assert.ok(specs[1].raw.includes("1.00"));
+  assert.ok(!specs[1].raw.includes("0.60"));
+});
+
+test("parseAddOnSpecs - separator-agnostic, and single grants still work", async () => {
+  // The separator is whatever was typed, so segmentation keys off the ratio.
+  for (const joiner of [" + ", " & ", " and ", "; ", "\n"]) {
+    const specs = parseAddOnSpecs(
+      `1:2 @ $0.60 Unlisted Exp 30/06/27${joiner}1:4 @ $1.00 Unlisted Exp 30/06/28`
+    );
+    assert.equal(specs.length, 2, `failed to split on ${JSON.stringify(joiner)}`);
+    assert.equal(specs[0].ratioPerShares, 2);
+    assert.equal(specs[1].ratioPerShares, 4);
+  }
+
+  // A single grant is a one-element list.
+  const one = parseAddOnSpecs("1:2 @$1.20 Unlisted Exp 31/12/27");
+  assert.equal(one.length, 1);
+  assert.equal(one[0].tranche, 1);
+  assert.equal(one[0].strike, 1.2);
+
+  // Junk still yields nothing.
+  for (const junk of ["", "IPO", "Entitlement Offer", "0:00", "00:00"]) {
+    assert.deepEqual(parseAddOnSpecs(junk), [], `should reject ${JSON.stringify(junk)}`);
+  }
+
+  // A repeated tranche is not counted twice.
+  const dupe = parseAddOnSpecs("1:2 @$0.60 Unlisted Exp 30/06/27 + 1:2 @$0.60 Unlisted Exp 30/06/27");
+  assert.equal(dupe.length, 1);
+});
+
+test("parseAddOnSpecs - a mixed listed + unlisted cell keeps both, tagged", async () => {
+  const specs = parseAddOnSpecs(
+    "1:1 @$0.04 Listed Exp 30/11/28 + 1:2 @$0.10 Unlisted Exp 31/12/29"
+  );
+  assert.equal(specs.length, 2);
+  assert.equal(specs[0].listed, true);
+  assert.equal(specs[1].listed, false);
+});
+
+test("buildUnlistedOptionRows - every unlisted tranche becomes its own row", async () => {
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spot = 0.8;
+  const pmap = new Map();
+  pmap.set("RCE", {
+    ticker: "RCE",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    addOns: parseAddOnSpecs(
+      "1:2 @ $ 0.60 Unlisted Exp 30/06/27 +  1:2  @ $ 1.00 Unlisted Piggyback Exp 30/06/28"
+    ),
+  });
+
+  const summary = [
+    {
+      ticker: "RCE",
+      parentTicker: "RCE",
+      instrument: "EQUITY" as const,
+      company: "RECCE PHARMA",
+      buyQty: 10000,
+      sellQty: 0,
+      buyPrice: 5000,
+      sellPrice: 0,
+      totalBuyValue: 5000,
+      totalSellValue: 0,
+      pnlCalculated: -5000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 10000,
+      tradeCount: 1,
+    },
+  ];
+
+  const built = buildUnlistedOptionRows(
+    summary,
+    pmap,
+    new Map([["RCE", { price: spot, source: "yahoo" as const }]]),
+    asOf
+  );
+
+  assert.equal(built.addedCount, 2);
+  assert.deepEqual(built.unresolvedPiggybacks, []);
+
+  const uo = built.summary.filter((s) => s.isUnlistedOption);
+  assert.deepEqual(uo.map((r) => r.ticker), ["RCE-UO", "RCE-UO2"]);
+
+  // Base tranche: 1:2 on the 10,000 SHARES held.
+  assert.equal(uo[0].sellQty, 5000);
+  assert.equal(uo[0].unlistedOption?.basisKind, "shares");
+  assert.equal(uo[0].unlistedOption?.basisQty, 10000);
+  assert.equal(uo[0].unlistedOption?.addOn.piggyback, false);
+
+  // Piggyback: 1:2 on the BASE TRANCHE'S 5,000 options, earned by exercising it —
+  // not another 5,000 off the share count.
+  assert.equal(uo[1].sellQty, 2500);
+  assert.equal(uo[1].unlistedOption?.basisKind, "base-options");
+  assert.equal(uo[1].unlistedOption?.basisQty, 5000);
+  assert.equal(uo[1].unlistedOption?.addOn.piggyback, true);
+
+  // Shares held is still recorded on both for context.
+  assert.equal(uo[0].unlistedOption?.sharesHeld, 10000);
+  assert.equal(uo[1].unlistedOption?.sharesHeld, 10000);
+
+  // Different strikes and expiries, so the $0.60 tranche is worth strictly more.
+  assert.equal(uo[0].unlistedOption?.addOn.strike, 0.6);
+  assert.equal(uo[1].unlistedOption?.addOn.strike, 1);
+  assert.ok(
+    uo[0].unlistedOption!.optionPrice > uo[1].unlistedOption!.optionPrice,
+    "the lower strike must price higher"
+  );
+
+  // The piggyback label reaches the row description.
+  assert.ok(uo[1].company.includes("Piggyback"), uo[1].company);
+
+  // Both flow into the total, and a re-run replaces rather than stacks.
+  assert.equal(built.totalPnl, Math.round((-5000 + uo[0].pnlCalculated + uo[1].pnlCalculated) * 100) / 100);
+  const again = buildUnlistedOptionRows(
+    built.summary,
+    pmap,
+    new Map([["RCE", { price: spot, source: "yahoo" as const }]]),
+    asOf
+  );
+  assert.equal(again.summary.filter((s) => s.isUnlistedOption).length, 2);
+  assert.equal(again.totalPnl, built.totalPnl);
+});
+
+test("buildUnlistedOptionRows - a listed tranche is skipped but numbering stays clean", async () => {
+  const pmap = new Map();
+  pmap.set("GRV", {
+    ticker: "GRV",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    // Listed first, unlisted second.
+    addOns: parseAddOnSpecs("1:1 @$0.04 Listed Exp 30/11/28 + 1:2 @$0.10 Unlisted Exp 31/12/29"),
+  });
+
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    pmap,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  assert.equal(built.addedCount, 1);
+  const uo = built.summary.filter((s) => s.isUnlistedOption);
+  // The only created row keeps the bare code — no gap left by the skipped tranche.
+  assert.deepEqual(uo.map((r) => r.ticker), ["GRV-UO"]);
+  assert.equal(uo[0].sellQty, 5000);
+  assert.equal(uo[0].unlistedOption?.addOn.strike, 0.1);
+});
+
+test("buildUnlistedOptionRows - a piggyback with no base tranche is reported, never guessed", async () => {
+  const pmap = new Map();
+  pmap.set("GRV", {
+    ticker: "GRV",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    // Piggyback only — there is nothing to piggyback on.
+    addOns: parseAddOnSpecs("1:2 @$0.60 Unlisted Piggyback Exp 30/06/27"),
+  });
+
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    pmap,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  // Falling back to the share count would fabricate 5,000 options out of nothing.
+  assert.equal(built.addedCount, 0);
+  assert.equal(built.summary.filter((s) => s.isUnlistedOption).length, 0);
+  assert.equal(built.unresolvedPiggybacks.length, 1);
+  assert.ok(built.unresolvedPiggybacks[0].startsWith("GRV"), built.unresolvedPiggybacks[0]);
+});
+
+test("buildUnlistedOptionRows - a base too small to grant anything zeroes its piggyback", async () => {
+  const pmap = new Map();
+  pmap.set("GRV", {
+    ticker: "GRV",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    addOns: parseAddOnSpecs("1:5 @$0.10 Unlisted Exp 30/06/27 + 1:2 @$0.20 Unlisted Piggyback Exp 30/06/28"),
+  });
+
+  // 3 shares -> floor(3/5) = 0 base options -> nothing for the piggyback either.
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(3),
+    pmap,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  assert.equal(built.addedCount, 0);
+  // A base that came to 0 is not the same as a MISSING base, so nothing is flagged.
+  assert.deepEqual(built.unresolvedPiggybacks, []);
+});
+
+test("buildUnlistedOptionRows - an unpriced name is reported once, not per tranche", async () => {
+  const pmap = new Map();
+  pmap.set("RCE", {
+    ticker: "RCE",
+    totalShares: 0,
+    totalActualDollar: 0,
+    clientAllocations: [],
+    addOns: parseAddOnSpecs("1:2 @$0.60 Unlisted Exp 30/06/27 + 1:2 @$1.00 Unlisted Exp 30/06/28"),
+  });
+
+  const built = buildUnlistedOptionRows(
+    [{ ...grvEquityRow(10000)[0], ticker: "RCE", parentTicker: "RCE", company: "RECCE" }],
+    pmap,
+    new Map(), // no spot at all
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  assert.equal(built.addedCount, 2);
+  assert.deepEqual(built.skipped, ["RCE"], "one warning per name, not one per tranche");
+  assert.equal(built.summary.filter((s) => s.isUnlistedOption).every((r) => r.sellPrice === 0), true);
+});
+
+test("exportStatus - option lines are never reported as Unmatched", async () => {
+  const base = { ticker: "ABC", company: "ABC", buyQty: 1, sellQty: 2, buyPrice: 1, sellPrice: 2, totalBuyValue: 1, totalSellValue: 2, pnlCalculated: 1, openQty: -1, tradeCount: 1, isOption: false };
+
+  // An equity row with legs that do not balance IS a discrepancy.
+  assert.equal(exportStatus({ ...base, isMatched: false, instrument: "EQUITY" }), "Unmatched");
+  assert.equal(exportStatus({ ...base, isMatched: true, instrument: "EQUITY" }), "Matched");
+
+  // An option's legs are not expected to balance, so "Unmatched" would be noise.
+  assert.equal(exportStatus({ ...base, isMatched: false, instrument: "OPTION" }), "Option");
+  assert.equal(
+    exportStatus({ ...base, isMatched: false, instrument: "OPTION", isUnlistedOption: true }),
+    "Unlisted Option"
+  );
+  // A matched option still reads Matched — that is real information.
+  assert.equal(exportStatus({ ...base, isMatched: true, instrument: "OPTION" }), "Matched");
+});
+
+test("Unlisted option rows reach the Comments column in both exports", async () => {
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap(),
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  const csv = buildPnlExportCsvString(built.summary);
+  const lines = csv.split("\r\n");
+  const uoLine = lines.find((l) => l.startsWith("GRV-UO"));
+  assert.ok(uoLine, "the option row must be exported");
+  assert.ok(uoLine.endsWith("Unlisted Options"), `expected the note, got: ${uoLine}`);
+  // Column count stays aligned with the header.
+  assert.equal(uoLine.split(",").length, lines[0].split(",").length);
+
+  const xlsx = await buildPnlExportXlsxBuffer(built.summary);
+  assert.ok(xlsx.length > 0);
 });

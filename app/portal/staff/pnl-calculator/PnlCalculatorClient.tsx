@@ -7,12 +7,16 @@ import {
   exportPnlCsvAction,
   fetchPlacementTrackerUrlAction,
   fetchDatabaseHoldingsAction,
+  fetchSpotPricesAction,
+  type SpotSource,
 } from "@/app/actions/pnl-calculator";
 import {
   parsePnlFileBuffer,
   parsePlacementTrackerBuffer,
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
+  buildUnlistedOptionRows,
+  collectUnlistedOptionTickers,
   placementArrayToMap,
   collectPlacementClientNames,
   isClientMatch,
@@ -56,8 +60,29 @@ export function PnlCalculatorClient() {
   const [isSyncingDb, startSyncingDb] = useTransition();
   const [result, setResult] = useState<ParseResult | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  /**
+   * Hovered unlisted-option row and where to draw its card.
+   *
+   * Positioned `fixed` from the pointer rather than `absolute` inside the cell: the
+   * results table sits in an `overflow-x-auto` wrapper, and a scroll container
+   * clips on BOTH axes once either one is not `visible`, so an absolutely
+   * positioned card would be cut off on the right and on the last rows.
+   */
+  const [unlistedTip, setUnlistedTip] = useState<{
+    item: PnlSummaryItem;
+    left: number;
+    top: number;
+  } | null>(null);
   const [filterType, setFilterType] = useState<
-    "all" | "equity" | "options" | "matched" | "profit" | "loss" | "unmatched"
+    | "all"
+    | "equity"
+    | "options"
+    | "unlisted"
+    | "open"
+    | "matched"
+    | "profit"
+    | "loss"
+    | "unmatched"
   >("all");
 
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
@@ -131,6 +156,47 @@ export function PnlCalculatorClient() {
   };
 
   /**
+   * Why a row carries the note it does — the Comments cell's tooltip.
+   *
+   * For an unlisted option this is the only place the valuation is shown, so it
+   * spells out every input. A modelled number that cannot be traced back to its
+   * assumptions is not auditable.
+   */
+  const commentHint = (item: PnlSummaryItem): string => {
+    if (item.isUnlistedOption) {
+      const v = item.unlistedOption;
+      if (!v) return "Free unlisted placement options valued with Black-Scholes.";
+      return (
+        `MODEL PRICE, not a market quote.\n` +
+        `Add-On: ${v.addOn.raw}\n` +
+        `Entitlement: ${v.addOn.ratioOptions}:${v.addOn.ratioPerShares} on ${fmtQty(v.basisQty)} ${
+          v.basisKind === "shares" ? "shares" : "base options"
+        } = ${fmtQty(item.sellQty)} options\n` +
+        `Spot ${fmtCurrency(v.spot)} (${v.spotSource}) · Strike ${fmtCurrency(v.addOn.strike)}\n` +
+        `Expiry ${v.addOn.expiry} (${v.timeToExpiryYears.toFixed(2)} yrs)\n` +
+        `Vol ${(v.volatility * 100).toFixed(0)}% · Rate ${(v.riskFreeRate * 100).toFixed(0)}% · Div ${(v.dividendYield * 100).toFixed(0)}%\n` +
+        `Black-Scholes per option: ${fmtCurrency(v.optionPrice)}`
+      );
+    }
+    const parts: string[] = [];
+    if (item.isPartialBuy) {
+      parts.push(
+        "Buy side was short — more units were sold than the ledger recorded buying, so the Placement Tracker allocation was added on top."
+      );
+    }
+    if (item.isPartialExit) {
+      parts.push(
+        "Part of this parcel was sold; the units still held were valued from the DB holdings snapshot and added to the sell side."
+      );
+    } else if (item.isDbOpenValued) {
+      parts.push(
+        "Nothing was sold — the sell side is this open position marked to the latest DB holdings snapshot, not realised cash."
+      );
+    }
+    return parts.join(" ");
+  };
+
+  /**
    * A short-buy top-up changes an already-populated Buy side, so it is called out
    * separately from a plain fill into a blank one.
    */
@@ -149,10 +215,24 @@ export function PnlCalculatorClient() {
     getClientHints(tradeFiles, AUTO_CLIENT).some((hint) => isClientMatch(name, hint))
   );
 
-  const handleSyncDbHoldings = (currentResult?: ParseResult | null, targetAcc?: string) => {
+  /**
+   * Values open positions off the DB snapshot, then prices any unlisted placement
+   * options. One async pass so the two only ever write `result` once between them.
+   *
+   * `placementOverride` exists because callers reach here immediately after
+   * `setParsedPlacementMap(...)`, before React has flushed that state — reading the
+   * state variable would use the previous upload's add-ons. Pass `null` to mean
+   * "no placements", which drops any generated option rows.
+   */
+  const handleSyncDbHoldings = (
+    currentResult?: ParseResult | null,
+    targetAcc?: string,
+    placementOverride?: Map<string, PlacementTickerInfo> | null
+  ) => {
     const res = currentResult || result;
     if (!res) return;
     const accToUse = targetAcc !== undefined ? targetAcc : selectedAccount;
+    const placements = placementOverride !== undefined ? placementOverride : parsedPlacementMap;
 
     const targetAccountsScope =
       accToUse !== "all"
@@ -162,26 +242,69 @@ export function PnlCalculatorClient() {
         : "all";
 
     startSyncingDb(async () => {
+      let working = res;
+      const notes: string[] = [];
+
       const dbRes = await fetchDatabaseHoldingsAction(targetAccountsScope);
       if (dbRes.ok && dbRes.holdings.length > 0) {
-        const merged = mergeDbHoldingsIntoSummary(res.summary, dbRes.holdings);
-        setResult({
-          ...res,
-          summary: merged.summary,
-          totalPnl: merged.totalPnl,
-          matchedTickers: merged.summary.filter((s) => s.isMatched).length,
-          optionTickers: merged.summary.filter((s) => s.isOption).length,
-        });
-        setPlacementMsg({
-          type: "success",
-          text:
-            `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
-              Array.isArray(targetAccountsScope) ? targetAccountsScope.join(", ") : targetAccountsScope
-            })!` +
+        const merged = mergeDbHoldingsIntoSummary(working.summary, dbRes.holdings);
+        working = { ...working, summary: merged.summary, totalPnl: merged.totalPnl };
+        notes.push(
+          `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
+            Array.isArray(targetAccountsScope) ? targetAccountsScope.join(", ") : targetAccountsScope
+          })!` +
             (merged.partialExitCount > 0
               ? ` ${merged.partialExitCount} of them were partial exits — the still-held parcel was added on top of the realised sale.`
-              : ""),
-        });
+              : "")
+        );
+      }
+
+      // Unlisted placement options: free options, so their whole modelled value is
+      // P&L. Rebuilt every pass, which also refreshes the spot prices behind them.
+      const unlistedTickers = placements ? collectUnlistedOptionTickers(working.summary, placements) : [];
+      if (placements && unlistedTickers.length > 0) {
+        const spotRes = await fetchSpotPricesAction(unlistedTickers);
+        const spotMap = new Map<string, { price: number; source: SpotSource }>(
+          spotRes.prices.map((p) => [p.ticker, { price: p.price, source: p.source }])
+        );
+        const built = buildUnlistedOptionRows(working.summary, placements, spotMap, new Date());
+        working = { ...working, summary: built.summary, totalPnl: built.totalPnl };
+
+        if (built.addedCount > 0) {
+          const stale = spotRes.prices.filter((p) => p.source === "database").map((p) => p.ticker);
+          notes.push(
+            `Valued ${built.addedCount} unlisted option line(s) with Black-Scholes (vol 50%, rate 5%, div 0%).` +
+              (stale.length > 0
+                ? ` ${stale.join(", ")} used the last holdings-snapshot price — Yahoo had no quote, so it is as stale as the last import.`
+                : "") +
+              (built.skipped.length > 0
+                ? ` No price at all for ${built.skipped.join(", ")} — those rows are valued at $0 until a quote is available.`
+                : "") +
+              (built.unresolvedPiggybacks.length > 0
+                ? ` Skipped ${built.unresolvedPiggybacks.length} piggyback grant(s) with no base tranche to compute from: ${built.unresolvedPiggybacks.join("; ")}.`
+                : "")
+          );
+        }
+      } else if (placements) {
+        // Placements are loaded but none earn an option row — drop any stale ones.
+        const cleared = working.summary.filter((s) => !s.isUnlistedOption);
+        if (cleared.length !== working.summary.length) {
+          working = {
+            ...working,
+            summary: cleared,
+            totalPnl: Math.round(cleared.reduce((a, c) => a + c.pnlCalculated, 0) * 100) / 100,
+          };
+        }
+      }
+
+      setResult({
+        ...working,
+        matchedTickers: working.summary.filter((s) => s.isMatched).length,
+        optionTickers: working.summary.filter((s) => s.isOption).length,
+      });
+
+      if (notes.length > 0) {
+        setPlacementMsg({ type: "success", text: notes.join(" ") });
       }
     });
   };
@@ -285,11 +408,18 @@ export function PnlCalculatorClient() {
             totalShares: info.totalShares,
             totalActualDollar: info.totalActualDollar,
             clientAllocations: [...info.clientAllocations],
+            addOns: info.addOns ? [...info.addOns] : undefined,
           });
         } else {
           const existing = combined.get(ticker)!;
           existing.totalShares += info.totalShares;
           existing.totalActualDollar += info.totalActualDollar;
+          // A later workbook fills in add-ons the earlier one did not carry. Not
+          // concatenated: two workbooks listing the same placement would otherwise
+          // double every tranche.
+          if (!existing.addOns?.length && info.addOns?.length) {
+            existing.addOns = [...info.addOns];
+          }
           for (const alloc of info.clientAllocations) {
             const found = existing.clientAllocations.find((a) => a.clientName === alloc.clientName);
             if (found) {
@@ -336,7 +466,7 @@ export function PnlCalculatorClient() {
         optionTickers: baseSummary.filter((s) => s.isOption).length,
       };
       setResult(resetRes);
-      handleSyncDbHoldings(resetRes, selectedAccount);
+      handleSyncDbHoldings(resetRes, selectedAccount, null);
       return { mergedCount: 0, partialBuyCount: 0, ambiguousTickers: [] };
     }
 
@@ -357,7 +487,7 @@ export function PnlCalculatorClient() {
       optionTickers: merged.summary.filter((s) => s.isOption).length,
     };
     setResult(updatedRes);
-    handleSyncDbHoldings(updatedRes, selectedAccount);
+    handleSyncDbHoldings(updatedRes, selectedAccount, combinedMap);
 
     return {
       mergedCount: merged.mergedCount,
@@ -796,8 +926,13 @@ export function PnlCalculatorClient() {
     if (filterType === "matched") return item.isMatched;
     if (filterType === "profit") return item.pnlCalculated > 0;
     if (filterType === "loss") return item.pnlCalculated < 0;
-    if (filterType === "unmatched") return !item.isMatched;
+    // Options — listed and unlisted alike — are reported on their own lines and are
+    // not expected to balance, so they are not "unmatched"; they are just options.
+    if (filterType === "unmatched") return !item.isMatched && !isOptionRow(item);
     if (filterType === "options") return isOptionRow(item);
+    if (filterType === "unlisted") return Boolean(item.isUnlistedOption);
+    // Open = nothing sold; the sell side is this parcel marked to the DB snapshot.
+    if (filterType === "open") return Boolean(item.isDbOpenValued);
     if (filterType === "equity") return !isOptionRow(item);
     return true;
   });
@@ -826,10 +961,14 @@ export function PnlCalculatorClient() {
     all: summaryList.length,
     equity: equityRows.length,
     options: optionRows.length,
+    unlisted: summaryList.filter((i) => i.isUnlistedOption).length,
+    open: summaryList.filter((i) => i.isDbOpenValued).length,
     matched: summaryList.filter((i) => i.isMatched).length,
     profit: summaryList.filter((i) => i.pnlCalculated > 0).length,
     loss: summaryList.filter((i) => i.pnlCalculated < 0).length,
-    unmatched: summaryList.filter((i) => !i.isMatched).length,
+    // Mirrors the filter above: option lines are counted under Options / Unlisted
+    // Options, never under Unmatched.
+    unmatched: summaryList.filter((i) => !i.isMatched && !isOptionRow(i)).length,
   };
 
   return (
@@ -1295,13 +1434,27 @@ export function PnlCalculatorClient() {
 
             {/* Filter Pills Bar — Full width on Desktop so all tabs fit with ZERO scrolling */}
             <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-paper-border text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
-              {(["all", "equity", "options", "matched", "profit", "loss", "unmatched"] as const).map((f) => {
+              {(
+                [
+                  "all",
+                  "equity",
+                  "options",
+                  "unlisted",
+                  "open",
+                  "matched",
+                  "profit",
+                  "loss",
+                  "unmatched",
+                ] as const
+              ).map((f) => {
                 const active = filterType === f;
                 const count = tabCounts[f];
                 const labels: Record<string, string> = {
                   all: "All Tickers",
                   equity: "Equity",
                   options: "Options",
+                  unlisted: "Unlisted Options",
+                  open: "Open",
                   matched: "Matched P&L",
                   profit: "Profit Only",
                   loss: "Loss Only",
@@ -1554,19 +1707,45 @@ export function PnlCalculatorClient() {
                           <td className="py-3.5 px-4 font-bold text-navy">
                             <div className="flex items-center gap-2">
                               <span>{item.ticker}</span>
+                              {item.isUnlistedOption && (
+                                <button
+                                  type="button"
+                                  aria-label={`Black-Scholes valuation inputs for ${item.ticker}`}
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-bg text-amber-d border border-amber-200 hover:bg-amber-d hover:text-white transition-colors cursor-help shrink-0"
+                                  onMouseEnter={(e) =>
+                                    // Clamped to the viewport: the card is w-[22rem]
+                                    // (352px) and ~300px tall, and `fixed` coords are
+                                    // viewport-relative, so both axes need a stop.
+                                    setUnlistedTip({
+                                      item,
+                                      left: Math.max(8, Math.min(e.clientX + 14, window.innerWidth - 368)),
+                                      top: Math.max(8, Math.min(e.clientY + 14, window.innerHeight - 310)),
+                                    })
+                                  }
+                                  onMouseLeave={() => setUnlistedTip(null)}
+                                  onFocus={(e) => {
+                                    const r = e.currentTarget.getBoundingClientRect();
+                                    setUnlistedTip({
+                                      item,
+                                      left: Math.max(8, Math.min(r.right + 10, window.innerWidth - 368)),
+                                      top: Math.max(8, Math.min(r.bottom + 8, window.innerHeight - 310)),
+                                    });
+                                  }}
+                                  onBlur={() => setUnlistedTip(null)}
+                                >
+                                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 16v-5m0-4h.01" />
+                                  </svg>
+                                </button>
+                              )}
                               {item.isEnriched && (
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold" title="Buy Qty and Buy Price merged from Placement Tracker">
                                   Enriched
                                 </span>
                               )}
-                              {item.isDbMarketValued && (
-                                <span
-                                  className="text-3xs px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-semibold"
-                                  title="The sell side is not all realised cash: units still held were valued at the latest market price from the holdings snapshot in the database, not sold."
-                                >
-                                  Valued from Holdings
-                                </span>
-                              )}
+                              {/* Merged and modelled rows carry their note in the
+                                  Comments column, not as a badge here. Hover that
+                                  cell for the full valuation breakdown. */}
                               {item.isEdited && (
                                 <span className="text-3xs px-1.5 py-0.5 rounded bg-navy/10 text-navy font-semibold">
                                   Edited
@@ -1637,8 +1816,14 @@ export function PnlCalculatorClient() {
                           <td className="py-3.5 px-4">
                             {item.comment && (
                               <span
-                                className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d border border-amber-200 font-semibold whitespace-nowrap"
-                                title="Part of this parcel was sold; the remainder was valued from the DB holdings snapshot and added to the sell side"
+                                className={`text-3xs px-1.5 py-0.5 rounded border font-semibold whitespace-nowrap ${
+                                  // "Open" is a statement of fact, not something to
+                                  // look into — only the merges get the amber.
+                                  item.comment === "Open"
+                                    ? "bg-paper-2 text-mut border-paper-border"
+                                    : "bg-amber-bg text-amber-d border-amber-200"
+                                }`}
+                                title={commentHint(item)}
                               >
                                 {item.comment}
                               </span>
@@ -1723,6 +1908,98 @@ export function PnlCalculatorClient() {
                 )}
               </table>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unlisted-option valuation card. Rendered at the component root with `fixed`
+          positioning so the table's scroll container cannot clip it.
+
+          Styled with real theme tokens only — `bg-card` / `border-line` / `text-[11px]`.
+          `bg-paper-1`, `border-paper-border` and `text-2xs`/`text-3xs` are used widely
+          in this file but are NOT defined in app/globals.css, so they resolve to
+          nothing: inside the table that is invisible (rows inherit `text-xs` and sit on
+          a painted parent), but out here it left the card transparent with 16px text
+          piling on top of itself. */}
+      {unlistedTip?.item.unlistedOption && (
+        <div
+          role="tooltip"
+          className="fixed z-[100] w-[22rem] pointer-events-none rounded-xl border border-line bg-card shadow-shadow-lg overflow-hidden"
+          style={{ left: unlistedTip.left, top: unlistedTip.top }}
+        >
+          <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-navy">
+            <span className="text-[11px] font-bold tracking-wide text-white leading-tight">
+              {unlistedTip.item.ticker} · Unlisted Option
+            </span>
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-white/20 text-white whitespace-nowrap">
+              MODEL PRICE
+            </span>
+          </div>
+
+          <div className="px-3.5 py-2.5">
+            <p className="text-[10px] text-mut italic leading-snug mb-2 break-words">
+              {unlistedTip.item.unlistedOption.addOn.raw}
+            </p>
+
+            {/* Fixed label column + right-aligned value column, so a long value wraps
+                inside its own cell instead of colliding with the label. */}
+            <dl className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1 text-[11px] leading-snug">
+              {(
+                [
+                  [
+                    "Entitlement",
+                    `${unlistedTip.item.unlistedOption.addOn.ratioOptions}:${unlistedTip.item.unlistedOption.addOn.ratioPerShares}`,
+                  ],
+                  [
+                    // A piggyback is earned off the base grant, not off the stock,
+                    // so the card has to name what the ratio was applied to.
+                    unlistedTip.item.unlistedOption.basisKind === "shares"
+                      ? "on shares held"
+                      : "on base options",
+                    fmtQty(unlistedTip.item.unlistedOption.basisQty),
+                  ],
+                  ["Options granted", fmtQty(unlistedTip.item.sellQty)],
+                  ["Spot", `${fmtCurrency(unlistedTip.item.unlistedOption.spot)} · ${unlistedTip.item.unlistedOption.spotSource}`],
+                  ["Strike", fmtCurrency(unlistedTip.item.unlistedOption.addOn.strike)],
+                  ["Expiry", unlistedTip.item.unlistedOption.addOn.expiry],
+                  ["Time to expiry", `${unlistedTip.item.unlistedOption.timeToExpiryYears.toFixed(2)} yrs`],
+                  [
+                    "Vol / Rate / Div",
+                    `${(unlistedTip.item.unlistedOption.volatility * 100).toFixed(0)}% / ${(
+                      unlistedTip.item.unlistedOption.riskFreeRate * 100
+                    ).toFixed(0)}% / ${(unlistedTip.item.unlistedOption.dividendYield * 100).toFixed(0)}%`,
+                  ],
+                ] as const
+              ).map(([label, value]) => (
+                <React.Fragment key={label}>
+                  <dt className="text-mut">{label}</dt>
+                  <dd className="font-mono text-ink text-right break-words">{value}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
+
+            <dl className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1 text-[11px] leading-snug mt-2 pt-2 border-t border-line">
+              <dt className="text-mut">B-S / option</dt>
+              <dd className="font-mono text-ink text-right">
+                {fmtCurrency(unlistedTip.item.unlistedOption.optionPrice)}
+              </dd>
+              <dt className="font-bold text-ink">Row P&amp;L</dt>
+              <dd
+                className={`font-mono font-bold text-right ${
+                  unlistedTip.item.pnlCalculated >= 0 ? "text-green-d" : "text-loss-d"
+                }`}
+              >
+                {fmtCurrency(unlistedTip.item.pnlCalculated)}
+              </dd>
+            </dl>
+
+            {unlistedTip.item.unlistedOption.spotSource !== "yahoo" && (
+              <p className="mt-2 text-[10px] text-amber-d bg-amber-bg border border-amber rounded-lg px-2 py-1.5 leading-snug">
+                {unlistedTip.item.unlistedOption.spotSource === "database"
+                  ? "No live quote — priced off the last holdings snapshot, so it is as stale as the last import."
+                  : "No price from Yahoo or the database, so this row is valued at $0."}
+              </p>
+            )}
           </div>
         </div>
       )}

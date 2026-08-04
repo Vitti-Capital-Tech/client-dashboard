@@ -179,6 +179,88 @@ export async function parsePlacementTrackerFileAction(
   }
 }
 
+export type SpotSource = "yahoo" | "database" | "unavailable";
+
+export interface SpotPrice {
+  ticker: string;
+  price: number;
+  source: SpotSource;
+}
+
+/**
+ * Current spot price per ASX code, for valuing unlisted placement options.
+ *
+ * Yahoo first (a live last-traded price via `yahoo-finance2`), falling back to
+ * `securities.last_price` from the most recent holdings snapshot. The fallback is
+ * stale by construction — only as fresh as the last import — so the source is
+ * returned alongside the price and shown in the UI rather than being quietly
+ * interchangeable.
+ *
+ * A name that resolves to neither comes back `unavailable` at price 0. It is never
+ * defaulted to a strike or a cost base: a fabricated spot would produce a
+ * confident-looking option value with nothing behind it.
+ */
+export async function fetchSpotPricesAction(
+  tickers: string[]
+): Promise<{ ok: boolean; prices: SpotPrice[]; error?: string }> {
+  const wanted = [...new Set(tickers.map((t) => String(t || "").trim().toUpperCase()).filter(Boolean))];
+  if (wanted.length === 0) return { ok: true, prices: [] };
+
+  const resolved = new Map<string, SpotPrice>();
+
+  // One batched request for the whole list. Unknown symbols are simply omitted
+  // from the response rather than failing it, so a delisted name costs nothing.
+  try {
+    const { default: YahooFinance } = await import("yahoo-finance2");
+    const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
+
+    // ASX names are quoted with a .AX suffix.
+    const quotes = await yf.quote(wanted.map((t) => `${t}.AX`));
+    const list = Array.isArray(quotes) ? quotes : quotes ? [quotes] : [];
+
+    for (const q of list) {
+      const symbol = String(q?.symbol || "").toUpperCase();
+      const ticker = symbol.replace(/\.AX$/, "");
+      const price = Number(q?.regularMarketPrice);
+      if (ticker && Number.isFinite(price) && price > 0) {
+        resolved.set(ticker, { ticker, price, source: "yahoo" });
+      }
+    }
+  } catch (err) {
+    // Offline, blocked or rate-limited — every name falls through to the DB.
+    console.error("Yahoo spot price lookup failed:", err);
+  }
+
+  const missing = wanted.filter((t) => !resolved.has(t));
+
+  if (missing.length > 0) {
+    try {
+      const { createClient } = await import("@/lib/supabase/server");
+      const supabase = await createClient();
+      const { data } = await supabase
+        .from("securities")
+        .select("code, last_price")
+        .in("code", missing);
+
+      for (const row of data || []) {
+        const price = Number(row.last_price);
+        const code = String(row.code || "").trim().toUpperCase();
+        if (Number.isFinite(price) && price > 0) {
+          resolved.set(code, { ticker: code, price, source: "database" });
+        }
+      }
+    } catch (err) {
+      console.error("Spot price DB fallback failed:", err);
+    }
+  }
+
+  const prices: SpotPrice[] = wanted.map(
+    (ticker) => resolved.get(ticker) ?? { ticker, price: 0, source: "unavailable" as const }
+  );
+
+  return { ok: true, prices };
+}
+
 export interface DbHoldingInfo {
   accountRef: string;
   ticker: string;

@@ -1,5 +1,10 @@
 import ExcelJS from "exceljs";
 import * as XLSX from "xlsx";
+import {
+  blackScholesCall,
+  yearsToExpiry,
+  UNLISTED_OPTION_ASSUMPTIONS,
+} from "./black-scholes.ts";
 
 export interface ParsedTradeRow {
   cnote?: string;
@@ -29,6 +34,41 @@ export interface PlacementClientAllocation {
   sellerFee?: number;
 }
 
+/**
+ * A free option attached to a placement, as written in the Overview sheet's
+ * **Add-Ons** column — e.g. `1:2 @$1.20 Unlisted Exp 31/12/27`.
+ *
+ * One cell can describe SEVERAL grants, so a cell parses to a list of these:
+ * `1:2 @ $ 0.60 Unlisted Exp 30/06/27 + 1:2 @ $ 1.00 Unlisted Piggyback Exp 30/06/28`
+ * is two tranches at different strikes and expiries.
+ *
+ * Only UNLISTED add-ons become P&L rows. A listed option already trades under its
+ * own code, so it arrives through the broker ledger like any other line and must
+ * not be modelled a second time.
+ */
+export interface PlacementAddOn {
+  /** Verbatim text of THIS tranche's segment, so the table shows what was read. */
+  raw: string;
+  /** 1-based position among the grants parsed out of the cell. */
+  tranche: number;
+  /** Wording that qualifies the tranche, e.g. "Piggyback". Display only. */
+  note?: string;
+  /**
+   * A piggyback grant: earned by EXERCISING the base tranche, not by holding
+   * shares, so its ratio applies to the base tranche's option count.
+   */
+  piggyback: boolean;
+  /** `1` in `1:3` — options granted per `ratioPerShares` shares held. */
+  ratioOptions: number;
+  /** `3` in `1:3`. */
+  ratioPerShares: number;
+  /** Exercise price, e.g. 0.14. */
+  strike: number;
+  /** ISO `YYYY-MM-DD`. The source is day-first `DD/MM/YY`. */
+  expiry: string;
+  listed: boolean;
+}
+
 export interface PlacementTickerInfo {
   ticker: string;
   company?: string;
@@ -37,10 +77,35 @@ export interface PlacementTickerInfo {
   totalShares: number;
   totalActualDollar: number;
   clientAllocations: PlacementClientAllocation[];
+  /** Every grant parsed out of the Overview sheet's Add-Ons cell, in cell order. */
+  addOns?: PlacementAddOn[];
 }
 
 /** Equity/ordinary line vs a listed option line — kept as separate P&L rows. */
 export type PnlInstrument = "EQUITY" | "OPTION";
+
+/** Everything that went into an unlisted option row's model price, for audit. */
+export interface UnlistedOptionValuation {
+  addOn: PlacementAddOn;
+  /** Parent-row Buy Qty. Context even when the ratio was applied to something else. */
+  sharesHeld: number;
+  /** The count the ratio was actually applied to. */
+  basisQty: number;
+  /** What that count is: shares held, or the base tranche's options for a piggyback. */
+  basisKind: "shares" | "base-options";
+  /** Underlying spot used, and where it came from. */
+  spot: number;
+  spotSource: "yahoo" | "database" | "unavailable";
+  /** Years to expiry at valuation time. */
+  timeToExpiryYears: number;
+  /** Black-Scholes value of ONE option. */
+  optionPrice: number;
+  volatility: number;
+  riskFreeRate: number;
+  dividendYield: number;
+  /** ISO date the valuation was struck. */
+  valuedAt: string;
+}
 
 export interface PnlSummaryItem {
   ticker: string; // Option rows keep their full option code (e.g. GEDO); equity rows use the 3-char parent (GED)
@@ -60,8 +125,11 @@ export interface PnlSummaryItem {
   isEdited?: boolean; // true if manually adjusted by staff
   isEnriched?: boolean; // true if merged with placement tracker data
   isDbMarketValued?: boolean; // true if sellQty/sellPrice auto-filled from database portfolio market value
+  isDbOpenValued?: boolean; // true when a FULLY open position was valued off the DB — nothing was sold
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
+  isUnlistedOption?: boolean; // true for a synthetic row valuing free UNLISTED placement options
+  unlistedOption?: UnlistedOptionValuation; // The inputs behind that row's Black-Scholes price
   comment?: string; // Derived from the flags above — surfaced in the table and both exports
   openQty: number; // buyQty - sellQty
   tradeCount: number;
@@ -123,6 +191,21 @@ export function isOptionCode(rawCode: string): boolean {
 export function getSummaryGroupKey(rawCode: string): string {
   const code = String(rawCode || "").trim().toUpperCase();
   return isOptionCode(code) ? code : getParentTicker(code);
+}
+
+/**
+ * The `Status` cell for an exported row.
+ *
+ * An option line's buy and sell legs are not expected to balance — a 1:3 grant is
+ * never bought at all — so labelling one "Unmatched" reports a discrepancy that
+ * does not exist. Options say what they are instead, matching the table, where the
+ * Unmatched badge and the Unmatched tab both exclude them.
+ */
+export function exportStatus(item: PnlSummaryItem): string {
+  if (item.isMatched) return "Matched";
+  if (item.isUnlistedOption) return "Unlisted Option";
+  if (isOptionRow(item)) return "Option";
+  return "Unmatched";
 }
 
 /** Whether a summary row represents an option line rather than the equity line. */
@@ -729,7 +812,7 @@ export async function buildPnlExportXlsxBuffer(
       buyPrice: item.buyPrice,
       sellPrice: item.sellPrice,
       pnlCalculated: item.pnlCalculated,
-      status: item.isMatched ? "Matched" : "Unmatched",
+      status: exportStatus(item),
       openQty: item.openQty,
       comment: item.comment ?? "",
     });
@@ -822,7 +905,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.buyPrice.toFixed(2),
         item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
-        item.isMatched ? "Matched" : item.isEdited ? "Edited" : "Unmatched",
+        item.isEdited && !item.isMatched ? "Edited" : exportStatus(item),
         item.openQty,
         item.comment ?? "",
       ]
@@ -897,7 +980,9 @@ export async function parsePlacementTrackerBuffer(
 
   const placementMap = new Map<string, PlacementTickerInfo>();
 
-  // Exclude non-ticker system/utility sheets
+  // Exclude non-ticker system/utility sheets. The Overview sheet is not a ticker
+  // tab, but it is the ONLY place the Add-Ons column lives, so it gets its own
+  // pass below before being skipped here.
   const ignoredSheets = new Set([
     "template",
     "index",
@@ -908,6 +993,8 @@ export async function parsePlacementTrackerBuffer(
     "summary",
     "dashboard",
   ]);
+
+  const addOnsByTicker = parseOverviewAddOns(buf);
 
   workbook.eachSheet((worksheet) => {
     const rawSheetName = worksheet.name.trim();
@@ -1027,11 +1114,114 @@ export async function parsePlacementTrackerBuffer(
         totalShares,
         totalActualDollar: Math.round(totalActualDollar * 100) / 100,
         clientAllocations: allocations,
+        addOns: addOnsByTicker.get(parentTicker),
       });
     }
   });
 
+  // A ticker can carry an unlisted add-on while its allocation tab is absent from
+  // THIS workbook (a prior year's placement, or a sheet not filled in). The option
+  // entitlement is driven by the client's Buy Qty in the trade file, not by the
+  // allocation rows, so it must survive with an empty allocation list — which the
+  // `matchedAllocations.length > 0` guard in the merge treats as "nothing to fill".
+  for (const [ticker, addOns] of addOnsByTicker.entries()) {
+    if (placementMap.has(ticker)) continue;
+    if (!addOns.some((a) => !a.listed)) continue;
+    placementMap.set(ticker, {
+      ticker,
+      totalShares: 0,
+      totalActualDollar: 0,
+      clientAllocations: [],
+      addOns,
+    });
+  }
+
   return placementMap;
+}
+
+/**
+ * Reads the **Add-Ons** column off the Placement Tracker's Overview sheet.
+ *
+ * The sheet is named per year ("2026 Overview"), the header row is not row 1, and
+ * the Add-Ons column sits at the far right past a block of fee columns — so both
+ * the sheet and the columns are located by content rather than by position.
+ *
+ * Deliberately uses SheetJS with `raw: false` rather than ExcelJS. The column
+ * carries a date/time number format (some rows really are blank times, rendering
+ * as "0:00"), and ExcelJS coerces the whole column to `Date` — which turns
+ * "1:1 @ $0.028 Unlisted Exp 31/01/29" into `Invalid Date` and silently loses 38
+ * of the 42 real specs. `raw: false` returns each cell's DISPLAYED text, which is
+ * exactly what a hand-typed column means.
+ *
+ * Listed add-ons are parsed and kept too: `buildUnlistedOptionRows` filters them
+ * out, and keeping them makes "why is there no row for X" answerable.
+ */
+function parseOverviewAddOns(buffer: Buffer): Map<string, PlacementAddOn[]> {
+  const found = new Map<string, PlacementAddOn[]>();
+
+  let rows: unknown[][];
+  try {
+    const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    const sheetName = wb.SheetNames.find((n) => normHeader(n).includes("overview"));
+    if (!sheetName) return found;
+    rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
+      header: 1,
+      raw: false,
+      defval: "",
+    });
+  } catch {
+    // A CSV or a workbook SheetJS cannot open simply has no Overview to read.
+    return found;
+  }
+
+  let headerRowIdx = -1;
+  let colTicker = -1;
+  let colAddOns = -1;
+
+  for (let r = 0; r < Math.min(25, rows.length); r++) {
+    const cells = rows[r];
+    if (!Array.isArray(cells)) continue;
+
+    let sawAddOns = -1;
+    let sawTicker = -1;
+    cells.forEach((cellVal, colIdx) => {
+      const str = normHeader(String(cellVal ?? ""));
+      if (str.startsWith("addon")) sawAddOns = colIdx;
+      // The ticker column is headed "Counter" in the real workbook.
+      else if (str === "counter" || str === "ticker" || str === "code" || str === "security") {
+        sawTicker = colIdx;
+      }
+    });
+
+    if (sawAddOns !== -1) {
+      headerRowIdx = r;
+      colAddOns = sawAddOns;
+      colTicker = sawTicker;
+      break;
+    }
+  }
+
+  if (headerRowIdx === -1) return found;
+
+  for (let r = headerRowIdx + 1; r < rows.length; r++) {
+    const cells = rows[r];
+    if (!Array.isArray(cells)) continue;
+
+    const specs = parseAddOnSpecs(cells[colAddOns]);
+    if (specs.length === 0) continue;
+
+    // Sheet names carry suffixes the Overview does not ("FIN (b)" vs "FIN"), so
+    // normalise to the bare parent code the P&L table groups on.
+    const rawTicker = String(cells[colTicker > -1 ? colTicker : 2] ?? "").trim();
+    const ticker = getParentTicker(rawTicker.split(/\s|\(/)[0].toUpperCase());
+    if (!ticker || ticker.length < 2) continue;
+
+    // First row wins: a ticker placed twice in a year keeps its earliest add-ons
+    // rather than silently adopting the later row's strikes.
+    if (!found.has(ticker)) found.set(ticker, specs);
+  }
+
+  return found;
 }
 
 /**
@@ -1076,17 +1266,22 @@ export function isClientMatch(clientName: string, fileStem: string): boolean {
 }
 
 /**
- * Rebuilds `comment` from the partial-merge flags.
+ * Rebuilds `comment` from the merge flags.
  *
- * Derived rather than assigned so the two merges stay order-independent: a row
- * that is topped up on both sides (short buy from the Placement Tracker, part-sale
- * valued from the DB) ends up reading "Partial Buy · Partial Exit" whichever merge
- * ran last, instead of one clobbering the other's note.
+ * Derived rather than assigned so the merges stay order-independent: a row topped
+ * up on both sides (short buy from the Placement Tracker, part-sale valued from the
+ * DB) reads "Partial Buy · Partial Exit" whichever merge ran last, instead of one
+ * clobbering the other's note.
+ *
+ * "Open" and "Partial Exit" are mutually exclusive by construction — a row either
+ * sold nothing (open) or sold part of the parcel (partial exit) — so the partial
+ * note wins and they never both appear.
  */
-function applyPartialComment(item: PnlSummaryItem): void {
+function applyDerivedComment(item: PnlSummaryItem): void {
   const notes: string[] = [];
   if (item.isPartialBuy) notes.push("Partial Buy");
   if (item.isPartialExit) notes.push("Partial Exit");
+  else if (item.isDbOpenValued) notes.push("Open");
   if (notes.length > 0) item.comment = notes.join(" · ");
 }
 
@@ -1205,7 +1400,7 @@ export function mergePlacementTrackerIntoSummary(
           existing.isEnriched = true;
           existing.clientAllocations = matchedAllocations;
           if (existing.isPartialBuy) partialBuyCount++;
-          applyPartialComment(existing);
+          applyDerivedComment(existing);
           mergedCount++;
         }
       }
@@ -1307,7 +1502,6 @@ export function mergeDbHoldingsIntoSummary(
         item.totalSellValue = item.sellPrice;
       }
       item.isPartialExit = true;
-      applyPartialComment(item);
       partialExitCount++;
     } else {
       if (item.sellQty === 0 && match.qty > 0) {
@@ -1317,7 +1511,12 @@ export function mergeDbHoldingsIntoSummary(
         item.sellPrice = Math.round(match.marketValue * 100) / 100;
         item.totalSellValue = item.sellPrice;
       }
+      // Nothing was sold — the whole "sell side" is an open position marked to the
+      // holdings snapshot, which is what the row's note has to say.
+      item.isDbOpenValued = true;
     }
+
+    applyDerivedComment(item);
 
     item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
     item.openQty = item.buyQty - item.sellQty;
@@ -1331,4 +1530,309 @@ export function mergeDbHoldingsIntoSummary(
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
   return { summary: updatedSummary, mergedCount, partialExitCount, totalPnl };
+}
+
+// ---------------------------------------------------------------------------
+// Unlisted placement options
+// ---------------------------------------------------------------------------
+
+/** Suffix marking a synthetic unlisted-option row (`GRV` -> `GRV-UO`). */
+export const UNLISTED_OPTION_SUFFIX = "-UO";
+
+/** Matches a grant ratio like `1:3` or `1:20`. Also used to find tranche starts. */
+const ADD_ON_RATIO = /(\d+)\s*:\s*(\d+)/g;
+
+/**
+ * Parses ONE tranche segment from an **Add-Ons** cell.
+ *
+ * The column is hand-typed, so the real workbook contains all of these:
+ *
+ *   1:1 @$0.04 Listed Exp 30/11/28      <- listed, ignored downstream
+ *   1:2 @$1.20 Unlisted Exp 31/12/27
+ *   1:1 @ $0.028 Unlisted Exp 31/01/29  <- space after @
+ *   1:3@0.14 Unlisted Expiry 31/12/27   <- no space, no $, "Expiry"
+ *   IPO / Entitlement Offer / 00:00     <- not an option at all
+ *
+ * Returns null unless a ratio, a strike AND an expiry are all present — a partial
+ * segment is not enough to price anything, and guessing a missing strike would
+ * invent a number. That requirement is also what rejects the `0:00` time cells.
+ *
+ * For a cell that may hold several grants use `parseAddOnSpecs`.
+ */
+export function parseAddOnSpec(rawText: unknown, tranche = 1): PlacementAddOn | null {
+  const raw = String(rawText ?? "").trim();
+  if (!raw) return null;
+
+  const ratioMatch = raw.match(/(\d+)\s*:\s*(\d+)/);
+  if (!ratioMatch) return null;
+  const ratioOptions = Number(ratioMatch[1]);
+  const ratioPerShares = Number(ratioMatch[2]);
+  if (!(ratioOptions > 0) || !(ratioPerShares > 0)) return null;
+
+  // "@$0.04", "@ $0.028", "@0.14"
+  const strikeMatch = raw.match(/@\s*\$?\s*(\d*\.?\d+)/);
+  if (!strikeMatch) return null;
+  const strike = Number(strikeMatch[1]);
+  if (!(strike > 0)) return null;
+
+  // "Exp 30/11/28", "Expiry 31/12/27", "Exp. 31/1/29"
+  const expiryMatch = raw.match(/exp(?:iry)?\.?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/i);
+  if (!expiryMatch) return null;
+  const expiry = isoFromDayFirst(expiryMatch[1], expiryMatch[2], expiryMatch[3]);
+  if (!expiry) return null;
+
+  // "Unlisted" CONTAINS "listed", so the negative has to be tested first.
+  const listed = !/unlisted/i.test(raw);
+
+  // Wording that distinguishes one tranche from another, e.g. "Piggyback".
+  const noteMatch = raw.match(/\b(piggyback|piggy\s*back|tranche\s*\d+|t\d)\b/i);
+
+  return {
+    raw,
+    tranche,
+    note: noteMatch ? noteMatch[1].replace(/\s+/g, " ") : undefined,
+    piggyback: /piggy\s*back/i.test(raw),
+    ratioOptions,
+    ratioPerShares,
+    strike,
+    expiry,
+    listed,
+  };
+}
+
+/**
+ * Parses an **Add-Ons** cell into every grant it describes.
+ *
+ * One cell can carry more than one tranche:
+ *
+ *   1:2 @ $ 0.60 Unlisted Exp 30/06/27 +  1:2  @ $ 1.00 Unlisted Piggyback Exp 30/06/28
+ *
+ * Segments are cut at each ratio occurrence rather than on a separator, because the
+ * separator is whatever was typed that day (`+`, `&`, `and`, a line break). Anything
+ * before the first ratio is preamble and is dropped.
+ *
+ * Duplicate tranches (same ratio, strike and expiry) collapse to one — a cell that
+ * repeats itself should not double the entitlement.
+ */
+export function parseAddOnSpecs(rawText: unknown): PlacementAddOn[] {
+  const raw = String(rawText ?? "").trim();
+  if (!raw) return [];
+
+  const starts: number[] = [];
+  ADD_ON_RATIO.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ADD_ON_RATIO.exec(raw)) !== null) starts.push(m.index);
+  if (starts.length === 0) return [];
+
+  const specs: PlacementAddOn[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < starts.length; i++) {
+    const segment = raw.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : undefined);
+    const spec = parseAddOnSpec(segment, specs.length + 1);
+    if (!spec) continue;
+
+    const key = `${spec.ratioOptions}:${spec.ratioPerShares}@${spec.strike}/${spec.expiry}/${spec.listed}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    specs.push(spec);
+  }
+
+  return specs;
+}
+
+/**
+ * `31/12/27` -> `2027-12-31`. Day-first, matching every other date in the broker
+ * and placement exports. A 2-digit year is 2000-based: these are future expiries.
+ */
+function isoFromDayFirst(dd: string, mm: string, yy: string): string | null {
+  const day = Number(dd);
+  const month = Number(mm);
+  let year = Number(yy);
+  if (yy.length <= 2) year += 2000;
+
+  if (!(month >= 1 && month <= 12) || !(day >= 1 && day <= 31)) return null;
+
+  // Reject a rolled-over date (31/02 becoming 3 March) rather than pricing to it.
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+    return null;
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** The ASX codes whose spot price an unlisted-option valuation needs. */
+export function collectUnlistedOptionTickers(
+  summary: PnlSummaryItem[],
+  placementData: Map<string, PlacementTickerInfo>
+): string[] {
+  const wanted = new Set<string>();
+  for (const [, info] of placementData.entries()) {
+    if (!info.addOns?.some((a) => !a.listed)) continue;
+    const parent = getParentTicker(info.ticker);
+    // Only names the client actually holds shares in earn an entitlement.
+    const equityRow = summary.find((s) => summaryParentTicker(s) === parent && !isOptionRow(s));
+    if (equityRow && equityRow.buyQty > 0) wanted.add(parent);
+  }
+  return [...wanted].sort();
+}
+
+/**
+ * Adds one synthetic P&L row per UNLISTED placement add-on.
+ *
+ * The economics: the options are FREE, so `buyQty` and `buyPrice` are 0 and the
+ * whole Black-Scholes value is P&L. Quantity is `floor(basis * ratioOptions /
+ * ratioPerShares)`, floored because a fraction of an option is not granted, where
+ * the basis is the SHARES bought for a base tranche and the BASE TRANCHE'S OPTION
+ * COUNT for a piggyback.
+ *
+ * Rebuilt from scratch on every call: any existing `-UO` rows are dropped first,
+ * so re-running after a re-upload or a price refresh cannot accumulate duplicates.
+ */
+export function buildUnlistedOptionRows(
+  summary: PnlSummaryItem[],
+  placementData: Map<string, PlacementTickerInfo>,
+  spotPrices: Map<string, { price: number; source: "yahoo" | "database" | "unavailable" }>,
+  asOf: Date
+): {
+  summary: PnlSummaryItem[];
+  addedCount: number;
+  /** Names with no spot price at all — their rows exist but are valued at $0. */
+  skipped: string[];
+  /** Piggyback grants with no base tranche to compute from, so no row was made. */
+  unresolvedPiggybacks: string[];
+  totalPnl: number;
+} {
+  // Drop previously generated rows so a refresh replaces rather than stacks.
+  const rows = summary.filter((s) => !s.isUnlistedOption).map((s) => ({ ...s }));
+  const skipped: string[] = [];
+  const unresolvedPiggybacks: string[] = [];
+  let addedCount = 0;
+
+  for (const [, info] of placementData.entries()) {
+    const unlistedAddOns = (info.addOns ?? []).filter((a) => !a.listed);
+    if (unlistedAddOns.length === 0) continue;
+
+    const parent = getParentTicker(info.ticker);
+    const equityRow = rows.find((s) => summaryParentTicker(s) === parent && !isOptionRow(s));
+
+    if (!equityRow || equityRow.buyQty <= 0) continue;
+
+    const spotInfo = spotPrices.get(parent);
+    const spot = spotInfo?.price ?? 0;
+    const spotSource = spotInfo?.source ?? "unavailable";
+    let spotReported = false;
+
+    // Each tranche is its own grant at its own strike and expiry, so each becomes
+    // its own row. What the ratio applies to differs by kind:
+    //
+    //   base tranche  -> SHARES held        (1:2 on 10,000 shares  = 5,000 options)
+    //   piggyback     -> BASE OPTION count  (1:2 on 5,000 options  = 2,500 options)
+    //
+    // A piggyback is earned by exercising the base grant, not by holding stock, so
+    // running it off the share count would roughly double the entitlement.
+    //
+    // `null` distinguishes "no base tranche seen yet" from "the base came to 0".
+    let baseOptionQty: number | null = null;
+    let created = 0;
+
+    for (const addOn of unlistedAddOns) {
+      if (addOn.piggyback && baseOptionQty === null) {
+        // Nothing to piggyback on. Inventing a basis would fabricate a position, so
+        // the grant is reported instead of guessed.
+        unresolvedPiggybacks.push(`${parent} (${addOn.raw.trim()})`);
+        continue;
+      }
+
+      const basisKind: "shares" | "base-options" = addOn.piggyback ? "base-options" : "shares";
+      const basisQty = addOn.piggyback ? (baseOptionQty as number) : equityRow.buyQty;
+
+      const optionQty = Math.floor((basisQty * addOn.ratioOptions) / addOn.ratioPerShares);
+
+      // Recorded even when 0, so a base too small to grant anything correctly
+      // zeroes its piggyback rather than leaving it looking unresolved.
+      if (!addOn.piggyback) baseOptionQty = optionQty;
+
+      if (optionQty <= 0) continue;
+
+      // No spot means no defensible price. The row is still created — the
+      // entitlement is real and hiding it would understate the position — but it is
+      // valued at 0 and reported in `skipped` so the desk knows why. Reported once
+      // per name, however many tranches it has.
+      if (spot <= 0 && !spotReported) {
+        skipped.push(parent);
+        spotReported = true;
+      }
+
+      const timeToExpiryYears = yearsToExpiry(new Date(`${addOn.expiry}T00:00:00Z`), asOf);
+      const { volatility, riskFreeRate, dividendYield } = UNLISTED_OPTION_ASSUMPTIONS;
+
+      const optionPrice = blackScholesCall({
+        spot,
+        strike: addOn.strike,
+        timeToExpiryYears,
+        volatility,
+        riskFreeRate,
+        dividendYield,
+      });
+
+      const sellValue = Math.round(optionPrice * optionQty * 100) / 100;
+
+      // First tranche keeps the bare `-UO` code; later ones are numbered so two
+      // grants on the same underlying never collide on one row key.
+      created++;
+      const suffix = created === 1 ? UNLISTED_OPTION_SUFFIX : `${UNLISTED_OPTION_SUFFIX}${created}`;
+      const label = addOn.note ? ` ${addOn.note}` : "";
+
+      rows.push({
+        ticker: `${parent}${suffix}`,
+        parentTicker: parent,
+        instrument: "OPTION",
+        company: `${equityRow.company} — Unlisted Option${label} ${addOn.ratioOptions}:${addOn.ratioPerShares} @$${addOn.strike} exp ${addOn.expiry}`,
+        buyQty: 0,
+        sellQty: optionQty,
+        buyPrice: 0,
+        sellPrice: sellValue,
+        totalBuyValue: 0,
+        totalSellValue: sellValue,
+        // Free options, so the entire modelled value is the gain.
+        pnlCalculated: sellValue,
+        isMatched: false,
+        isOption: true,
+        hasOptionCode: true,
+        isUnlistedOption: true,
+        comment: "Unlisted Options",
+        openQty: -optionQty,
+        tradeCount: 0,
+        unlistedOption: {
+          addOn,
+          sharesHeld: equityRow.buyQty,
+          basisQty,
+          basisKind,
+          spot,
+          spotSource,
+          timeToExpiryYears,
+          optionPrice,
+          volatility,
+          riskFreeRate,
+          dividendYield,
+          valuedAt: asOf.toISOString(),
+        },
+      });
+      addedCount++;
+    }
+  }
+
+  rows.sort(compareSummaryItems);
+
+  const totalPnl = Math.round(rows.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+
+  return {
+    summary: rows,
+    addedCount,
+    skipped: skipped.sort(),
+    unresolvedPiggybacks: unresolvedPiggybacks.sort(),
+    totalPnl,
+  };
 }
