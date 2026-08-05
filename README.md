@@ -181,9 +181,11 @@ PLACEMENT_TRACKER_URL="https://docs.google.com/spreadsheets/d/<2026-ID>/edit,htt
 ```
 Deliberately **not** a `NEXT_PUBLIC_` variable: for an "anyone with the link" sheet the URL *is* the credential, so it is read server-side only and never reaches the browser — the UI shows the downloaded filename instead. Private links still need the machine credentials above.
 
-These workbooks are big: the real 2026 and 2025 trackers are 12.5 MB and 9.3 MB, and **parsing them costs ~30 s and ~18 s** (download is only ~3 s each). Three things follow:
+These workbooks are big — the real 2026 and 2025 trackers are 12.5 MB and 9.3 MB across 177 sheets. Four things follow:
 
-* Links are parsed **sequentially**. Parsing is CPU-bound and single-threaded, so running both at once saved nothing (45.4 s vs 46.8 s) while pushing peak memory from 2.1 GB to **3.2 GB RSS** — enough to destabilise the server and intermittently drop one of the trackers.
+* They are parsed with **SheetJS, not ExcelJS**, reading only the rows that matter. ExcelJS materialises the whole workbook: it needed **1,628 MB of heap** for the 2026 file alone, past the **1 GB default of a Vercel function** — which is why a deployed build showed only the smaller 2025 tracker. SheetJS needs **113 MB** and both files parse in 10.7 s instead of 46.8 s. Output was verified identical across 200 tickers and 900 allocations, with zero numeric differences.
+* `maxDuration = 60` is set on the route, since the platform default (10 s Hobby / 15 s Pro) is below the ~17 s cold-cache cost of downloading and parsing both.
+* Links are parsed **sequentially**. Parsing is CPU-bound and single-threaded, so running both at once saved nothing while roughly doubling peak memory.
 * Parsed results are **cached server-side for 10 minutes** per URL, so the ~48 s is paid once per server process rather than once per session; a cache hit returns in 0 ms. The TTL keeps placements added during the day visible. If a refresh fails, the last good copy is served with a note rather than the tracker disappearing.
 * The load runs **once per session**, guarded by a flag in the calculator store rather than component state — the route remounts on every portal tab navigation, and a component-level flag would repeat the cost each visit.
 * It is triggered **after** the trade file is processed, never on mount. Node is single-threaded, so a cold-cache parse blocks every other server action: a trade file uploaded during that window had its account-holder lookup, DB-holdings sync and spot-price fetch all queued behind ~48 s of Excel parsing, which showed up as an upload hanging on "parsing…" or failing outright.

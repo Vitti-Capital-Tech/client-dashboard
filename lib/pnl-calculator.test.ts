@@ -7,6 +7,7 @@ import {
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
+  parsePlacementTrackerBuffer,
   combinePlacementMaps,
   resolvePlacementClientHints,
   buildPnlExportFilename,
@@ -1113,6 +1114,76 @@ const placementFile = (
       },
     ],
   ]),
+});
+
+test("parsePlacementTrackerBuffer - reads a real workbook via SheetJS", async () => {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  // A sheet that must be ignored, to prove the skip list still applies.
+  wb.addWorksheet("Template").addRow(["CLIENT NAME", "ADVISOR/BROKER"]);
+
+  // The Overview carries the Add-Ons column; header is NOT row 1, as in the real file.
+  const ov = wb.addWorksheet("2026 Overview");
+  ov.addRow([]);
+  ov.addRow([]);
+  ov.addRow(["Counter", "Date Issued", "Add-Ons"]);
+  ov.addRow(["GRV", "1 Jan 2026", "1:3 @$0.14 Unlisted Expiry 31/12/27"]);
+  ov.addRow(["ABE", "2 Jan 2026", "IPO"]);
+
+  // A ticker sheet: preamble rows, then the allocation table, then a Total row.
+  const ws = wb.addWorksheet("GRV (b)");
+  ws.addRow(["ONLY EDIT FIELDS HIGHLIGHTED"]);
+  ws.addRow(["Add-Ons", "1:3 @$0.14 Unlisted Expiry 31/12/27", "ASX CODE", "GRV"]);
+  ws.addRow(["Date", "", "Issue price ($)", 0.033]);
+  ws.addRow([]);
+  ws.addRow(["CLIENT NAME", "ADVISOR/BROKER", "Asking Bid ($)", "Allocation ($)", "# of shares", "Round Shares", "ACTUAL $", "Seller Fee ($)"]);
+  ws.addRow(["Total", "", 9000, 9000.03, 272728, 272728, 9000.03, 270]);
+  ws.addRow(["Zidiplus Pty Ltd", "VTC", 4000, 4000.0053, 121212.28, 121213, 4000.029, 120.0009]);
+  ws.addRow(["Mr Akshit Verma", "VTC", 5000, 5000.0067, 151515.35, 151515, 4999.995, 149.9998]);
+  // A row with no client name must be skipped, not counted.
+  ws.addRow([null, "VTC", 0, 0, 0, 0, 0, 0]);
+
+  const buffer = Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer);
+  const map = await parsePlacementTrackerBuffer(buffer);
+
+  assert.equal(map.size, 1, "only the ticker sheet becomes an entry");
+  const grv = map.get("GRV");
+  assert.ok(grv, "sheet name 'GRV (b)' must resolve to ticker GRV");
+
+  // "Total" and the nameless row are excluded; the two real clients are kept.
+  assert.equal(grv.clientAllocations.length, 2);
+  assert.deepEqual(
+    grv.clientAllocations.map((a) => a.clientName).sort(),
+    ["Mr Akshit Verma", "Zidiplus Pty Ltd"]
+  );
+
+  // Numbers keep full precision — raw cell values, not formatted text.
+  const zidi = grv.clientAllocations.find((a) => a.clientName === "Zidiplus Pty Ltd")!;
+  assert.equal(zidi.advisor, "VTC");
+  assert.equal(zidi.roundShares, 121213);
+  assert.equal(zidi.actualDollar, 4000.03);
+  assert.equal(zidi.askingBid, 4000);
+
+  assert.equal(grv.totalShares, 121213 + 151515);
+  // Each allocation is rounded to cents before summing: 4000.029 -> 4000.03 and
+  // 4999.995 -> 5000.00 (half-up), so the total is 9000.03, not 9000.02.
+  assert.equal(grv.totalActualDollar, 9000.03);
+
+  // The Add-Ons cell from the Overview is attached to the ticker.
+  assert.equal(grv.addOns?.length, 1);
+  assert.equal(grv.addOns?.[0].strike, 0.14);
+  assert.equal(grv.addOns?.[0].listed, false);
+});
+
+test("parsePlacementTrackerBuffer - a non-xlsx buffer fails with an actionable message", async () => {
+  await assert.rejects(
+    () => parsePlacementTrackerBuffer(Buffer.from("not a spreadsheet at all")),
+    (err: Error) => {
+      assert.match(err.message, /not a valid \.xlsx Excel workbook|link requires login/i);
+      return true;
+    }
+  );
 });
 
 test("combinePlacementMaps - repeated calls do not inflate the source workbooks", async () => {
