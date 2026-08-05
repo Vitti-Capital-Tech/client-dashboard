@@ -1480,6 +1480,41 @@ export function mergePlacementTrackerIntoSummary(
 }
 
 /**
+ * Splits a `PLACEMENT_TRACKER_URL`-style value into individual links.
+ *
+ * A bare comma or semicolon is NOT a safe separator for these URLs. A SharePoint
+ * "copy link" URL carries query parameters containing `%2C`, and if anything in the
+ * chain decodes that to a literal comma — pasting through a hosting provider's
+ * environment-variable UI will — splitting on commas tears the URL in half. That is
+ * exactly what happened in production: the long 2026 link split into a truncated URL
+ * plus the fragment `"Refreshin"`, so it failed while the short 2025 link still worked,
+ * and only one tracker ever appeared.
+ *
+ * So: split on whitespace (never legal inside a URL), or on a comma/semicolon **only
+ * when the next thing is the start of another URL**. Anything that does not look like an
+ * http(s) URL is returned in `rejected` rather than quietly attempted.
+ */
+export function splitTrackerUrls(raw: string): { urls: string[]; rejected: string[] } {
+  const parts = String(raw || "")
+    .split(/\s+|,(?=\s*https?:\/\/)|;(?=\s*https?:\/\/)/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const urls: string[] = [];
+  const rejected: string[] = [];
+
+  for (const part of parts) {
+    if (/^https?:\/\/\S+$/i.test(part)) {
+      if (!urls.includes(part)) urls.push(part);
+    } else {
+      rejected.push(part);
+    }
+  }
+
+  return { urls, rejected };
+}
+
+/**
  * Merges several Placement Tracker workbooks into one lookup.
  *
  * DEEP-copies each allocation. Copying only the array — `[...info.clientAllocations]` —

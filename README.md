@@ -177,8 +177,13 @@ The private key is multi-line — keep it double-quoted, either with real newlin
 #### Standing Placement Tracker links (optional — P&L calculator)
 So the desk never has to paste the same link again, set one or more **permanent** tracker URLs. The calculator loads them automatically, once per session, **right after a trade file is loaded** — not on page open, because on a cold cache the parse would starve that very upload's own server actions (see below). Separate several links with commas, semicolons or newlines — the desk keeps one workbook per year and they are merged exactly as if uploaded by hand:
 ```bash
-PLACEMENT_TRACKER_URL="https://docs.google.com/spreadsheets/d/<2026-ID>/edit,https://docs.google.com/spreadsheets/d/<2025-ID>/edit"
+PLACEMENT_TRACKER_URL="https://…/2026-tracker
+https://…/2025-tracker"
 ```
+
+> **Separate the links with a newline or a space, not a bare comma.** A SharePoint "copy link" URL contains `%2C` in its query string, and pasting it through a hosting provider's environment-variable UI can decode that to a real comma — splitting on commas then tears the URL in half. This is exactly what broke a deployed build: the long 2026 link became a truncated URL plus the fragment `Refreshin`, so it failed while the short 2025 link kept working and only one tracker appeared. A comma or semicolon is still accepted, but only where the next thing is another `http(s)://`, and anything that is not a URL is logged rather than silently attempted.
+>
+> Prefer the short share form (**Share → Copy link**, e.g. `…/:x:/g/personal/…/IQCabc?e=xxxx`) over the long `…/_layouts/15/doc2.aspx?sourcedoc=…&wdinitialsession=…` URL that the browser shows while a workbook is open for editing. The short form is stable, has no session parameters, and avoids the whole problem.
 Deliberately **not** a `NEXT_PUBLIC_` variable: for an "anyone with the link" sheet the URL *is* the credential, so it is read server-side only and never reaches the browser — the UI shows the downloaded filename instead. Private links still need the machine credentials above.
 
 These workbooks are big — the real 2026 and 2025 trackers are 12.5 MB and 9.3 MB across 177 sheets. Four things follow:

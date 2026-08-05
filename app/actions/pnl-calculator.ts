@@ -5,6 +5,7 @@ import {
   buildPnlExportXlsxBuffer,
   buildPnlExportCsvString,
   buildPnlExportFilename,
+  splitTrackerUrls,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
@@ -179,6 +180,30 @@ export interface ConfiguredTracker {
 }
 
 /**
+ * Splits `PLACEMENT_TRACKER_URL` into individual links.
+ *
+ * A bare comma or semicolon is NOT a safe separator for these URLs. A SharePoint
+ * "copy link" URL carries query parameters containing `%2C`, and if anything in the
+ * chain decodes that to a literal comma — pasting through a hosting provider's
+ * environment-variable UI will — splitting on commas tears the URL in half. That is
+ * exactly what happened in production: the long 2026 link split into a truncated URL
+ * plus the fragment `"Refreshin"`, so it 404'd while the short 2025 link still worked,
+ * and only one tracker ever appeared.
+ *
+ * So: split on whitespace (never legal inside a URL), or on a comma/semicolon **only
+ * when the next thing is the start of another URL**. Anything that does not look like an
+ * http(s) URL is reported rather than quietly attempted.
+ */
+/** Host only, so a log line can identify a link without publishing the credential. */
+function safeHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "(unparseable)";
+  }
+}
+
+/**
  * Parsed trackers, cached per URL for the life of the server process.
  *
  * Parsing the real workbooks costs **~48s of CPU** (30s for the 12.5 MB 2026 file, 18s
@@ -222,8 +247,19 @@ export async function loadConfiguredPlacementTrackersAction(): Promise<{
   const raw = process.env.PLACEMENT_TRACKER_URL?.trim();
   if (!raw) return { configured: false, trackers: [] };
 
-  const urls = [...new Set(raw.split(/[\n,;]+/).map((u) => u.trim()).filter(Boolean))];
+  const { urls, rejected } = splitTrackerUrls(raw);
+
+  if (rejected.length > 0) {
+    // Logged, not silently dropped: this is the one thing that is invisible from the UI.
+    console.error(
+      `PLACEMENT_TRACKER_URL: ignored ${rejected.length} entry(ies) that are not URLs:`,
+      rejected.map((r) => `"${r.slice(0, 24)}…" (${r.length} chars)`).join(", ")
+    );
+  }
+
   if (urls.length === 0) return { configured: false, trackers: [] };
+
+  console.log(`PLACEMENT_TRACKER_URL: ${urls.length} link(s) configured.`);
 
   const trackers: ConfiguredTracker[] = [];
 
@@ -246,6 +282,14 @@ export async function loadConfiguredPlacementTrackersAction(): Promise<{
       const res = await fetchPlacementTrackerUrlAction(url);
 
       if (!res.ok || res.placementItems.length === 0) {
+        // Logged with the link's shape but never the link itself — it may be the
+        // credential. This is what makes a production-only failure diagnosable.
+        console.error(
+          `PLACEMENT_TRACKER_URL[${index}] failed:`,
+          res.error || `parsed 0 tickers`,
+          `| host=${safeHost(url)} | urlLength=${url.length}`,
+          res.hint ? `| hint=${res.hint}` : ""
+        );
         // Keep serving a stale copy rather than losing the tracker outright.
         if (hit) {
           trackers.push({
@@ -268,6 +312,9 @@ export async function loadConfiguredPlacementTrackersAction(): Promise<{
       }
 
       const name = res.filename || fallbackName;
+      console.log(
+        `PLACEMENT_TRACKER_URL[${index}] loaded: ${name} | ${res.placementItems.length} tickers | via ${res.source} | host=${safeHost(url)}`
+      );
       trackerCache.set(url, {
         at: Date.now(),
         items: res.placementItems,

@@ -8,6 +8,7 @@ import {
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
   parsePlacementTrackerBuffer,
+  splitTrackerUrls,
   combinePlacementMaps,
   resolvePlacementClientHints,
   buildPnlExportFilename,
@@ -1184,6 +1185,48 @@ test("parsePlacementTrackerBuffer - a non-xlsx buffer fails with an actionable m
       return true;
     }
   );
+});
+
+test("splitTrackerUrls - a comma inside a SharePoint URL must not split it", async () => {
+  // Shortened but structurally faithful: the real 2026 link ends in a query parameter
+  // containing %2C, and something in the deploy pipeline decoded it to a real comma.
+  const long =
+    "https://x-my.sharepoint.com/:x:/r/personal/a/_layouts/15/doc2.aspx?sourcedoc=%7BGUID%7D&wdrldc=ExpiredWarningUnauthenticated,RefreshingExpiredWarning";
+  const short = "https://x-my.sharepoint.com/:x:/g/personal/a/IQCabc?e=VbcU4x";
+
+  // The failure that shipped: splitting on any comma tore the long link in two and left
+  // a junk fragment, so it 404'd while the short one still worked.
+  const naive = `${long},${short}`.split(/[\n,;]+/).filter(Boolean);
+  assert.equal(naive.length, 3, "the old splitter produced a broken URL plus a fragment");
+
+  const fixed = splitTrackerUrls(`${long},${short}`);
+  assert.deepEqual(fixed.urls, [long, short]);
+  assert.deepEqual(fixed.rejected, []);
+});
+
+test("splitTrackerUrls - accepts every sane separator and reports junk", async () => {
+  const a = "https://example.com/a.xlsx";
+  const b = "https://example.com/b.xlsx";
+
+  for (const joiner of [",", ";", " ", "\n", "\r\n", ", ", " , ", "\n\n"]) {
+    assert.deepEqual(
+      splitTrackerUrls(`${a}${joiner}${b}`).urls,
+      [a, b],
+      `failed on ${JSON.stringify(joiner)}`
+    );
+  }
+
+  // Duplicates collapse.
+  assert.deepEqual(splitTrackerUrls(`${a}\n${a}`).urls, [a]);
+
+  // Anything that is not an http(s) URL is surfaced, not silently attempted.
+  const withJunk = splitTrackerUrls(`${a}\nnot-a-url\n/relative/path\n${b}`);
+  assert.deepEqual(withJunk.urls, [a, b]);
+  assert.deepEqual(withJunk.rejected, ["not-a-url", "/relative/path"]);
+
+  // Empty and whitespace-only values yield nothing at all.
+  assert.deepEqual(splitTrackerUrls("").urls, []);
+  assert.deepEqual(splitTrackerUrls("   \n  ").urls, []);
 });
 
 test("combinePlacementMaps - repeated calls do not inflate the source workbooks", async () => {
