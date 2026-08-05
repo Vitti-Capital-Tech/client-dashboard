@@ -1493,11 +1493,20 @@ export function mergePlacementTrackerIntoSummary(
  * So: split on whitespace (never legal inside a URL), or on a comma/semicolon **only
  * when the next thing is the start of another URL**. Anything that does not look like an
  * http(s) URL is returned in `rejected` rather than quietly attempted.
+ *
+ * Surrounding quotes are also stripped. A `.env` file wants `KEY="value"` and dotenv
+ * removes the quotes for you, which trains people to include them — but a hosting
+ * provider's environment UI stores the value verbatim, so the quote becomes part of the
+ * URL. That shipped too: the deploy log read `ignored 1 entry … ""https://netorgft…"
+ * (325 chars)`, exactly one character longer than the real link.
  */
 export function splitTrackerUrls(raw: string): { urls: string[]; rejected: string[] } {
-  const parts = String(raw || "")
-    .split(/\s+|,(?=\s*https?:\/\/)|;(?=\s*https?:\/\/)/)
-    .map((p) => p.trim())
+  // A quote is never legal in a URL, so stripping it from either end is unambiguous.
+  const unquote = (s: string) => s.replace(/^["'\s]+/, "").replace(/["'\s]+$/, "");
+
+  const parts = unquote(String(raw || ""))
+    .split(/\s+|,(?=\s*["']?\s*https?:\/\/)|;(?=\s*["']?\s*https?:\/\/)/)
+    .map(unquote)
     .filter(Boolean);
 
   const urls: string[] = [];

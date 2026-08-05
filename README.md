@@ -181,6 +181,8 @@ PLACEMENT_TRACKER_URL="https://…/2026-tracker
 https://…/2025-tracker"
 ```
 
+> **In a hosting provider's environment UI, paste the URL *without* surrounding quotes.** A `.env` file needs `KEY="value"` and dotenv strips the quotes for you; a provider's UI stores the value verbatim, so the quote becomes part of the URL and the link is rejected. (Both cases are now handled — quotes are stripped either way — but leaving them out is clearer.)
+>
 > **Separate the links with a newline or a space, not a bare comma.** A SharePoint "copy link" URL contains `%2C` in its query string, and pasting it through a hosting provider's environment-variable UI can decode that to a real comma — splitting on commas then tears the URL in half. This is exactly what broke a deployed build: the long 2026 link became a truncated URL plus the fragment `Refreshin`, so it failed while the short 2025 link kept working and only one tracker appeared. A comma or semicolon is still accepted, but only where the next thing is another `http(s)://`, and anything that is not a URL is logged rather than silently attempted.
 >
 > Prefer the short share form (**Share → Copy link**, e.g. `…/:x:/g/personal/…/IQCabc?e=xxxx`) over the long `…/_layouts/15/doc2.aspx?sourcedoc=…&wdinitialsession=…` URL that the browser shows while a workbook is open for editing. The short form is stable, has no session parameters, and avoids the whole problem.

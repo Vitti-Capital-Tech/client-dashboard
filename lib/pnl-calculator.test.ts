@@ -1229,6 +1229,33 @@ test("splitTrackerUrls - accepts every sane separator and reports junk", async (
   assert.deepEqual(splitTrackerUrls("   \n  ").urls, []);
 });
 
+test("splitTrackerUrls - quotes pasted into a hosting provider's env UI are stripped", async () => {
+  const a = "https://example.com/a.xlsx";
+  const b = "https://example.com/b.xlsx";
+
+  // A `.env` file needs KEY="value" and dotenv strips the quotes; a hosting provider's
+  // UI stores them verbatim, so they arrive as part of the URL. The deploy log showed
+  // exactly this: one rejected entry, one character longer than the real link.
+  assert.deepEqual(splitTrackerUrls(`"${a}"`).urls, [a]);
+  assert.deepEqual(splitTrackerUrls(`'${a}'`).urls, [a]);
+
+  // Quotes wrapping the whole value, with the links comma-separated inside.
+  const wrapped = splitTrackerUrls(`"${a},${b}"`);
+  assert.deepEqual(wrapped.urls, [a, b]);
+  assert.deepEqual(wrapped.rejected, []);
+
+  // Each link separately quoted.
+  assert.deepEqual(splitTrackerUrls(`"${a}", "${b}"`).urls, [a, b]);
+  assert.deepEqual(splitTrackerUrls(`"${a}"\n"${b}"`).urls, [a, b]);
+
+  // A stray trailing quote must not survive into the URL — Graph would 404 on it.
+  assert.deepEqual(splitTrackerUrls(`${a},${b}"`).urls, [a, b]);
+  assert.equal(
+    splitTrackerUrls(`${a},${b}"`).urls.every((u) => !u.includes('"')),
+    true
+  );
+});
+
 test("combinePlacementMaps - repeated calls do not inflate the source workbooks", async () => {
   // The 2025 and 2026 trackers both list ABE for the same client.
   const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000);
