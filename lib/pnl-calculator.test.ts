@@ -15,6 +15,7 @@ import {
   buildUnlistedOptionRows,
   collectUnlistedOptionTickers,
   exportStatus,
+  exportOpenQty,
 } from "./pnl-calculator.ts";
 import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
 
@@ -1796,6 +1797,49 @@ test("buildUnlistedOptionRows - an unpriced name is reported once, not per tranc
   assert.equal(built.addedCount, 2);
   assert.deepEqual(built.skipped, ["RCE"], "one warning per name, not one per tranche");
   assert.equal(built.summary.filter((s) => s.isUnlistedOption).every((r) => r.sellPrice === 0), true);
+});
+
+test("exportOpenQty - a sold or granted option reports no open quantity", async () => {
+  const base = {
+    ticker: "X", company: "X", buyQty: 0, sellQty: 0, buyPrice: 0, sellPrice: 0,
+    totalBuyValue: 0, totalSellValue: 0, pnlCalculated: 0, isMatched: false,
+    isOption: false, tradeCount: 0,
+  };
+
+  // A sold option never bought: buyQty - sellQty is negative. There is no such thing
+  // as a negative open position, and printing one reads as units still held.
+  assert.equal(exportOpenQty({ ...base, openQty: -3333 }), "");
+  assert.equal(exportOpenQty({ ...base, openQty: -1 }), "");
+  // Fully closed keeps its explicit zero — accurate, and not a missing value.
+  assert.equal(exportOpenQty({ ...base, openQty: 0 }), 0);
+  // A genuinely open parcel still reports its units.
+  assert.equal(exportOpenQty({ ...base, openQty: 71213 }), 71213);
+});
+
+test("exportOpenQty - the exports leave Open Qty blank for an unlisted option row", async () => {
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap(),
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  const uo = built.summary.find((s) => s.isUnlistedOption);
+  assert.equal(uo?.openQty, -3333, "the underlying field still records buy minus sell");
+
+  const lines = buildPnlExportCsvString(built.summary).split("\r\n");
+  const header = lines[0].split(",");
+  const openIdx = header.indexOf("Open Qty");
+  assert.ok(openIdx > -1);
+
+  const uoLine = lines.find((l) => l.startsWith("GRV-UO"))!.split(",");
+  assert.equal(uoLine[openIdx], "", `expected blank Open Qty, got ${JSON.stringify(uoLine[openIdx])}`);
+  // No "-3333" anywhere on the row.
+  assert.equal(uoLine.includes("-3333"), false);
+
+  // The equity line, still fully open, keeps its number.
+  const gedLine = lines.find((l) => l.startsWith("GRV,"))!.split(",");
+  assert.equal(gedLine[openIdx], "10000");
 });
 
 test("exportStatus - option lines are never reported as Unmatched", async () => {

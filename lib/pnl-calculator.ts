@@ -222,6 +222,21 @@ export function getSummaryGroupKey(rawCode: string): string {
  * does not exist. Options say what they are instead, matching the table, where the
  * Unmatched badge and the Unmatched tab both exclude them.
  */
+/**
+ * The `Open Qty` cell for an exported row.
+ *
+ * `openQty` is `buyQty - sellQty`, so a SOLD option that was never bought — a free
+ * placement grant, or a sale with no recorded buy — comes out NEGATIVE. There is no
+ * such thing as a negative open position, and printing one reads as a quantity still
+ * held, so it is blanked.
+ *
+ * A closed row's `0` is kept: it is accurate, and it says "nothing open" explicitly
+ * rather than looking like a missing value.
+ */
+export function exportOpenQty(item: PnlSummaryItem): number | "" {
+  return item.openQty < 0 ? "" : item.openQty;
+}
+
 export function exportStatus(item: PnlSummaryItem): string {
   // Checked before `isMatched`: a DB-only row trivially reconciles because both legs
   // were set from the same held quantity, so "Matched" would imply a trade
@@ -838,7 +853,7 @@ export async function buildPnlExportXlsxBuffer(
       sellPrice: item.sellPrice,
       pnlCalculated: item.pnlCalculated,
       status: exportStatus(item),
-      openQty: item.openQty,
+      openQty: exportOpenQty(item),
       comment: item.comment ?? "",
     });
 
@@ -931,7 +946,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
         item.sellPrice.toFixed(2),
         item.pnlCalculated.toFixed(2),
         item.isEdited && !item.isMatched ? "Edited" : exportStatus(item),
-        item.openQty,
+        exportOpenQty(item),
         item.comment ?? "",
       ]
         .map(escapeCsv)
