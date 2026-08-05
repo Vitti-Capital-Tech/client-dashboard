@@ -15,7 +15,6 @@ import {
   buildUnlistedOptionRows,
   collectUnlistedOptionTickers,
   exportStatus,
-  exportOpenQty,
 } from "./pnl-calculator.ts";
 import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
 
@@ -225,11 +224,19 @@ test("PNL Calculator - CSV export string contains required columns and numbers",
   const csv = buildPnlExportCsvString(summary);
   assert.ok(
     csv.includes(
-      "Ticker,Company,Instrument,Underlying,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Status,Open Qty"
+      "Ticker,Company,Instrument,Underlying,Buy Qty (Sum),Sell Qty (Sum),Buy Price,Sell Price,PnL Calculated,Status,Comments"
     )
   );
-  assert.ok(csv.includes("EOS,ELECTRO C FPO,Equity,EOS,407,407,3256.00,3300.77,44.77,Matched,0"));
+  assert.equal(csv.includes("Open Qty"), false, "the Open Qty column was removed");
+  assert.ok(csv.includes("EOS,ELECTRO C FPO,Equity,EOS,407,407,3256.00,3300.77,44.77,Matched,"));
   assert.ok(csv.includes("Grand Total"));
+
+  // Every row, header and Grand Total included, must have the same column count.
+  const lines = csv.split("\r\n");
+  const width = lines[0].split(",").length;
+  for (const line of lines) {
+    assert.equal(line.split(",").length, width, `ragged row: ${line}`);
+  }
 });
 
 test("PNL Calculator - CSV export labels the option line and its underlying", async () => {
@@ -254,7 +261,8 @@ test("PNL Calculator - CSV export labels the option line and its underlying", as
     },
   ]);
 
-  assert.ok(csv.includes("GEDO,GOLDEN DEEPS OPTION,Option,GED,5000,5000,100.00,50.00,-50.00,Matched,0"));
+  // Trailing empty field is Comments — the last column now that Open Qty is gone.
+  assert.ok(csv.includes("GEDO,GOLDEN DEEPS OPTION,Option,GED,5000,5000,100.00,50.00,-50.00,Matched,"));
 });
 
 test("PNL Calculator - XLSX export buffer builds cleanly", async () => {
@@ -1799,24 +1807,7 @@ test("buildUnlistedOptionRows - an unpriced name is reported once, not per tranc
   assert.equal(built.summary.filter((s) => s.isUnlistedOption).every((r) => r.sellPrice === 0), true);
 });
 
-test("exportOpenQty - a sold or granted option reports no open quantity", async () => {
-  const base = {
-    ticker: "X", company: "X", buyQty: 0, sellQty: 0, buyPrice: 0, sellPrice: 0,
-    totalBuyValue: 0, totalSellValue: 0, pnlCalculated: 0, isMatched: false,
-    isOption: false, tradeCount: 0,
-  };
-
-  // A sold option never bought: buyQty - sellQty is negative. There is no such thing
-  // as a negative open position, and printing one reads as units still held.
-  assert.equal(exportOpenQty({ ...base, openQty: -3333 }), "");
-  assert.equal(exportOpenQty({ ...base, openQty: -1 }), "");
-  // Fully closed keeps its explicit zero — accurate, and not a missing value.
-  assert.equal(exportOpenQty({ ...base, openQty: 0 }), 0);
-  // A genuinely open parcel still reports its units.
-  assert.equal(exportOpenQty({ ...base, openQty: 71213 }), 71213);
-});
-
-test("exportOpenQty - the exports leave Open Qty blank for an unlisted option row", async () => {
+test("Exports carry no Open Qty column, and a granted option leaks no negative", async () => {
   const built = buildUnlistedOptionRows(
     grvEquityRow(10000),
     unlistedPlacementMap(),
@@ -1824,22 +1815,28 @@ test("exportOpenQty - the exports leave Open Qty blank for an unlisted option ro
     new Date("2026-08-04T00:00:00Z")
   );
 
+  // The field itself still records buy minus sell — only the export dropped it.
   const uo = built.summary.find((s) => s.isUnlistedOption);
-  assert.equal(uo?.openQty, -3333, "the underlying field still records buy minus sell");
+  assert.equal(uo?.openQty, -3333);
 
-  const lines = buildPnlExportCsvString(built.summary).split("\r\n");
-  const header = lines[0].split(",");
-  const openIdx = header.indexOf("Open Qty");
-  assert.ok(openIdx > -1);
+  const csv = buildPnlExportCsvString(built.summary);
+  const lines = csv.split("\r\n");
 
-  const uoLine = lines.find((l) => l.startsWith("GRV-UO"))!.split(",");
-  assert.equal(uoLine[openIdx], "", `expected blank Open Qty, got ${JSON.stringify(uoLine[openIdx])}`);
-  // No "-3333" anywhere on the row.
-  assert.equal(uoLine.includes("-3333"), false);
+  assert.equal(lines[0].includes("Open Qty"), false, "column removed from the header");
+  // A granted option's negative open qty must not appear anywhere in the file.
+  assert.equal(csv.includes("-3333"), false);
+  // Comments is now the last column.
+  assert.ok(lines[0].endsWith("Comments"), lines[0]);
+  assert.ok(lines.find((l) => l.startsWith("GRV-UO"))!.endsWith("Unlisted Options"));
 
-  // The equity line, still fully open, keeps its number.
-  const gedLine = lines.find((l) => l.startsWith("GRV,"))!.split(",");
-  assert.equal(gedLine[openIdx], "10000");
+  // Header, every row and Grand Total stay the same width.
+  const width = lines[0].split(",").length;
+  for (const line of lines) {
+    assert.equal(line.split(",").length, width, `ragged row: ${line}`);
+  }
+
+  const xlsx = await buildPnlExportXlsxBuffer(built.summary);
+  assert.ok(xlsx.length > 0);
 });
 
 test("exportStatus - option lines are never reported as Unmatched", async () => {
