@@ -312,6 +312,70 @@ export async function fetchSpotPricesAction(
   return { ok: true, prices };
 }
 
+export interface AccountHolder {
+  /** Broker account number exactly as it appeared in the trade file. */
+  accountRef: string;
+  /** `clients.display_name` — the account name the broker export carried. */
+  clientName: string;
+}
+
+/**
+ * Resolves the trade file's `Account` numbers to the account holders' names.
+ *
+ * This is what lets the Placement Tracker merge identify the client without relying
+ * on the uploaded file being *named* after them. The account number is data from
+ * inside the file; a filename is a convention someone has to remember. (Real case:
+ * `PKevadiya-…csv` actually belongs to "Sri Guru Nanak Pty Ltd" — the filename
+ * matches nothing in the placement sheets.)
+ *
+ * Matching is on the normalised `external_ref`, the same way `fetchDatabaseHoldings`
+ * does it, so `114716` and `114716.0` resolve alike. Accounts absent from the
+ * database are simply omitted; the caller falls back to the filename for those.
+ */
+export async function resolveAccountHoldersAction(
+  accountRefs: string[]
+): Promise<{ ok: boolean; holders: AccountHolder[]; error?: string }> {
+  const wanted = [...new Set((accountRefs || []).map((r) => String(r || "").trim()).filter(Boolean))];
+  if (wanted.length === 0) return { ok: true, holders: [] };
+
+  try {
+    const { createClient } = await import("@/lib/supabase/server");
+    const { normalizeAccountNo } = await import("@/lib/pnl-calculator");
+    const supabase = await createClient();
+
+    const [accRes, clientRes] = await Promise.all([
+      supabase.from("accounts").select("external_ref, ref, client_id"),
+      supabase.from("clients").select("id, display_name"),
+    ]);
+
+    if (accRes.error) return { ok: false, holders: [], error: accRes.error.message };
+
+    const nameById = new Map((clientRes.data || []).map((c) => [c.id, c.display_name as string]));
+    const wantedByNorm = new Map(wanted.map((r) => [normalizeAccountNo(r), r]));
+
+    const holders: AccountHolder[] = [];
+    const seen = new Set<string>();
+
+    for (const a of accRes.data || []) {
+      for (const candidate of [a.external_ref, a.ref]) {
+        const norm = normalizeAccountNo(candidate);
+        const original = norm ? wantedByNorm.get(norm) : undefined;
+        if (!original || seen.has(original)) continue;
+        const clientName = nameById.get(a.client_id as string);
+        if (!clientName) continue;
+        holders.push({ accountRef: original, clientName });
+        seen.add(original);
+      }
+    }
+
+    return { ok: true, holders };
+  } catch (err) {
+    console.error("Error resolving account holders:", err);
+    const message = err instanceof Error ? err.message : "Failed to resolve account holders.";
+    return { ok: false, holders: [], error: message };
+  }
+}
+
 export interface DbHoldingInfo {
   accountRef: string;
   ticker: string;

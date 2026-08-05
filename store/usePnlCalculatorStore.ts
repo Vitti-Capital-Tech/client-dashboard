@@ -67,6 +67,13 @@ interface PnlCalculatorState {
   placementUrl: string;
   filterType: PnlFilterType;
   searchQuery: string;
+  /**
+   * Broker account number → account holder's name, resolved from the database.
+   *
+   * The trade file's `Account` column identifies the client far more reliably than
+   * its filename does, so this is what the Placement Tracker merge matches on.
+   */
+  accountHolders: Record<string, string>;
 
   setTradeFiles: Setter<UploadedTradeFile[]>;
   setResult: Setter<ParseResult | null>;
@@ -77,6 +84,7 @@ interface PnlCalculatorState {
   setPlacementUrl: Setter<string>;
   setFilterType: Setter<PnlFilterType>;
   setSearchQuery: Setter<string>;
+  setAccountHolders: Setter<Record<string, string>>;
 
   /** Drop everything back to a fresh calculator. */
   reset: () => void;
@@ -96,6 +104,7 @@ const initialState = () => ({
   placementUrl: "",
   filterType: "all" as PnlFilterType,
   searchQuery: "",
+  accountHolders: {} as Record<string, string>,
 });
 
 export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
@@ -110,6 +119,7 @@ export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
   setPlacementUrl: (v) => set((s) => ({ placementUrl: next(v, s.placementUrl) })),
   setFilterType: (v) => set((s) => ({ filterType: next(v, s.filterType) })),
   setSearchQuery: (v) => set((s) => ({ searchQuery: next(v, s.searchQuery) })),
+  setAccountHolders: (v) => set((s) => ({ accountHolders: next(v, s.accountHolders) })),
 
   reset: () => set(initialState()),
 }));

@@ -7,6 +7,8 @@ import {
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
+  resolvePlacementClientHints,
+  isClientMatch,
   parseAddOnSpec,
   parseAddOnSpecs,
   buildUnlistedOptionRows,
@@ -928,6 +930,86 @@ test("PNL Calculator - Comments column reaches both exports", async () => {
 
   const xlsx = await buildPnlExportXlsxBuffer(merged.summary);
   assert.ok(xlsx.length > 0);
+});
+
+test("resolvePlacementClientHints - the Account column beats the file name", async () => {
+  const stem = (n: string) => n.replace(/\.[^.]+$/, "");
+  const base = { override: "__auto__", autoSentinel: "__auto__", filenameStem: stem };
+
+  // The real failing case: the file is named after nobody in the placement sheets,
+  // but its Account column resolves to the actual holder.
+  const resolved = resolvePlacementClientHints({
+    ...base,
+    files: [{ name: "PKevadiya-516908e3.csv", accounts: ["114716"] }],
+    accountHolders: { "114716": "Sri Guru Nanak PTY LTD" },
+  });
+  assert.deepEqual(resolved.hints, ["Sri Guru Nanak PTY LTD"]);
+  assert.equal(resolved.source, "account");
+  // And that name does match a placement sheet, which the file name never would.
+  assert.equal(isClientMatch("Sri Guru Nanak Pty Ltd", "Sri Guru Nanak PTY LTD"), true);
+  assert.equal(isClientMatch("Sri Guru Nanak Pty Ltd", "PKevadiya-516908e3"), false);
+
+  // An account the database does not know falls back to the file name.
+  const fallback = resolvePlacementClientHints({
+    ...base,
+    files: [{ name: "Zidiplus.csv", accounts: ["9999999"] }],
+    accountHolders: {},
+  });
+  assert.deepEqual(fallback.hints, ["Zidiplus"]);
+  assert.equal(fallback.source, "filename");
+
+  // A file with no Account column at all also falls back.
+  const noAccounts = resolvePlacementClientHints({
+    ...base,
+    files: [{ name: "Vijan.xlsx" }],
+    accountHolders: { "114794": "Rg Vijan PTY LTD" },
+  });
+  assert.deepEqual(noAccounts.hints, ["Vijan"]);
+  assert.equal(noAccounts.source, "filename");
+});
+
+test("resolvePlacementClientHints - an explicit choice always wins, and multi-account files dedupe", async () => {
+  const stem = (n: string) => n.replace(/\.[^.]+$/, "");
+  const base = { autoSentinel: "__auto__", filenameStem: stem };
+
+  // Staff picked someone: neither the account nor the file name may override it.
+  const picked = resolvePlacementClientHints({
+    ...base,
+    override: "Mr Akshit Verma",
+    files: [{ name: "Zidiplus.csv", accounts: ["1103199"] }],
+    accountHolders: { "1103199": "Zidiplus PTY LTD" },
+  });
+  assert.deepEqual(picked.hints, ["Mr Akshit Verma"]);
+  assert.equal(picked.source, "override");
+
+  // Several files, several accounts, one repeated holder -> deduped.
+  const many = resolvePlacementClientHints({
+    ...base,
+    override: "__auto__",
+    files: [
+      { name: "a.csv", accounts: ["114716", "1103199"] },
+      { name: "b.csv", accounts: ["1103199"] },
+    ],
+    accountHolders: { "114716": "Sri Guru Nanak PTY LTD", "1103199": "Zidiplus PTY LTD" },
+  });
+  assert.deepEqual(many.hints, ["Sri Guru Nanak PTY LTD", "Zidiplus PTY LTD"]);
+
+  // Partially resolved: known accounts win outright rather than being mixed with a
+  // file name, which would risk pulling in a second client's allocation.
+  const partial = resolvePlacementClientHints({
+    ...base,
+    override: "__auto__",
+    files: [{ name: "SomeoneElse.csv", accounts: ["114716", "9999999"] }],
+    accountHolders: { "114716": "Sri Guru Nanak PTY LTD" },
+  });
+  assert.deepEqual(partial.hints, ["Sri Guru Nanak PTY LTD"]);
+  assert.equal(partial.source, "account");
+
+  // Nothing to go on at all.
+  assert.deepEqual(
+    resolvePlacementClientHints({ ...base, override: "__auto__", files: [], accountHolders: {} }),
+    { hints: [], source: "none" }
+  );
 });
 
 test("PNL Calculator - collectPlacementClientNames dedupes across sheets", async () => {

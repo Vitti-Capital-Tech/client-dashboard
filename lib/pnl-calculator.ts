@@ -1443,6 +1443,49 @@ export function mergePlacementTrackerIntoSummary(
 }
 
 /**
+ * Which account-holder name(s) the Placement Tracker merge should match on.
+ *
+ * Preference order is the whole point:
+ *
+ *   1. An explicit choice by staff always wins.
+ *   2. Names resolved from the trade file's `Account` column via the database. The
+ *      account number is DATA INSIDE THE FILE; it identifies the client whatever the
+ *      file is called.
+ *   3. The file name, only as a last resort.
+ *
+ * A filename is a convention someone has to remember, and it is often simply wrong:
+ * `PKevadiya-….csv` belongs to "Sri Guru Nanak Pty Ltd" and matches nothing in the
+ * placement sheets, leaving four tickers unfilled that the account number resolves.
+ */
+export function resolvePlacementClientHints(args: {
+  /** Per-file account numbers and names, in upload order. */
+  files: Array<{ name: string; accounts?: string[] }>;
+  /** Explicit staff choice, or `autoSentinel` to infer. */
+  override: string;
+  autoSentinel: string;
+  /** Account number → holder name, resolved from the database. */
+  accountHolders: Record<string, string>;
+  /** How a file name is reduced to a candidate name. */
+  filenameStem: (name: string) => string;
+}): { hints: string[]; source: "override" | "account" | "filename" | "none" } {
+  const { files, override, autoSentinel, accountHolders, filenameStem } = args;
+
+  if (override !== autoSentinel) return { hints: [override], source: "override" };
+
+  const fromAccounts = [
+    ...new Set(
+      files.flatMap((f) => (f.accounts || []).map((ref) => accountHolders[ref]).filter(Boolean))
+    ),
+  ];
+  if (fromAccounts.length > 0) return { hints: fromAccounts, source: "account" };
+
+  const fromNames = files.map((f) => filenameStem(f.name)).filter(Boolean);
+  return fromNames.length > 0
+    ? { hints: fromNames, source: "filename" }
+    : { hints: [], source: "none" };
+}
+
+/**
  * Every distinct account holder named across a set of parsed Placement Tracker
  * sheets — the candidate list staff pick from when a trade-file name does not
  * identify the client on its own.

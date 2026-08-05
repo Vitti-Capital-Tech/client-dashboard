@@ -8,6 +8,7 @@ import {
   fetchPlacementTrackerUrlAction,
   fetchDatabaseHoldingsAction,
   fetchSpotPricesAction,
+  resolveAccountHoldersAction,
 } from "@/app/actions/pnl-calculator";
 import {
   parsePnlFileBuffer,
@@ -18,6 +19,7 @@ import {
   collectUnlistedOptionTickers,
   placementArrayToMap,
   collectPlacementClientNames,
+  resolvePlacementClientHints,
   isClientMatch,
   aggregateTradesToSummary,
   normalizeAccountNo,
@@ -66,6 +68,8 @@ export function PnlCalculatorClient() {
   const setFilterType = usePnlCalculatorStore((s) => s.setFilterType);
   const searchQuery = usePnlCalculatorStore((s) => s.searchQuery);
   const setSearchQuery = usePnlCalculatorStore((s) => s.setSearchQuery);
+  const accountHolders = usePnlCalculatorStore((s) => s.accountHolders);
+  const setAccountHolders = usePnlCalculatorStore((s) => s.setAccountHolders);
   const resetStore = usePnlCalculatorStore((s) => s.reset);
 
   // Transient UI state stays local — a half-finished drag, an open tooltip or a
@@ -131,13 +135,30 @@ export function PnlCalculatorClient() {
    * their names are the default hint; `placementClient` is the explicit override
    * for when they are not.
    */
+  /**
+   * Who the Placement Tracker merge should treat these trades as belonging to.
+   *
+   * Preference order matters. The trade file's `Account` column resolved against the
+   * database is real data; a filename is a convention someone has to remember, and it
+   * is often simply wrong — `PKevadiya-…csv` actually belongs to "Sri Guru Nanak Pty
+   * Ltd", which matches nothing in the placement sheets. So account-derived names win,
+   * and the filename stays only as a fallback for accounts the database does not know.
+   *
+   * `holders` may be passed explicitly because callers resolve it and re-merge in the
+   * same tick, before the store state has flushed.
+   */
   const getClientHints = (
     files: UploadedTradeFile[] = tradeFiles,
-    override: string = placementClient
-  ): string[] => {
-    if (override !== AUTO_CLIENT) return [override];
-    return files.map((tf) => getFilenameStem(tf.name)).filter(Boolean);
-  };
+    override: string = placementClient,
+    holders: Record<string, string> = accountHolders
+  ): string[] =>
+    resolvePlacementClientHints({
+      files,
+      override,
+      autoSentinel: AUTO_CLIENT,
+      accountHolders: holders,
+      filenameStem: getFilenameStem,
+    }).hints;
 
   /** Human-readable label for whichever account holder the merge resolved to. */
   const describeClientHints = (hints: string[]): string =>
@@ -597,7 +618,8 @@ export function PnlCalculatorClient() {
 
   const recalculateTradeFiles = (
     activeTradeFiles: UploadedTradeFile[],
-    targetAcc?: string
+    targetAcc?: string,
+    holders?: Record<string, string>
   ) => {
     if (activeTradeFiles.length === 0) {
       setResult(null);
@@ -628,9 +650,10 @@ export function PnlCalculatorClient() {
     let finalSummary = aggregatedSummary;
     let finalTotalPnl = aggregatedPnl;
 
-    // Hints come from `activeTradeFiles`, not the `tradeFiles` state — this runs
-    // in the same tick as setTradeFiles, so the state has not updated yet.
-    const clientHints = getClientHints(activeTradeFiles);
+    // Hints come from `activeTradeFiles` and the passed-in `holders`, not from state —
+    // this runs in the same tick as setTradeFiles/setAccountHolders, so neither has
+    // updated yet.
+    const clientHints = getClientHints(activeTradeFiles, placementClient, holders ?? accountHolders);
 
     if (placementFiles.length > 0) {
       const combinedPlacementMap = combinePlacementMaps(placementFiles);
@@ -743,7 +766,31 @@ export function PnlCalculatorClient() {
         if (fileInputRef.current) fileInputRef.current.value = "";
         if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
 
-        recalculateTradeFiles(updatedTradeFileList, "all");
+        // Resolve the file's Account numbers to account holders BEFORE merging, so the
+        // placement merge matches on who the account belongs to rather than on what
+        // the file happens to be called.
+        const refs = [...new Set(updatedTradeFileList.flatMap((tf) => tf.accounts || []))];
+        let holders = accountHolders;
+        if (refs.length > 0) {
+          const resolved = await resolveAccountHoldersAction(refs);
+          if (resolved.ok && resolved.holders.length > 0) {
+            holders = { ...accountHolders };
+            for (const h of resolved.holders) holders[h.accountRef] = h.clientName;
+            setAccountHolders(holders);
+          }
+          const unresolved = refs.filter((r) => !holders[r]);
+          if (unresolved.length > 0) {
+            setPlacementMsg({
+              type: "success",
+              text: `Identified account holder(s): ${
+                [...new Set(refs.map((r) => holders[r]).filter(Boolean))].join(", ") || "none"
+              }.`,
+              hint: `Account ${unresolved.join(", ")} is not in the database, so the placement merge falls back to the file name for it. Import the holdings snapshot for that account, or pick the account holder manually.`,
+            });
+          }
+        }
+
+        recalculateTradeFiles(updatedTradeFileList, "all", holders);
       } catch (err: any) {
         console.error("Error processing trade file(s):", err);
       }
