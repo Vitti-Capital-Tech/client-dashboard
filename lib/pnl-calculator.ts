@@ -1437,6 +1437,62 @@ export function mergePlacementTrackerIntoSummary(
 }
 
 /**
+ * Merges several Placement Tracker workbooks into one lookup.
+ *
+ * DEEP-copies each allocation. Copying only the array — `[...info.clientAllocations]` —
+ * leaves the element objects shared with the caller's stored maps, so the
+ * `found.roundShares += …` below would mutate the source data. Since this runs on every
+ * re-merge (each trade upload, each account switch), that made allocations grow without
+ * bound: a ticker present in both the 2025 and 2026 workbooks doubled, then tripled,
+ * and the Buy Qty crept up every time anything was re-uploaded.
+ *
+ * Add-ons are taken from the first workbook that has them rather than concatenated —
+ * two workbooks listing the same placement would otherwise double every tranche.
+ */
+export function combinePlacementMaps(
+  files: Array<{ map: Map<string, PlacementTickerInfo> }>
+): Map<string, PlacementTickerInfo> {
+  const combined = new Map<string, PlacementTickerInfo>();
+
+  for (const f of files) {
+    for (const [ticker, info] of f.map.entries()) {
+      const existing = combined.get(ticker);
+
+      if (!existing) {
+        combined.set(ticker, {
+          ticker: info.ticker,
+          company: info.company,
+          totalShares: info.totalShares,
+          totalActualDollar: info.totalActualDollar,
+          clientAllocations: info.clientAllocations.map((a) => ({ ...a })),
+          addOns: info.addOns ? info.addOns.map((a) => ({ ...a })) : undefined,
+        });
+        continue;
+      }
+
+      existing.totalShares += info.totalShares;
+      existing.totalActualDollar += info.totalActualDollar;
+
+      if (!existing.addOns?.length && info.addOns?.length) {
+        existing.addOns = info.addOns.map((a) => ({ ...a }));
+      }
+
+      for (const alloc of info.clientAllocations) {
+        const found = existing.clientAllocations.find((a) => a.clientName === alloc.clientName);
+        if (found) {
+          found.roundShares += alloc.roundShares;
+          found.actualDollar += alloc.actualDollar;
+        } else {
+          existing.clientAllocations.push({ ...alloc });
+        }
+      }
+    }
+  }
+
+  return combined;
+}
+
+/**
  * Which account-holder name(s) the Placement Tracker merge should match on.
  *
  * Preference order is the whole point:

@@ -78,6 +78,37 @@ test("PNL store - nullable slices round-trip, including back to null", async () 
   assert.equal(store().result, null);
 });
 
+test("PNL store - the configured-tracker guard survives what it needs to", async () => {
+  store().reset();
+  assert.equal(store().configuredTrackersAttempted, false);
+
+  store().setConfiguredTrackersAttempted(true);
+  assert.equal(store().configuredTrackersAttempted, true);
+
+  // The guard has to live here rather than in component state, because the route
+  // remounts on every tab navigation and re-fetching costs a ~12s parse.
+  assert.equal(usePnlCalculatorStore.getState().configuredTrackersAttempted, true);
+
+  // A full reset clears it — the caller is responsible for restoring the standing
+  // trackers and re-arming the flag so a reset does not trigger another 12s load.
+  store().reset();
+  assert.equal(store().configuredTrackersAttempted, false);
+});
+
+test("PNL store - a configured placement file is distinguishable from an uploaded one", async () => {
+  store().reset();
+  store().setPlacementFiles([
+    { id: "cfg", name: "2026 Placements.xlsx", map: new Map(), tickerCount: 121, configured: true },
+    { id: "up", name: "hand-upload.xlsx", map: new Map(), tickerCount: 3 },
+  ]);
+
+  // `handleReset` keeps only the configured ones; without the flag it could not tell
+  // firm configuration apart from the user's own upload.
+  const standing = store().placementFiles.filter((f) => f.configured);
+  assert.equal(standing.length, 1);
+  assert.equal(standing[0].name, "2026 Placements.xlsx");
+});
+
 test("PNL store - reset clears every slice with fresh collections", async () => {
   store().setTradeFiles([{ id: "a", name: "a.csv", rawTrades: [1], tradeCount: 1, accounts: ["1"] }]);
   store().setPlacementFiles([{ id: "p", name: "p.xlsx", map: new Map(), tickerCount: 3 }]);

@@ -7,6 +7,7 @@ import {
   mergePlacementTrackerIntoSummary,
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
+  combinePlacementMaps,
   resolvePlacementClientHints,
   buildPnlExportFilename,
   isClientMatch,
@@ -15,6 +16,7 @@ import {
   buildUnlistedOptionRows,
   collectUnlistedOptionTickers,
   exportStatus,
+  type PlacementTickerInfo,
 } from "./pnl-calculator.ts";
 import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
 
@@ -1089,6 +1091,121 @@ test("buildPnlExportFilename - a very long holder name is capped, extension inta
   assert.ok(name.startsWith("pnl-114716-"), name);
   // Comfortably inside any filesystem's per-component limit (255 bytes).
   assert.ok(name.length < 120, `too long: ${name.length}`);
+});
+
+/** One workbook holding a single ticker with one client's allocation. */
+const placementFile = (
+  ticker: string,
+  clientName: string,
+  roundShares: number,
+  actualDollar: number
+): { map: Map<string, PlacementTickerInfo> } => ({
+  map: new Map<string, PlacementTickerInfo>([
+    [
+      ticker,
+      {
+        ticker,
+        totalShares: roundShares,
+        totalActualDollar: actualDollar,
+        clientAllocations: [
+          { clientName, advisor: "VTC", askingBid: 0, allocationDollar: actualDollar, roundShares, actualDollar },
+        ],
+      },
+    ],
+  ]),
+});
+
+test("combinePlacementMaps - repeated calls do not inflate the source workbooks", async () => {
+  // The 2025 and 2026 trackers both list ABE for the same client.
+  const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000);
+  const b = placementFile("ABE", "Zidiplus Pty Ltd", 66667, 2000);
+
+  const first = combinePlacementMaps([a, b]);
+  assert.equal(first.get("ABE")?.clientAllocations[0].roundShares, 166667);
+  assert.equal(first.get("ABE")?.clientAllocations[0].actualDollar, 5000);
+
+  // The inputs must be untouched. Copying only the ARRAY left the allocation OBJECTS
+  // shared, so the `+=` above mutated the stored workbook — and this function runs on
+  // every re-merge, so the numbers grew on every upload.
+  assert.equal(a.map.get("ABE")?.clientAllocations[0].roundShares, 100000);
+  assert.equal(a.map.get("ABE")?.clientAllocations[0].actualDollar, 3000);
+  assert.equal(b.map.get("ABE")?.clientAllocations[0].roundShares, 66667);
+
+  // Re-merging the same inputs must give the same answer, however many times it runs.
+  for (let i = 0; i < 4; i++) {
+    const again = combinePlacementMaps([a, b]);
+    assert.equal(again.get("ABE")?.clientAllocations[0].roundShares, 166667, `run ${i + 2} drifted`);
+    assert.equal(again.get("ABE")?.clientAllocations[0].actualDollar, 5000);
+    assert.equal(again.get("ABE")?.totalShares, 166667);
+  }
+});
+
+test("combinePlacementMaps - distinct clients and add-ons merge without doubling", async () => {
+  const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000);
+  const b = placementFile("ABE", "Saturn Fund", 50000, 1500);
+  // Only the second workbook carries the add-on spec.
+  b.map.get("ABE")!.addOns = parseAddOnSpecs("1:2 @$0.10 Unlisted Exp 31/12/29");
+
+  const combined = combinePlacementMaps([a, b]);
+  const abe = combined.get("ABE")!;
+
+  assert.equal(abe.clientAllocations.length, 2, "different clients stay separate rows");
+  assert.deepEqual(
+    abe.clientAllocations.map((x) => x.clientName).sort(),
+    ["Saturn Fund", "Zidiplus Pty Ltd"]
+  );
+  assert.equal(abe.addOns?.length, 1);
+
+  // Add-ons come from the first workbook that has them, never concatenated — two
+  // workbooks listing the same placement would otherwise double every tranche.
+  const bothHaveAddOns = combinePlacementMaps([
+    { map: new Map([["ABE", { ...a.map.get("ABE")!, addOns: parseAddOnSpecs("1:2 @$0.10 Unlisted Exp 31/12/29") }]]) },
+    b,
+  ]);
+  assert.equal(bothHaveAddOns.get("ABE")?.addOns?.length, 1);
+
+  // And the add-on objects are copies, so a later mutation cannot reach the source.
+  combined.get("ABE")!.addOns![0].strike = 999;
+  assert.equal(b.map.get("ABE")!.addOns![0].strike, 0.1);
+});
+
+test("resolvePlacementClientHints - scoping two clients' files to one account", async () => {
+  const stem = (n: string) => n.replace(/\.[^.]+$/, "");
+  const holders = { "1103199": "Zidiplus PTY LTD", "114716": "Sri Guru Nanak PTY LTD" };
+  const files = [
+    { name: "Zidiplus.csv", accounts: ["1103199"] },
+    { name: "Sri Guru Nanak.csv", accounts: ["114716"] },
+  ];
+  const base = { override: "__auto__", autoSentinel: "__auto__", filenameStem: stem };
+
+  // Viewing everything: both holders are legitimate hints.
+  assert.deepEqual(resolvePlacementClientHints({ ...base, files, accountHolders: holders }).hints, [
+    "Zidiplus PTY LTD",
+    "Sri Guru Nanak PTY LTD",
+  ]);
+
+  // This is what the component does when one account is selected. Keeping both names
+  // would merge BOTH clients' allocations into that one account's row.
+  const scopeTo = (account: string) =>
+    files
+      .map((f) => ({ ...f, accounts: f.accounts.filter((a) => a === account) }))
+      .filter((f) => f.accounts.length > 0);
+
+  assert.deepEqual(
+    resolvePlacementClientHints({ ...base, files: scopeTo("1103199"), accountHolders: holders }).hints,
+    ["Zidiplus PTY LTD"]
+  );
+
+  // And when the DB cannot name the selected account, the filename fallback must not
+  // reach across to the other client's file — hence dropping files out of scope.
+  const unnamed = resolvePlacementClientHints({
+    ...base,
+    files: scopeTo("114716"),
+    accountHolders: {},
+  });
+  assert.deepEqual(unnamed.hints, ["Sri Guru Nanak"]);
+  assert.equal(unnamed.source, "filename");
+  assert.equal(unnamed.hints.includes("Zidiplus"), false);
 });
 
 test("PNL Calculator - collectPlacementClientNames dedupes across sheets", async () => {

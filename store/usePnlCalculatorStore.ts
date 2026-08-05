@@ -27,6 +27,13 @@ export interface UploadedPlacementFile {
   name: string;
   map: Map<string, PlacementTickerInfo>;
   tickerCount: number;
+  /**
+   * Came from `PLACEMENT_TRACKER_URL` rather than from a person.
+   *
+   * Resetting the calculator keeps these: they are configuration, not the user's work,
+   * and re-fetching means another ~12s parse of a 12 MB workbook.
+   */
+  configured?: boolean;
 }
 
 export interface UploadedTradeFile {
@@ -74,6 +81,15 @@ interface PnlCalculatorState {
    * its filename does, so this is what the Placement Tracker merge matches on.
    */
   accountHolders: Record<string, string>;
+  /**
+   * Whether the standing `PLACEMENT_TRACKER_URL` load has already been attempted.
+   *
+   * Lives in the store, not in component state, precisely because the route remounts
+   * on every tab navigation — a component-level flag would re-trigger a ~12s fetch
+   * and parse each time. Set before the await so React's double-invoke in development
+   * cannot fire it twice either.
+   */
+  configuredTrackersAttempted: boolean;
 
   setTradeFiles: Setter<UploadedTradeFile[]>;
   setResult: Setter<ParseResult | null>;
@@ -85,6 +101,7 @@ interface PnlCalculatorState {
   setFilterType: Setter<PnlFilterType>;
   setSearchQuery: Setter<string>;
   setAccountHolders: Setter<Record<string, string>>;
+  setConfiguredTrackersAttempted: Setter<boolean>;
 
   /** Drop everything back to a fresh calculator. */
   reset: () => void;
@@ -105,6 +122,7 @@ const initialState = () => ({
   filterType: "all" as PnlFilterType,
   searchQuery: "",
   accountHolders: {} as Record<string, string>,
+  configuredTrackersAttempted: false,
 });
 
 export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
@@ -120,6 +138,8 @@ export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
   setFilterType: (v) => set((s) => ({ filterType: next(v, s.filterType) })),
   setSearchQuery: (v) => set((s) => ({ searchQuery: next(v, s.searchQuery) })),
   setAccountHolders: (v) => set((s) => ({ accountHolders: next(v, s.accountHolders) })),
+  setConfiguredTrackersAttempted: (v) =>
+    set((s) => ({ configuredTrackersAttempted: next(v, s.configuredTrackersAttempted) })),
 
   reset: () => set(initialState()),
 }));

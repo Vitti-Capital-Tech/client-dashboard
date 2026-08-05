@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useTransition, useRef } from "react";
+import React, { useState, useTransition, useRef, useEffect } from "react";
 import {
   parsePnlFileAction,
   exportPnlXlsxAction,
@@ -9,6 +9,7 @@ import {
   fetchDatabaseHoldingsAction,
   fetchSpotPricesAction,
   resolveAccountHoldersAction,
+  loadConfiguredPlacementTrackersAction,
 } from "@/app/actions/pnl-calculator";
 import {
   parsePnlFileBuffer,
@@ -19,6 +20,7 @@ import {
   collectUnlistedOptionTickers,
   placementArrayToMap,
   collectPlacementClientNames,
+  combinePlacementMaps,
   resolvePlacementClientHints,
   isClientMatch,
   aggregateTradesToSummary,
@@ -70,12 +72,33 @@ export function PnlCalculatorClient() {
   const setSearchQuery = usePnlCalculatorStore((s) => s.setSearchQuery);
   const accountHolders = usePnlCalculatorStore((s) => s.accountHolders);
   const setAccountHolders = usePnlCalculatorStore((s) => s.setAccountHolders);
+  const configuredTrackersAttempted = usePnlCalculatorStore((s) => s.configuredTrackersAttempted);
+  const setConfiguredTrackersAttempted = usePnlCalculatorStore(
+    (s) => s.setConfiguredTrackersAttempted
+  );
+
+  /**
+   * The store's state RIGHT NOW, rather than as captured by this render.
+   *
+   * Every handler here is async — file reads, a 12s tracker fetch, DB round trips — so
+   * a value closed over at render time is routinely out of date by the time the
+   * callback resumes. Two real failures came from exactly that:
+   *
+   *  - the standing-tracker load captured `result === null` at mount, so a trade file
+   *    uploaded during its 12s fetch was never merged with the tracker (and the upload,
+   *    in turn, saw `placementFiles` still empty);
+   *  - picking a second trade file before the first transition settled read a stale
+   *    `tradeFiles` and dropped the earlier file.
+   *
+   * Reading through `getState()` removes the whole class of bug — which is the point of
+   * keeping this state in a module store rather than in `useState`.
+   */
+  const live = () => usePnlCalculatorStore.getState();
   const resetStore = usePnlCalculatorStore((s) => s.reset);
 
   // Transient UI state stays local — a half-finished drag, an open tooltip or a
   // row mid-edit should NOT survive leaving the page.
   const [file, setFile] = useState<File | null>(null);
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isProcessing, startProcessing] = useTransition();
   const [isExportingXlsx, startExportingXlsx] = useTransition();
@@ -105,7 +128,6 @@ export function PnlCalculatorClient() {
   const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const addMoreTradeFileInputRef = useRef<HTMLInputElement>(null);
   const placementFileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleExpandTicker = (ticker: string) => {
@@ -150,15 +172,36 @@ export function PnlCalculatorClient() {
   const getClientHints = (
     files: UploadedTradeFile[] = tradeFiles,
     override: string = placementClient,
-    holders: Record<string, string> = accountHolders
-  ): string[] =>
-    resolvePlacementClientHints({
-      files,
+    holders: Record<string, string> = accountHolders,
+    activeAccount: string = live().selectedAccount
+  ): string[] => {
+    // Scope to the account being viewed. Uploading two clients' files and then
+    // filtering to one of them must NOT keep the other's name as a hint: a ticker both
+    // took part in would merge BOTH allocations into that single account's row and
+    // overstate its Buy Qty.
+    // Files with none of the selected account are dropped entirely, not just stripped
+    // of their accounts — otherwise the filename fallback (used when the DB cannot name
+    // an account) would pull the other client's name straight back in.
+    const scoped =
+      activeAccount === "all"
+        ? files
+        : files
+            .map((f) => ({
+              ...f,
+              accounts: (f.accounts || []).filter(
+                (a) => normalizeAccountNo(a) === normalizeAccountNo(activeAccount)
+              ),
+            }))
+            .filter((f) => f.accounts.length > 0);
+
+    return resolvePlacementClientHints({
+      files: scoped,
       override,
       autoSentinel: AUTO_CLIENT,
       accountHolders: holders,
       filenameStem: getFilenameStem,
     }).hints;
+  };
 
   /** Human-readable label for whichever account holder the merge resolved to. */
   const describeClientHints = (hints: string[]): string =>
@@ -254,10 +297,10 @@ export function PnlCalculatorClient() {
     targetAcc?: string,
     placementOverride?: Map<string, PlacementTickerInfo> | null
   ) => {
-    const res = currentResult || result;
+    const res = currentResult || live().result;
     if (!res) return;
-    const accToUse = targetAcc !== undefined ? targetAcc : selectedAccount;
-    const placements = placementOverride !== undefined ? placementOverride : parsedPlacementMap;
+    const accToUse = targetAcc !== undefined ? targetAcc : live().selectedAccount;
+    const placements = placementOverride !== undefined ? placementOverride : live().parsedPlacementMap;
 
     const targetAccountsScope =
       accToUse !== "all"
@@ -402,7 +445,9 @@ export function PnlCalculatorClient() {
         tickerCount: placementMap.size,
       };
 
-      const updatedFileList = [...placementFiles, linkedFile];
+      // Live read: the fetch above can take seconds, during which the standing-tracker
+      // load may have registered its own files.
+      const updatedFileList = [...live().placementFiles, linkedFile];
       setPlacementFiles(updatedFileList);
       const stats = reapplyPlacementMerges(updatedFileList);
 
@@ -429,44 +474,6 @@ export function PnlCalculatorClient() {
     });
   };
 
-  const combinePlacementMaps = (files: UploadedPlacementFile[]): Map<string, PlacementTickerInfo> => {
-    const combined = new Map<string, PlacementTickerInfo>();
-    for (const f of files) {
-      for (const [ticker, info] of f.map.entries()) {
-        if (!combined.has(ticker)) {
-          combined.set(ticker, {
-            ticker: info.ticker,
-            company: info.company,
-            totalShares: info.totalShares,
-            totalActualDollar: info.totalActualDollar,
-            clientAllocations: [...info.clientAllocations],
-            addOns: info.addOns ? [...info.addOns] : undefined,
-          });
-        } else {
-          const existing = combined.get(ticker)!;
-          existing.totalShares += info.totalShares;
-          existing.totalActualDollar += info.totalActualDollar;
-          // A later workbook fills in add-ons the earlier one did not carry. Not
-          // concatenated: two workbooks listing the same placement would otherwise
-          // double every tranche.
-          if (!existing.addOns?.length && info.addOns?.length) {
-            existing.addOns = [...info.addOns];
-          }
-          for (const alloc of info.clientAllocations) {
-            const found = existing.clientAllocations.find((a) => a.clientName === alloc.clientName);
-            if (found) {
-              found.roundShares += alloc.roundShares;
-              found.actualDollar += alloc.actualDollar;
-            } else {
-              existing.clientAllocations.push({ ...alloc });
-            }
-          }
-        }
-      }
-    }
-    return combined;
-  };
-
   /**
    * Rebuilds the summary from the raw trades and re-merges the active placement
    * files. Returns the merge stats so callers can report them without running
@@ -475,15 +482,21 @@ export function PnlCalculatorClient() {
   const reapplyPlacementMerges = (
     files: UploadedPlacementFile[],
     baseRes?: ParseResult | null,
-    clientOverride: string = placementClient
+    clientOverride?: string
   ): { mergedCount: number; partialBuyCount: number; ambiguousTickers: string[] } | null => {
-    const res = baseRes || result;
+    // Live reads throughout: the standing-tracker load takes ~12s, and a trade file
+    // uploaded during it left this function looking at the mount-time `result` (null),
+    // so the tracker silently never merged.
+    const res = baseRes || live().result;
     if (!res) return null;
 
+    const override = clientOverride ?? live().placementClient;
+    const activeAccount = live().selectedAccount;
+
     const tradesToUse =
-      selectedAccount === "all"
+      activeAccount === "all"
         ? res.rawTrades
-        : res.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(selectedAccount));
+        : res.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(activeAccount));
 
     const { summary: baseSummary } = aggregateTradesToSummary(tradesToUse);
 
@@ -498,7 +511,7 @@ export function PnlCalculatorClient() {
         optionTickers: baseSummary.filter((s) => s.isOption).length,
       };
       setResult(resetRes);
-      handleSyncDbHoldings(resetRes, selectedAccount, null);
+      handleSyncDbHoldings(resetRes, activeAccount, null);
       return { mergedCount: 0, partialBuyCount: 0, ambiguousTickers: [] };
     }
 
@@ -508,7 +521,7 @@ export function PnlCalculatorClient() {
     const merged = mergePlacementTrackerIntoSummary(
       baseSummary,
       combinedMap,
-      getClientHints(tradeFiles, clientOverride)
+      getClientHints(live().tradeFiles, override, live().accountHolders, activeAccount)
     );
 
     const updatedRes: ParseResult = {
@@ -519,7 +532,7 @@ export function PnlCalculatorClient() {
       optionTickers: merged.summary.filter((s) => s.isOption).length,
     };
     setResult(updatedRes);
-    handleSyncDbHoldings(updatedRes, selectedAccount, combinedMap);
+    handleSyncDbHoldings(updatedRes, activeAccount, combinedMap);
 
     return {
       mergedCount: merged.mergedCount,
@@ -527,6 +540,73 @@ export function PnlCalculatorClient() {
       ambiguousTickers: merged.ambiguousTickers,
     };
   };
+
+  /**
+   * Loads the standing `PLACEMENT_TRACKER_URL` link(s) once per session.
+   *
+   * Runs on mount but guards on a STORE flag, not component state: the route remounts
+   * on every portal tab navigation, and a real tracker is a 12 MB workbook that takes
+   * ~12s to parse — repeating that on each visit would be unusable. The flag is set
+   * before the await so React's development double-invoke cannot fire it twice either.
+   *
+   * Declared AFTER `reapplyPlacementMerges` on purpose: the effect body only runs post
+   * render so a forward reference would work, but reading in dependency order keeps it
+   * honest (and keeps eslint's no-use-before-declare quiet).
+   *
+   * Deliberately independent of whether a trade file is loaded yet. The trackers just
+   * join `placementFiles`; the merge is a no-op until there are trades, and every later
+   * upload rebuilds from that list anyway.
+   */
+  useEffect(() => {
+    if (configuredTrackersAttempted) return;
+    setConfiguredTrackersAttempted(true);
+
+    startFetchingUrl(async () => {
+      const res = await loadConfiguredPlacementTrackersAction();
+      if (!res.configured) return;
+
+      const loaded = res.trackers.filter((t) => t.placementItems.length > 0);
+      const failed = res.trackers.filter((t) => t.placementItems.length === 0);
+
+      if (loaded.length > 0) {
+        const newFiles: UploadedPlacementFile[] = loaded.map((t, i) => {
+          const map = placementArrayToMap(t.placementItems);
+          return {
+            id: `configured-${i}-${t.name}`,
+            name: t.name,
+            map,
+            tickerCount: map.size,
+            configured: true,
+          };
+        });
+
+        // Live reads: this resumes ~12s after mount, by which time a trade file may
+        // have been uploaded and other placement files registered.
+        const updatedFileList = [...live().placementFiles, ...newFiles];
+        setPlacementFiles(updatedFileList);
+        reapplyPlacementMerges(updatedFileList, live().result);
+      }
+
+      setPlacementMsg({
+        type: failed.length > 0 && loaded.length === 0 ? "error" : "success",
+        text:
+          loaded.length > 0
+            ? `Loaded ${loaded.length} standing Placement Tracker${
+                loaded.length === 1 ? "" : "s"
+              } from configuration: ${loaded.map((t) => t.name).join(", ")}.`
+            : "Could not load the configured Placement Tracker link(s).",
+        hint:
+          failed.length > 0
+            ? `${failed.length} configured link(s) failed: ${failed
+                .map((t) => t.error)
+                .filter(Boolean)
+                .join(" ")} Check PLACEMENT_TRACKER_URL in .env.local.`
+            : undefined,
+      });
+    });
+    // Intentionally mount-only: the store flag is the real guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleMergePlacementFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0 || !result) return;
@@ -558,7 +638,9 @@ export function PnlCalculatorClient() {
           return;
         }
 
-        const updatedFileList = [...placementFiles, ...newUploadedFiles];
+        // Live read: parsing a placement workbook takes seconds, so another file (or the
+        // standing tracker) may have landed while this one was being read.
+        const updatedFileList = [...live().placementFiles, ...newUploadedFiles];
         setPlacementFiles(updatedFileList);
         const stats = reapplyPlacementMerges(updatedFileList);
 
@@ -626,7 +708,7 @@ export function PnlCalculatorClient() {
       return;
     }
 
-    const accToUse = targetAcc !== undefined ? targetAcc : selectedAccount;
+    const accToUse = targetAcc !== undefined ? targetAcc : live().selectedAccount;
     const allRawTrades: any[] = [];
     const accountsSet = new Set<string>();
 
@@ -650,26 +732,28 @@ export function PnlCalculatorClient() {
     let finalSummary = aggregatedSummary;
     let finalTotalPnl = aggregatedPnl;
 
-    // Hints come from `activeTradeFiles` and the passed-in `holders`, not from state —
-    // this runs in the same tick as setTradeFiles/setAccountHolders, so neither has
-    // updated yet.
-    const clientHints = getClientHints(activeTradeFiles, placementClient, holders ?? accountHolders);
+    // Hints come from `activeTradeFiles` and the passed-in `holders`, because this runs
+    // in the same tick as setTradeFiles/setAccountHolders. Everything else reads live,
+    // so a tracker that finished loading mid-upload is still picked up.
+    const clientHints = getClientHints(
+      activeTradeFiles,
+      live().placementClient,
+      holders ?? live().accountHolders,
+      accToUse
+    );
 
-    if (placementFiles.length > 0) {
-      const combinedPlacementMap = combinePlacementMaps(placementFiles);
-      const merged = mergePlacementTrackerIntoSummary(
-        aggregatedSummary,
-        combinedPlacementMap,
-        clientHints
-      );
-      finalSummary = merged.summary;
-      finalTotalPnl = merged.totalPnl;
-    } else if (parsedPlacementMap && parsedPlacementMap.size > 0) {
-      const merged = mergePlacementTrackerIntoSummary(
-        aggregatedSummary,
-        parsedPlacementMap,
-        clientHints
-      );
+    const activePlacementFiles = live().placementFiles;
+    const activePlacementMap = live().parsedPlacementMap;
+    let combinedMap: Map<string, PlacementTickerInfo> | null = null;
+
+    if (activePlacementFiles.length > 0) {
+      combinedMap = combinePlacementMaps(activePlacementFiles);
+    } else if (activePlacementMap && activePlacementMap.size > 0) {
+      combinedMap = activePlacementMap;
+    }
+
+    if (combinedMap) {
+      const merged = mergePlacementTrackerIntoSummary(aggregatedSummary, combinedMap, clientHints);
       finalSummary = merged.summary;
       finalTotalPnl = merged.totalPnl;
     }
@@ -687,21 +771,15 @@ export function PnlCalculatorClient() {
     };
 
     setResult(newResult);
-    handleSyncDbHoldings(newResult, accToUse);
+    // Pass the map explicitly: without it the DB sync falls back to `parsedPlacementMap`,
+    // which this path never sets, so unlisted-option rows were never built on upload.
+    handleSyncDbHoldings(newResult, accToUse, combinedMap);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const fileList = Array.from(e.target.files);
-      setSelectedFiles(fileList);
-      setFile(fileList[0]);
+      setFile(e.target.files[0]);
     }
-  };
-
-  const handleAddMoreTradeFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    const filesToProcess = Array.from(e.target.files);
-    processAndAppendTradeFiles(filesToProcess);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -724,57 +802,63 @@ export function PnlCalculatorClient() {
           f.name.endsWith(".xls") ||
           f.name.endsWith(".csv")
       );
+      // One trade file at a time — extra drops are ignored rather than queued.
       if (droppedFiles.length > 0) {
-        setSelectedFiles(droppedFiles);
         setFile(droppedFiles[0]);
       }
     }
   };
 
-  const processAndAppendTradeFiles = (filesToProcess: File[]) => {
+  /**
+   * Parses ONE trade file and makes it the active one.
+   *
+   * Deliberately a replace, not an append. Accumulating several files meant the summary,
+   * the placement hints and the account filter all had to agree about which client's
+   * trades were in play, and they drifted apart — a second upload left the placement
+   * merge showing the first file's enrichment. One file at a time removes that whole
+   * class of confusion; re-upload to switch clients.
+   */
+  const processTradeFile = (fileToProcess: File) => {
     startProcessing(async () => {
       try {
-        const newTradeFiles: UploadedTradeFile[] = [];
+        const arrayBuffer = await fileToProcess.arrayBuffer();
+        const parsed = await parsePnlFileBuffer(
+          Buffer.from(arrayBuffer as any),
+          fileToProcess.name
+        );
 
-        for (const f of filesToProcess) {
-          const arrayBuffer = await f.arrayBuffer();
-          const parsed = await parsePnlFileBuffer(Buffer.from(arrayBuffer as any), f.name);
-          if (parsed.rawTrades.length > 0) {
-            newTradeFiles.push({
-              id: `${f.name}-${Date.now()}-${Math.random()}`,
-              name: f.name,
-              rawTrades: parsed.rawTrades,
-              tradeCount: parsed.rawTrades.length,
-              accounts: parsed.accounts || [],
-            });
-          }
-        }
-
-        if (newTradeFiles.length === 0) {
+        if (parsed.rawTrades.length === 0) {
           setPlacementMsg({
             type: "error",
-            text: "No valid trade records found in the selected file(s).",
+            text: `No valid trade records found in "${fileToProcess.name}".`,
           });
           return;
         }
 
-        const updatedTradeFileList = [...tradeFiles, ...newTradeFiles];
+        const updatedTradeFileList: UploadedTradeFile[] = [
+          {
+            id: `${fileToProcess.name}-${parsed.rawTrades.length}`,
+            name: fileToProcess.name,
+            rawTrades: parsed.rawTrades,
+            tradeCount: parsed.rawTrades.length,
+            accounts: parsed.accounts || [],
+          },
+        ];
+
         setTradeFiles(updatedTradeFileList);
-        setSelectedFiles([]);
         setFile(null);
         setSelectedAccount("all");
         if (fileInputRef.current) fileInputRef.current.value = "";
-        if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
 
         // Resolve the file's Account numbers to account holders BEFORE merging, so the
         // placement merge matches on who the account belongs to rather than on what
         // the file happens to be called.
         const refs = [...new Set(updatedTradeFileList.flatMap((tf) => tf.accounts || []))];
-        let holders = accountHolders;
+        let holders = live().accountHolders;
         if (refs.length > 0) {
           const resolved = await resolveAccountHoldersAction(refs);
           if (resolved.ok && resolved.holders.length > 0) {
-            holders = { ...accountHolders };
+            holders = { ...live().accountHolders };
             for (const h of resolved.holders) holders[h.accountRef] = h.clientName;
             setAccountHolders(holders);
           }
@@ -791,16 +875,19 @@ export function PnlCalculatorClient() {
         }
 
         recalculateTradeFiles(updatedTradeFileList, "all", holders);
-      } catch (err: any) {
-        console.error("Error processing trade file(s):", err);
+      } catch (err) {
+        console.error("Error processing trade file:", err);
+        setPlacementMsg({
+          type: "error",
+          text: err instanceof Error ? err.message : "Failed to process the trade file.",
+        });
       }
     });
   };
 
   const handleProcessFile = () => {
-    const filesToProcess = selectedFiles.length > 0 ? selectedFiles : file ? [file] : [];
-    if (filesToProcess.length === 0) return;
-    processAndAppendTradeFiles(filesToProcess);
+    if (!file) return;
+    processTradeFile(file);
   };
 
   const handleRemoveTradeFile = (id: string) => {
@@ -814,13 +901,21 @@ export function PnlCalculatorClient() {
     // enough because leaving the page cleared the rest anyway; now that the store
     // survives navigation, a partial reset would strand the old account filter,
     // filter tab and account holder on a freshly uploaded file.
+    // Standing trackers come from configuration, not from the user, so a reset keeps
+    // them — dropping them would cost another ~12s parse to get back to the same place.
+    const standing = placementFiles.filter((f) => f.configured);
+
     resetStore();
+
+    if (standing.length > 0) {
+      setPlacementFiles(standing);
+      setConfiguredTrackersAttempted(true);
+    }
+
     setFile(null);
-    setSelectedFiles([]);
     setPlacementMsg(null);
     setEditingTicker(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
-    if (addMoreTradeFileInputRef.current) addMoreTradeFileInputRef.current.value = "";
     if (placementFileInputRef.current) placementFileInputRef.current.value = "";
   };
 
@@ -1429,7 +1524,7 @@ export function PnlCalculatorClient() {
                   <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  <span>Uploaded Trade Files ({tradeFiles.length}):</span>
+                  <span>Active Trade File:</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {tradeFiles.map((tf) => (
@@ -1451,22 +1546,11 @@ export function PnlCalculatorClient() {
                       </button>
                     </span>
                   ))}
-                  <input
-                    type="file"
-                    ref={addMoreTradeFileInputRef}
-                    onChange={handleAddMoreTradeFiles}
-                    accept=".xlsx,.xls,.csv"
-                    multiple
-                    className="hidden"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => addMoreTradeFileInputRef.current?.click()}
-                    disabled={isProcessing}
-                    className="px-3 py-1 rounded-xl text-xs font-semibold bg-paper-2 hover:bg-paper-border text-navy border border-paper-border transition-all cursor-pointer inline-flex items-center gap-1"
-                  >
-                    <span>+ Add Trade File</span>
-                  </button>
+                  {/* One trade file at a time — uploading another replaces this one, so
+                      there is no "add more" control. */}
+                  <span className="text-[10px] text-mut italic">
+                    Upload another file to replace it
+                  </span>
                 </div>
               </div>
             )}

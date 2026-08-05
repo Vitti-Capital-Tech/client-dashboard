@@ -562,11 +562,11 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
   - Sorts all ticker summary items in **ascending alphabetical order** (`a.ticker.localeCompare(b.ticker)`).
   - Calculates `buyPrice` (sum of buy values), `sellPrice` (sum of sell values), and `pnlCalculated` (`sellPrice - buyPrice`) for all tickers.
   - Computes `totalPnl` as the universal sum of all calculated ticker P&Ls.
-- **Multi-File Trade Ledger Upload & Accumulation (`PnlCalculatorClient.tsx`):**
-  - Allows staff to drag-and-drop or pick multiple trade files at once or incrementally.
-  - Stores `tradeFiles: UploadedTradeFile[]` in client state, rendering interactive file badges with trade counts and individual `✕` remove controls.
-  - Dynamically combines `rawTrades` across all active trade files, rolling up parent tickers and updating `result.accounts`.
-  - Automatically resets `selectedAccount` filter to `"all"` upon new file upload so all new file trades are immediately visible.
+- **Trade Ledger Upload — one file at a time (`PnlCalculatorClient.tsx`):**
+  - Drag-and-drop or pick a single trade file; uploading another **replaces** it. `tradeFiles` remains an array (one element) so the aggregation, hint and filter paths are unchanged, but the accumulate flow is gone.
+  - *Why it was removed:* the summary, the placement-merge hints and the account filter all had to agree about which client's trades were in play, and with several files loaded they drifted — a second upload left the placement merge still showing the first file's enrichment. Multi-file **Placement Trackers** are unaffected; several workbooks are normal there.
+  - The active file renders as a badge with its trade count and a `✕` to clear it.
+  - `selectedAccount` resets to `"all"` on upload so the new file's trades are immediately visible.
 - **Private Link 1-Click OAuth Authentication & API Engine (`app/actions/pnl-calculator.ts`):**
   - `fetchPlacementTrackerUrlAction(url, googleAccessToken, microsoftAccessToken)`: Authenticates private Google Drive and Microsoft 365 (SharePoint / OneDrive) URLs.
   - Provides 1-Click SSO popup auth buttons (`handleGoogle1ClickLogin`, `handleMicrosoft1ClickLogin`) alongside manual token fallbacks.
@@ -581,7 +581,9 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
     - Resolved holders are cached in the calculator store (`accountHolders`: ref → name) so they survive tab navigation, and are passed explicitly into `recalculateTradeFiles` because resolution and re-merge happen in the same tick, before store state has flushed.
     - Known accounts win **outright** rather than being combined with the file name — mixing the two risks pulling a second client's allocation into the merge. An account the database does not know is reported in the UI with the fallback spelled out.
   - `isClientMatch(clientName, hint)`: matches a placement sheet's `CLIENT NAME` against a hint using case-insensitive alphanumeric-only comparison (so `Mrs. Punam Balhra` and `Mrs Punam Balhra` match) plus word-token matching as a fallback.
-  - Combines allocations across multiple uploaded Placement Tracker files via `combinePlacementMaps`.
+  - Combines allocations across multiple Placement Tracker workbooks via **`combinePlacementMaps`** (in `lib/`, so it is testable).
+    - It **deep-copies** each allocation and add-on. Copying only the array left the element objects shared with the caller's stored maps, so the `found.roundShares += …` merge step mutated the source. Because this runs on **every** re-merge — each trade upload, each account switch — a ticker present in both the 2025 and 2026 workbooks inflated on every pass: `166,667 → 233,334 → 300,001 → 366,668`, permanently corrupting the stored workbook. Repeated calls are now idempotent, which a test asserts explicitly.
+    - Add-ons are taken from the **first** workbook that has them, never concatenated — two workbooks listing the same placement would otherwise double every tranche.
   - Directly adds matched client's **`Round Shares`** to `buyQty` and **`ACTUAL $`** to `buyPrice` / `totalBuyValue` for tickers present in summary table.
   - **Blank buy side** (`buyQty = 0` / `buyPrice = 0`): *fills* from the allocation.
   - **Short buy side** (`0 < buyQty < sellQty`): *adds* the allocation on top of the recorded buys — more units were sold than the ledger saw bought, so the placement is the missing parcel. The old `buyQty = 0` gate skipped these rows, leaving P&L **overstated** by the unrecorded parcel's whole cost. Tagged `isPartialBuy = true`. A row with `buyQty > sellQty` is an ordinary open position, not a short buy, and is left alone (so the existing "does not double a matched row" guarantee holds).
@@ -627,6 +629,12 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
 - **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
   - `fetchDatabaseHoldingsAction(accountRef)`: Account-scoped server action returning `DbHoldingInfo[]` array.
   - `fetchPlacementTrackerUrlAction(url, googleAccessToken?, microsoftAccessToken?)`: URL action with OAuth token fallbacks returning lightweight `PlacementTickerInfo[]` array.
+  - `loadConfiguredPlacementTrackersAction()`: loads the standing `PLACEMENT_TRACKER_URL` link(s) so the desk never re-pastes them. Accepts several links separated by commas/semicolons/newlines (one workbook per year), fetched **concurrently** and reported individually so one dead link costs only itself.
+    - The URL is read server-side and **never returned** — not a `NEXT_PUBLIC_` variable, because for an "anyone with the link" sheet the URL *is* the credential and the client bundle would leak it. The UI labels each tracker by its downloaded filename.
+    - Loaded **once per session**, guarded by `configuredTrackersAttempted` in the calculator **store**, not component state: the route remounts on every portal tab navigation and a real tracker is ~12 MB / ~12 s to parse, so a component-level flag would repeat that on every visit. The flag is set *before* the await so React's development double-invoke cannot fire it twice.
+    - The effect is declared after `reapplyPlacementMerges` — the body only runs post-render so a forward reference would work, but dependency order keeps `no-use-before-declare` satisfied.
+    - Runs regardless of whether a trade file is loaded; the trackers simply join `placementFiles`, the merge is a no-op until there are trades, and later uploads rebuild from that list.
+    - Files are tagged `configured: true`, and `handleReset` **keeps** them — they are firm configuration rather than the user's work, and dropping them would cost another 12 s parse to get back to the same place.
   - `exportPnlXlsxAction(summaryRows, scope?)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
   - `exportPnlCsvAction(summaryRows, scope?)`: Generates RFC 4180 compliant `.csv` download string.
   - `resolveAccountHoldersAction(accountRefs)`: `accounts.external_ref` → `clients.display_name`, matched on the normalised ref. Feeds both the placement-merge hints and the export filename.
@@ -640,7 +648,8 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
 - **Interactive UI Capabilities (`PnlCalculatorClient.tsx`):**
   - Client Account Filter Bar UI for filtering PnL summaries by `external_ref` / Account number.
   - Multi-File Placement Tracker upload (`multiple` selection) with active file list & individual `✕` remove button.
-  - Multi-File Trade Upload (`multiple` selection) with active trade file list, `+ Add Trade File` control & individual `✕` remove button.
+  - **One trade file at a time.** Uploading replaces the active file rather than appending. The multi-file flow was removed: the summary, the placement hints and the account filter all had to agree about which client's trades were in play and they drifted apart, so a second upload left the placement merge showing the first file's enrichment. Placement Trackers are still multi-file — several workbooks are a normal case there.
+  - Every handler reads live store state via `usePnlCalculatorStore.getState()` rather than the render closure. All of them are async (file reads, a ~12s tracker fetch, DB round trips), and a value captured at render time is routinely stale by the time the callback resumes — which is how a trade file uploaded during the standing-tracker load ended up never merged with it.
   - Dedicated **Sync DB Market Value** action button with automated notifications.
   - Inline row editing with **Edit / Save / Cancel** controls.
   - 9 Filter Tabs (`All Tickers`, `Equity`, `Options`, `Unlisted Options`, `Open`, `Matched P&L`, `Profit Only`, `Loss Only`, `Unmatched`).
@@ -651,7 +660,7 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
   - The `Unmatched` badge shows the word alone; the quantity gap moved into its tooltip (`… — 71,213 unsold` / `… sold without a recorded buy`), which is also where the direction of the gap is spelled out. The tooltip is now the only place the gap is surfaced, since the exports no longer carry an `Open Qty` column.
 - **Session state (`store/usePnlCalculatorStore.ts`):** the calculator's working set is held in a **module-scope Zustand store**, not in the route component.
   - *Why:* a calculator session is long — several trade files, a placement tracker, an account filter, manual row edits. Navigating to another portal tab unmounts the route and with it every `useState`, so returning meant re-uploading and re-merging from scratch. A module-scope store is not re-evaluated on client-side navigation, so it survives.
-  - *Persisted:* `tradeFiles`, `result`, `placementFiles`, `parsedPlacementMap`, `selectedAccount`, `placementClient`, `placementUrl`, `filterType`, `searchQuery`, `accountHolders`.
+  - *Persisted:* `tradeFiles`, `result`, `placementFiles`, `parsedPlacementMap`, `selectedAccount`, `placementClient`, `placementUrl`, `filterType`, `searchQuery`, `accountHolders`, `configuredTrackersAttempted`.
   - *Deliberately NOT persisted (stays local `useState`):* `file` / `selectedFiles` (pre-parse staging, nulled after parsing), `unlistedTip`, `editingTicker` / `editForm`, `isDragOver`, `placementMsg`, `expandedTickers`. A half-finished drag or a row mid-edit should not outlive the page.
   - **Memory only, by design.** The calculator's contract is that client trade data is parsed and discarded (`parsePnlFileAction`: "Zero database calls or storage"), so this state must not reach `localStorage` or `sessionStorage` either. A reload, a new tab or closing the browser clears it — that is the intended lifetime, not a gap. Persisting it would put client financial data at rest on a staff machine.
   - Setters mirror React's `Dispatch<SetStateAction<T>>`, so both `setX(value)` and `setX(prev => …)` work and the conversion from `useState` needed no call-site rewrites. The updater-function branch is covered by tests because a regression there would silently store the function itself.

@@ -164,6 +164,76 @@ export async function fetchPlacementTrackerUrlAction(
   }
 }
 
+/** One standing Placement Tracker source, resolved and parsed. */
+export interface ConfiguredTracker {
+  /** Display label — the downloaded filename, never the URL. */
+  name: string;
+  placementItems: PlacementTickerInfo[];
+  source?: PlacementUrlResult["source"];
+  error?: string;
+  hint?: string;
+}
+
+/**
+ * Loads the Placement Tracker(s) configured in `PLACEMENT_TRACKER_URL`.
+ *
+ * Set it in `.env.local` to one or more links, separated by commas, semicolons or
+ * newlines — the desk keeps a workbook per year (2025 and 2026), and
+ * `combinePlacementMaps` merges them on the client exactly as if they had been
+ * uploaded by hand.
+ *
+ * The URL is read **server-side only** and never returned. It is deliberately not a
+ * `NEXT_PUBLIC_` variable: for a "anyone with the link can view" sheet the URL *is*
+ * the credential, and putting it in the client bundle would hand it to anything that
+ * can read the page source.
+ *
+ * Each link is fetched concurrently and reported independently, so one dead link
+ * costs only itself. Parsing a real tracker takes ~12s for a 12 MB workbook, which is
+ * why the caller loads this once per session rather than on every render.
+ */
+export async function loadConfiguredPlacementTrackersAction(): Promise<{
+  configured: boolean;
+  trackers: ConfiguredTracker[];
+}> {
+  const raw = process.env.PLACEMENT_TRACKER_URL?.trim();
+  if (!raw) return { configured: false, trackers: [] };
+
+  const urls = [...new Set(raw.split(/[\n,;]+/).map((u) => u.trim()).filter(Boolean))];
+  if (urls.length === 0) return { configured: false, trackers: [] };
+
+  const trackers = await Promise.all(
+    urls.map(async (url, index): Promise<ConfiguredTracker> => {
+      const fallbackName = `Configured Tracker ${index + 1}`;
+      try {
+        const res = await fetchPlacementTrackerUrlAction(url);
+        if (!res.ok || res.placementItems.length === 0) {
+          return {
+            name: res.filename || fallbackName,
+            placementItems: [],
+            error: res.error || "Failed to fetch or parse the configured Placement Tracker.",
+            hint: res.hint,
+          };
+        }
+        return {
+          name: res.filename || fallbackName,
+          placementItems: res.placementItems,
+          source: res.source,
+        };
+      } catch (err) {
+        // Never surface the URL in the error — it may be the credential.
+        console.error("Configured placement tracker failed:", err);
+        return {
+          name: fallbackName,
+          placementItems: [],
+          error: "Failed to load a configured Placement Tracker link.",
+        };
+      }
+    })
+  );
+
+  return { configured: true, trackers };
+}
+
 /**
  * Server action to parse a local Placement Tracker .xlsx file uploaded via FormData.
  * Returns parsed placement ticker allocations array for client-side merge.
