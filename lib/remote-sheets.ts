@@ -1,6 +1,9 @@
 import "server-only";
 import { createSign } from "node:crypto";
-import { classifyLink, normalizeExcelUrl } from "./remote-sheets-url";
+// Explicit .ts extension, matching the rest of lib/: Node strips types natively and
+// resolves these modules directly (scripts/ and node --test both rely on it), and a
+// bare specifier only works through the bundler.
+import { classifyLink, normalizeExcelUrl } from "./remote-sheets-url.ts";
 
 /**
  * Authenticated fetching of remote spreadsheets for the P&L calculator.

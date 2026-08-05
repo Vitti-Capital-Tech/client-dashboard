@@ -72,7 +72,8 @@ export function PnlCalculatorClient() {
   const setSearchQuery = usePnlCalculatorStore((s) => s.setSearchQuery);
   const accountHolders = usePnlCalculatorStore((s) => s.accountHolders);
   const setAccountHolders = usePnlCalculatorStore((s) => s.setAccountHolders);
-  const configuredTrackersAttempted = usePnlCalculatorStore((s) => s.configuredTrackersAttempted);
+  // Read through `live()` where it is needed, not as a selector — the guard must reflect
+  // the value at call time, not at render time.
   const setConfiguredTrackersAttempted = usePnlCalculatorStore(
     (s) => s.setConfiguredTrackersAttempted
   );
@@ -544,21 +545,19 @@ export function PnlCalculatorClient() {
   /**
    * Loads the standing `PLACEMENT_TRACKER_URL` link(s) once per session.
    *
-   * Runs on mount but guards on a STORE flag, not component state: the route remounts
-   * on every portal tab navigation, and a real tracker is a 12 MB workbook that takes
-   * ~12s to parse — repeating that on each visit would be unusable. The flag is set
-   * before the await so React's development double-invoke cannot fire it twice either.
+   * NOT on mount. On a cold server cache this is ~48s of CPU-bound ExcelJS parsing in
+   * the single Node process, which starves every other server action: uploading a trade
+   * file during that window left `resolveAccountHoldersAction` / DB-holdings / spot
+   * prices queued behind it, so the upload either hung "parsing…" for a minute or
+   * failed outright. Running it AFTER a trade file is in place removes the contention,
+   * and costs nothing in usefulness — placements only matter once there are trades.
    *
-   * Declared AFTER `reapplyPlacementMerges` on purpose: the effect body only runs post
-   * render so a forward reference would work, but reading in dependency order keeps it
-   * honest (and keeps eslint's no-use-before-declare quiet).
-   *
-   * Deliberately independent of whether a trade file is loaded yet. The trackers just
-   * join `placementFiles`; the merge is a no-op until there are trades, and every later
-   * upload rebuilds from that list anyway.
+   * Guarded by a STORE flag, not component state: the route remounts on every portal tab
+   * navigation. The flag is set before the first await so React's development
+   * double-invoke cannot fire it twice either.
    */
-  useEffect(() => {
-    if (configuredTrackersAttempted) return;
+  const loadStandingTrackers = () => {
+    if (live().configuredTrackersAttempted) return;
     setConfiguredTrackersAttempted(true);
 
     startFetchingUrl(async () => {
@@ -587,24 +586,40 @@ export function PnlCalculatorClient() {
         reapplyPlacementMerges(updatedFileList, live().result);
       }
 
+      const cachedCount = loaded.filter((t) => t.cached).length;
+      const notes = [
+        failed.length > 0
+          ? `${failed.length} configured link(s) failed: ${failed
+              .map((t) => t.error)
+              .filter(Boolean)
+              .join(" ")} Check PLACEMENT_TRACKER_URL in .env.local.`
+          : "",
+        cachedCount > 0
+          ? `${cachedCount} served from the server cache — the workbooks are only re-parsed every 10 minutes, since a full parse costs ~48s.`
+          : "",
+        loaded.some((t) => t.hint) ? loaded.map((t) => t.hint).filter(Boolean).join(" ") : "",
+      ].filter(Boolean);
+
       setPlacementMsg({
         type: failed.length > 0 && loaded.length === 0 ? "error" : "success",
         text:
           loaded.length > 0
             ? `Loaded ${loaded.length} standing Placement Tracker${
                 loaded.length === 1 ? "" : "s"
-              } from configuration: ${loaded.map((t) => t.name).join(", ")}.`
+              }: ${loaded.map((t) => `${t.name} (${t.placementItems.length} tickers)`).join(", ")}.`
             : "Could not load the configured Placement Tracker link(s).",
-        hint:
-          failed.length > 0
-            ? `${failed.length} configured link(s) failed: ${failed
-                .map((t) => t.error)
-                .filter(Boolean)
-                .join(" ")} Check PLACEMENT_TRACKER_URL in .env.local.`
-            : undefined,
+        hint: notes.length > 0 ? notes.join(" ") : undefined,
       });
     });
-    // Intentionally mount-only: the store flag is the real guard.
+  };
+
+  /**
+   * Returning to the tab mid-session: if a trade file is already loaded but the trackers
+   * were never fetched, pick them up. On a warm server cache this is a 0 ms no-op.
+   */
+  useEffect(() => {
+    if (live().tradeFiles.length > 0) loadStandingTrackers();
+    // Mount-only; `configuredTrackersAttempted` in the store is the real guard.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -875,6 +890,10 @@ export function PnlCalculatorClient() {
         }
 
         recalculateTradeFiles(updatedTradeFileList, "all", holders);
+
+        // Only now: the standing trackers are ~48s of CPU on a cold cache, and starting
+        // them any earlier starved this upload's own server actions.
+        loadStandingTrackers();
       } catch (err) {
         console.error("Error processing trade file:", err);
         setPlacementMsg({
@@ -1283,8 +1302,42 @@ export function PnlCalculatorClient() {
         </div>
       )}
 
+      {/* While the standing trackers are being fetched and merged, the numbers on screen
+          are only half the story — the placement enrichment has not landed yet. Showing a
+          part-built table and then having it jump is worse than showing nothing, so the
+          whole results view is replaced by one clear loader until the merge settles. */}
+      {isFetchingUrl && (
+        <div className="bg-card border border-line rounded-2xl p-10 sm:p-14 shadow-shadow flex flex-col items-center text-center gap-4">
+          <span className="relative flex h-12 w-12">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-navy/20 animate-ping" />
+            <svg className="relative h-12 w-12 animate-spin text-navy" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+              <path
+                d="M22 12a10 10 0 0 1-10 10"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+
+          <div className="space-y-1.5">
+            <p className="text-base font-bold text-ink">Loading Placement Trackers…</p>
+            <p className="text-xs text-mut max-w-md leading-relaxed">
+              Fetching the configured workbooks and merging their allocations into the P&amp;L.
+              The first load after a server restart parses ~22&nbsp;MB of Excel and can take
+              up to a minute; after that it is served from cache and is near-instant.
+            </p>
+          </div>
+
+          <div className="w-full max-w-xs h-1 rounded-full bg-paper-2 overflow-hidden">
+            <div className="h-full w-1/3 rounded-full bg-navy animate-pulse" />
+          </div>
+        </div>
+      )}
+
       {/* KPI Cards & Results View */}
-      {result && (
+      {result && !isFetchingUrl && (
         <div className="space-y-6">
           {/* Metrics Overview */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

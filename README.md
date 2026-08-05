@@ -175,13 +175,21 @@ MICROSOFT_CLIENT_SECRET=YOUR_CLIENT_SECRET
 The private key is multi-line — keep it double-quoted, either with real newlines or `\n` escapes. Access tokens are minted per process and cached in memory until just before they expire; bearer tokens are only ever sent to `oauth2.googleapis.com` / `googleapis.com` / `graph.microsoft.com`, never to the pasted URL's host.
 
 #### Standing Placement Tracker links (optional — P&L calculator)
-So the desk never has to paste the same link again, set one or more **permanent** tracker URLs. The calculator loads them automatically the first time it is opened in a session. Separate several links with commas, semicolons or newlines — the desk keeps one workbook per year and they are merged exactly as if uploaded by hand:
+So the desk never has to paste the same link again, set one or more **permanent** tracker URLs. The calculator loads them automatically, once per session, **right after a trade file is loaded** — not on page open, because on a cold cache the parse would starve that very upload's own server actions (see below). Separate several links with commas, semicolons or newlines — the desk keeps one workbook per year and they are merged exactly as if uploaded by hand:
 ```bash
 PLACEMENT_TRACKER_URL="https://docs.google.com/spreadsheets/d/<2026-ID>/edit,https://docs.google.com/spreadsheets/d/<2025-ID>/edit"
 ```
 Deliberately **not** a `NEXT_PUBLIC_` variable: for an "anyone with the link" sheet the URL *is* the credential, so it is read server-side only and never reaches the browser — the UI shows the downloaded filename instead. Private links still need the machine credentials above.
 
-A real tracker is a ~12 MB workbook that takes **~12 s** to fetch and parse, so the load happens **once per session**, guarded by a flag in the calculator store rather than in component state — the route remounts on every portal tab navigation, and a component-level flag would repeat that cost on each visit. Links are fetched concurrently and reported individually, so one dead link costs only itself. The manual paste field remains for one-offs, and the calculator's **Reset** keeps the standing trackers (they are configuration, not the user's work) instead of paying the parse again.
+These workbooks are big: the real 2026 and 2025 trackers are 12.5 MB and 9.3 MB, and **parsing them costs ~30 s and ~18 s** (download is only ~3 s each). Three things follow:
+
+* Links are parsed **sequentially**. Parsing is CPU-bound and single-threaded, so running both at once saved nothing (45.4 s vs 46.8 s) while pushing peak memory from 2.1 GB to **3.2 GB RSS** — enough to destabilise the server and intermittently drop one of the trackers.
+* Parsed results are **cached server-side for 10 minutes** per URL, so the ~48 s is paid once per server process rather than once per session; a cache hit returns in 0 ms. The TTL keeps placements added during the day visible. If a refresh fails, the last good copy is served with a note rather than the tracker disappearing.
+* The load runs **once per session**, guarded by a flag in the calculator store rather than component state — the route remounts on every portal tab navigation, and a component-level flag would repeat the cost each visit.
+* It is triggered **after** the trade file is processed, never on mount. Node is single-threaded, so a cold-cache parse blocks every other server action: a trade file uploaded during that window had its account-holder lookup, DB-holdings sync and spot-price fetch all queued behind ~48 s of Excel parsing, which showed up as an upload hanging on "parsing…" or failing outright.
+* While the trackers are fetching and merging, the results view is replaced by a single clear loader rather than rendering a half-enriched table that then jumps.
+
+The manual paste field remains for one-offs, and the calculator's **Reset** keeps the standing trackers (they are configuration, not the user's work).
 
 ### 4.3 Database (Supabase)
 Apply the schema and seed the demo data:
