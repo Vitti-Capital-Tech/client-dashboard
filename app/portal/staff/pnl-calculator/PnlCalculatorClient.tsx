@@ -188,6 +188,10 @@ export function PnlCalculatorClient() {
       parts.push(
         "Part of this parcel was sold; the units still held were valued from the DB holdings snapshot and added to the sell side."
       );
+    } else if (item.isDbOnly) {
+      parts.push(
+        "No trade in the uploaded ledger backs this row — it exists because the holdings snapshot has the position. Both the cost basis and the market value come from the database, not from a contract note. Free placement options land here, since nothing is ever bought."
+      );
     } else if (item.isDbOpenValued) {
       parts.push(
         "Nothing was sold — the sell side is this open position marked to the latest DB holdings snapshot, not realised cash."
@@ -255,6 +259,9 @@ export function PnlCalculatorClient() {
           })!` +
             (merged.partialExitCount > 0
               ? ` ${merged.partialExitCount} of them were partial exits — the still-held parcel was added on top of the realised sale.`
+              : "") +
+            (merged.createdCount > 0
+              ? ` Added ${merged.createdCount} row(s) for holdings the trade file never mentioned (mostly free placement options, which have no contract note) — their cost basis comes from the snapshot, so they are tagged "DB Holding".`
               : "")
         );
       }

@@ -146,6 +146,7 @@ export interface PnlSummaryItem {
   isEnriched?: boolean; // true if merged with placement tracker data
   isDbMarketValued?: boolean; // true if sellQty/sellPrice auto-filled from database portfolio market value
   isDbOpenValued?: boolean; // true when a FULLY open position was valued off the DB — nothing was sold
+  isDbOnly?: boolean; // true when the row exists ONLY because the DB holds it — no trade in the file
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
   isUnlistedOption?: boolean; // true for a synthetic row valuing free UNLISTED placement options
@@ -222,6 +223,10 @@ export function getSummaryGroupKey(rawCode: string): string {
  * Unmatched badge and the Unmatched tab both exclude them.
  */
 export function exportStatus(item: PnlSummaryItem): string {
+  // Checked before `isMatched`: a DB-only row trivially reconciles because both legs
+  // were set from the same held quantity, so "Matched" would imply a trade
+  // reconciliation that never happened. Where the figures came from is the useful fact.
+  if (item.isDbOnly) return "DB Holding";
   if (item.isMatched) return "Matched";
   if (item.isUnlistedOption) return "Unlisted Option";
   if (isOptionRow(item)) return "Option";
@@ -1301,6 +1306,9 @@ function applyDerivedComment(item: PnlSummaryItem): void {
   const notes: string[] = [];
   if (item.isPartialBuy) notes.push("Partial Buy");
   if (item.isPartialExit) notes.push("Partial Exit");
+  // "DB Holding" already implies an open position valued off the snapshot, so it
+  // stands alone rather than reading "Open · DB Holding".
+  else if (item.isDbOnly) notes.push("DB Holding");
   else if (item.isDbOpenValued) notes.push("Open");
   if (notes.length > 0) item.comment = notes.join(" · ");
 }
@@ -1477,19 +1485,53 @@ export function collectPlacementClientNames(
  * Unmatched with a non-zero Open Qty, which is the discrepancy worth seeing
  * rather than a balanced row hiding it.
  */
+/**
+ * Whether a DB holding belongs to a given summary row.
+ *
+ * Shared by the fill pass and the create pass so they cannot disagree — if they
+ * used different rules, a holding could be filled into a row AND also given a
+ * duplicate row of its own.
+ *
+ * An option row can only be matched by an option holding of the SAME code: valuing
+ * GEDO at the GED share price would be wildly wrong.
+ */
+function dbHoldingMatchesRow(
+  holding: { ticker: string; qty: number; marketValue: number },
+  row: Pick<PnlSummaryItem, "ticker" | "instrument" | "hasOptionCode" | "parentTicker">
+): boolean {
+  const hCode = String(holding.ticker || "").trim().toUpperCase();
+  const wantOption = isOptionRow(row);
+  if (isOptionCode(hCode) !== wantOption) return false;
+  if (wantOption ? hCode !== row.ticker.toUpperCase() : getParentTicker(hCode) !== summaryParentTicker(row)) {
+    return false;
+  }
+  return holding.qty > 0 || holding.marketValue > 0;
+}
+
 export function mergeDbHoldingsIntoSummary(
   summary: PnlSummaryItem[],
   dbHoldings: Array<{
     accountRef?: string;
     ticker: string;
     parentTicker?: string;
+    companyName?: string;
     qty: number;
     marketValue: number;
+    /** `qty × avg_cost` from the snapshot. 0 for a free option. */
+    costBase?: number;
   }>
-): { summary: PnlSummaryItem[]; mergedCount: number; partialExitCount: number; totalPnl: number } {
+): {
+  summary: PnlSummaryItem[];
+  mergedCount: number;
+  partialExitCount: number;
+  /** Rows invented for holdings the trade file never mentioned. */
+  createdCount: number;
+  totalPnl: number;
+} {
   const updatedSummary = summary.map((item) => ({ ...item }));
   let mergedCount = 0;
   let partialExitCount = 0;
+  let createdCount = 0;
 
   for (const item of updatedSummary) {
     const isFullyOpen = item.sellQty === 0 || item.sellPrice === 0;
@@ -1500,16 +1542,7 @@ export function mergeDbHoldingsIntoSummary(
 
     if (!isFullyOpen && !isPartialExit) continue;
 
-    const parent = summaryParentTicker(item);
-    const wantOption = isOptionRow(item);
-    // An option row can only be valued by an option holding of the same code —
-    // valuing GEDO at the GED share price would be wildly wrong.
-    const match = dbHoldings.find((h) => {
-      const hCode = String(h.ticker || "").trim().toUpperCase();
-      if (isOptionCode(hCode) !== wantOption) return false;
-      if (wantOption ? hCode !== item.ticker.toUpperCase() : getParentTicker(hCode) !== parent) return false;
-      return h.qty > 0 || h.marketValue > 0;
-    });
+    const match = dbHoldings.find((h) => dbHoldingMatchesRow(h, item));
 
     if (!match) continue;
 
@@ -1545,11 +1578,68 @@ export function mergeDbHoldingsIntoSummary(
     mergedCount++;
   }
 
+  // -------------------------------------------------------------------------
+  // Holdings the trade file never mentioned get a row of their own.
+  //
+  // The fill pass above can only annotate rows that already exist, and rows only
+  // exist for things that were TRADED. A free placement option is never bought, so
+  // no contract note exists for it and no row was ever created — which silently
+  // dropped the whole position from the P&L. (Real case: 106 of 108 option
+  // positions in the database carry `avg_cost = 0`, e.g. GEDO, LITOC.)
+  //
+  // The buy side comes from the snapshot's own cost base, NOT from zero: a free
+  // option really did cost nothing, so its entire market value is gain, while a
+  // holding that was genuinely paid for keeps its cost and shows an honest
+  // unrealised gain instead of an inflated one.
+  // -------------------------------------------------------------------------
+  for (const h of dbHoldings) {
+    const code = String(h.ticker || "").trim().toUpperCase();
+    if (!code) continue;
+    if (!(h.qty > 0 || h.marketValue > 0)) continue;
+
+    // Same predicate as the fill pass, so a holding already merged into a row is
+    // never given a second, duplicate row.
+    const isOption = isOptionCode(code);
+    const alreadyRepresented = updatedSummary.some((row) => dbHoldingMatchesRow(h, row));
+    if (alreadyRepresented) continue;
+
+    const costBase = Math.round((h.costBase ?? 0) * 100) / 100;
+    const marketValue = Math.round(h.marketValue * 100) / 100;
+
+    updatedSummary.push({
+      ticker: code,
+      parentTicker: h.parentTicker || getParentTicker(code),
+      instrument: isOption ? "OPTION" : "EQUITY",
+      company: h.companyName || code,
+      // Units held stand in for both legs: bought at the snapshot's cost base,
+      // marked to its market value, so the row reads as the open position it is.
+      buyQty: h.qty,
+      sellQty: h.qty,
+      buyPrice: costBase,
+      sellPrice: marketValue,
+      totalBuyValue: costBase,
+      totalSellValue: marketValue,
+      pnlCalculated: Math.round((marketValue - costBase) * 100) / 100,
+      isMatched: h.qty > 0,
+      isOption,
+      hasOptionCode: isOption,
+      isDbMarketValued: true,
+      isDbOpenValued: true,
+      // Nothing in the uploaded ledger backs this row — its cost basis is the
+      // snapshot's, which the Comments column has to say out loud.
+      isDbOnly: true,
+      comment: "DB Holding",
+      openQty: 0,
+      tradeCount: 0,
+    });
+    createdCount++;
+  }
+
   updatedSummary.sort(compareSummaryItems);
 
   const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
 
-  return { summary: updatedSummary, mergedCount, partialExitCount, totalPnl };
+  return { summary: updatedSummary, mergedCount, partialExitCount, createdCount, totalPnl };
 }
 
 // ---------------------------------------------------------------------------

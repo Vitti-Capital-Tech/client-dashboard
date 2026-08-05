@@ -726,6 +726,158 @@ test("PNL Calculator - fully open rows still FILL rather than add, and matched r
   assert.equal(merged.mergedCount, 1);
 });
 
+test("PNL Calculator - a DB holding the trade file never mentioned gets its own row", async () => {
+  // Real shape: the ordinary was traded, the free option GEDO never was (avg_cost 0,
+  // so no contract note exists), and before this it was silently dropped entirely.
+  const summary = [
+    {
+      ticker: "GED",
+      parentTicker: "GED",
+      instrument: "EQUITY" as const,
+      company: "GOLDEN DEEPS",
+      buyQty: 100000,
+      sellQty: 0,
+      buyPrice: 4300,
+      sellPrice: 0,
+      totalBuyValue: 4300,
+      totalSellValue: 0,
+      pnlCalculated: -4300,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 100000,
+      tradeCount: 1,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(summary, [
+    { ticker: "GED", parentTicker: "GED", companyName: "GOLDEN DEEPS", qty: 100000, marketValue: 4300, costBase: 4300 },
+    { ticker: "GEDO", parentTicker: "GED", companyName: "GOLDEN DEEPS OPT", qty: 62500, marketValue: 562.5, costBase: 0 },
+    { ticker: "LITOC", parentTicker: "LIT", companyName: "LITHIUM OPT", qty: 200000, marketValue: 200, costBase: 0 },
+  ]);
+
+  assert.equal(merged.createdCount, 2, "GEDO and LITOC each need a row of their own");
+
+  const gedo = merged.summary.find((s) => s.ticker === "GEDO");
+  assert.ok(gedo, "the free option must no longer be dropped");
+  assert.equal(gedo.instrument, "OPTION");
+  assert.equal(gedo.parentTicker, "GED");
+  assert.equal(gedo.buyQty, 62500);
+  assert.equal(gedo.sellQty, 62500);
+  // Free: cost really is zero, so the whole market value is gain.
+  assert.equal(gedo.buyPrice, 0);
+  assert.equal(gedo.sellPrice, 562.5);
+  assert.equal(gedo.pnlCalculated, 562.5);
+  assert.equal(gedo.isDbOnly, true);
+  assert.equal(gedo.comment, "DB Holding");
+  assert.equal(gedo.tradeCount, 0);
+  assert.equal(exportStatus(gedo), "DB Holding");
+
+  // LITOC's parent is LIT, which is absent from the file entirely — still fine.
+  const litoc = merged.summary.find((s) => s.ticker === "LITOC");
+  assert.equal(litoc?.parentTicker, "LIT");
+  assert.equal(litoc?.pnlCalculated, 200);
+
+  // GED was already in the file, so it is FILLED, not duplicated.
+  assert.equal(merged.summary.filter((s) => s.ticker === "GED").length, 1);
+  assert.equal(merged.summary.find((s) => s.ticker === "GED")?.comment, "Open");
+
+  // The dropped value now reaches the total: -4300 + 4300 (GED) + 562.50 + 200.
+  assert.equal(merged.totalPnl, 762.5);
+});
+
+test("PNL Calculator - a created row keeps a real cost base rather than showing free profit", async () => {
+  // 2 of 108 option positions in the DB DO have a cost. Zeroing them would report a
+  // gain that never happened.
+  const merged = mergeDbHoldingsIntoSummary([], [
+    { ticker: "HLXO", parentTicker: "HLX", companyName: "HELIX OPT", qty: 71429, marketValue: 142.86, costBase: 2028.6 },
+  ]);
+
+  const row = merged.summary.find((s) => s.ticker === "HLXO");
+  assert.equal(row?.buyPrice, 2028.6);
+  assert.equal(row?.sellPrice, 142.86);
+  assert.equal(row?.pnlCalculated, -1885.74, "a paid-for option that fell must show the loss");
+  assert.equal(merged.createdCount, 1);
+});
+
+test("PNL Calculator - the create pass never duplicates a holding it already filled", async () => {
+  const summary = [
+    {
+      ticker: "GEDO",
+      parentTicker: "GED",
+      instrument: "OPTION" as const,
+      company: "GOLDEN DEEPS OPT",
+      buyQty: 62500,
+      sellQty: 0,
+      buyPrice: 0,
+      sellPrice: 0,
+      totalBuyValue: 0,
+      totalSellValue: 0,
+      pnlCalculated: 0,
+      isMatched: false,
+      isOption: true,
+      hasOptionCode: true,
+      openQty: 62500,
+      tradeCount: 1,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(summary, [
+    { ticker: "GEDO", parentTicker: "GED", qty: 62500, marketValue: 562.5, costBase: 0 },
+  ]);
+
+  assert.equal(merged.summary.filter((s) => s.ticker === "GEDO").length, 1, "filled, not duplicated");
+  assert.equal(merged.createdCount, 0);
+  assert.equal(merged.mergedCount, 1);
+  assert.equal(merged.summary[0].sellPrice, 562.5);
+  assert.equal(merged.summary[0].isDbOnly, undefined);
+});
+
+test("PNL Calculator - an equity holding does not create a row off an option code", async () => {
+  // The GED equity row must not be satisfied by the GEDO option holding, and GEDO
+  // must still get its own row rather than being swallowed.
+  const merged = mergeDbHoldingsIntoSummary(
+    [
+      {
+        ticker: "GED",
+        parentTicker: "GED",
+        instrument: "EQUITY" as const,
+        company: "GOLDEN DEEPS",
+        buyQty: 1000,
+        sellQty: 0,
+        buyPrice: 43,
+        sellPrice: 0,
+        totalBuyValue: 43,
+        totalSellValue: 0,
+        pnlCalculated: -43,
+        isMatched: false,
+        isOption: false,
+        hasOptionCode: false,
+        openQty: 1000,
+        tradeCount: 1,
+      },
+    ],
+    [{ ticker: "GEDO", parentTicker: "GED", qty: 62500, marketValue: 562.5, costBase: 0 }]
+  );
+
+  // GED untouched — an option holding cannot price the ordinary.
+  const ged = merged.summary.find((s) => s.ticker === "GED");
+  assert.equal(ged?.sellPrice, 0);
+  assert.equal(ged?.isDbMarketValued, undefined);
+  // GEDO created on its own line.
+  assert.equal(merged.createdCount, 1);
+  assert.equal(merged.summary.find((s) => s.ticker === "GEDO")?.sellPrice, 562.5);
+});
+
+test("PNL Calculator - empty holdings create nothing", async () => {
+  const merged = mergeDbHoldingsIntoSummary([], [
+    { ticker: "ZERO", parentTicker: "ZER", qty: 0, marketValue: 0, costBase: 0 },
+    { ticker: "", parentTicker: "", qty: 100, marketValue: 5, costBase: 0 },
+  ]);
+  assert.equal(merged.createdCount, 0);
+  assert.equal(merged.summary.length, 0);
+});
+
 test("PNL Calculator - a sell-only row is never treated as a partial exit", async () => {
   const merged = mergeDbHoldingsIntoSummary(
     [
