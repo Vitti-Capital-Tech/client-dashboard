@@ -627,8 +627,14 @@ The In-Memory PNL Calculator is a state-of-the-art admin utility designed for ze
 - **Server Actions & Web Requests (`app/actions/pnl-calculator.ts`):**
   - `fetchDatabaseHoldingsAction(accountRef)`: Account-scoped server action returning `DbHoldingInfo[]` array.
   - `fetchPlacementTrackerUrlAction(url, googleAccessToken?, microsoftAccessToken?)`: URL action with OAuth token fallbacks returning lightweight `PlacementTickerInfo[]` array.
-  - `exportPnlXlsxAction(summaryRows)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
-  - `exportPnlCsvAction(summaryRows)`: Generates RFC 4180 compliant `.csv` download string.
+  - `exportPnlXlsxAction(summaryRows, scope?)`: Uses ExcelJS on the server to generate color-coded `.xlsx` buffer (base64 string) for download.
+  - `exportPnlCsvAction(summaryRows, scope?)`: Generates RFC 4180 compliant `.csv` download string.
+  - `resolveAccountHoldersAction(accountRefs)`: `accounts.external_ref` → `clients.display_name`, matched on the normalised ref. Feeds both the placement-merge hints and the export filename.
+  - **Export filenames (`buildPnlExportFilename`)** carry the account number *and* the holder's name — `pnl-114716-Sri-Guru-Nanak-PTY-LTD-2026-08-05.xlsx`. A folder of `pnl-summary-calculated-<date>.xlsx` files says nothing about whose figures are inside and collides across clients on the same day.
+    - Scoped to the account filter in force, so exporting one account does not label the file with every account in the upload.
+    - Anything outside `[A-Za-z0-9]` collapses to a single dash (Windows rejects `\ / : * ? " < > |`, and a trailing dot would corrupt the extension), and each part is length-capped — the longest real account name yields 75 characters, well inside the 255-byte per-component limit.
+    - 2–3 accounts keep the numbers but drop the names (concatenating several long entity names would blow past path limits); beyond three it becomes `pnl-<n>-accounts-<date>`. With no account information at all it falls back to the original `pnl-summary-calculated-<date>` shape rather than inventing one.
+    - Built inside the action, not passed in from the browser, so the sanitising cannot be bypassed by the caller.
   - Configured `serverActions.bodySizeLimit: "25mb"` in `next.config.ts`.
 - **Interactive UI Capabilities (`PnlCalculatorClient.tsx`):**
   - Client Account Filter Bar UI for filtering PnL summaries by `external_ref` / Account number.

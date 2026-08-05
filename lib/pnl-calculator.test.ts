@@ -8,6 +8,7 @@ import {
   mergeDbHoldingsIntoSummary,
   collectPlacementClientNames,
   resolvePlacementClientHints,
+  buildPnlExportFilename,
   isClientMatch,
   parseAddOnSpec,
   parseAddOnSpecs,
@@ -1010,6 +1011,75 @@ test("resolvePlacementClientHints - an explicit choice always wins, and multi-ac
     resolvePlacementClientHints({ ...base, override: "__auto__", files: [], accountHolders: {} }),
     { hints: [], source: "none" }
   );
+});
+
+test("buildPnlExportFilename - carries the account number and the holder's name", async () => {
+  const holders = {
+    "114716": "Sri Guru Nanak PTY LTD",
+    "1103199": "Zidiplus PTY LTD",
+    "114660": "Mr Shaishav Kumar Patel + Mrs Vidushi Patel",
+  };
+  const base = { accountHolders: holders, isoDate: "2026-08-05" };
+
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["114716"], extension: "xlsx" }),
+    "pnl-114716-Sri-Guru-Nanak-PTY-LTD-2026-08-05.xlsx"
+  );
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["1103199"], extension: "csv" }),
+    "pnl-1103199-Zidiplus-PTY-LTD-2026-08-05.csv"
+  );
+
+  // A name with characters Windows rejects still yields a usable filename.
+  const messy = buildPnlExportFilename({ ...base, accounts: ["114660"], extension: "xlsx" });
+  assert.match(messy, /^pnl-114660-Mr-Shaishav-Kumar-Patel-Mrs-Vidushi-Patel-2026-08-05\.xlsx$/);
+  assert.equal(/[\\/:*?"<>|]/.test(messy), false, "must contain no reserved characters");
+
+  // An account the database could not name still gets its number.
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["9999999"], extension: "csv" }),
+    "pnl-9999999-2026-08-05.csv"
+  );
+});
+
+test("buildPnlExportFilename - multi-account and empty scopes stay sane", async () => {
+  const holders = { a: "Alpha Pty Ltd", b: "Beta Pty Ltd", c: "Gamma", d: "Delta" };
+  const base = { accountHolders: holders, isoDate: "2026-08-05", extension: "csv" as const };
+
+  // Two or three accounts: numbers only — concatenating names would blow past path limits.
+  assert.equal(buildPnlExportFilename({ ...base, accounts: ["a", "b"] }), "pnl-a-b-2026-08-05.csv");
+  assert.equal(buildPnlExportFilename({ ...base, accounts: ["a", "b", "c"] }), "pnl-a-b-c-2026-08-05.csv");
+  // Beyond three, even the numbers are summarised.
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["a", "b", "c", "d"] }),
+    "pnl-4-accounts-2026-08-05.csv"
+  );
+
+  // Duplicates and blanks do not inflate the count.
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["a", "a", "", "  "] }),
+    "pnl-a-Alpha-Pty-Ltd-2026-08-05.csv"
+  );
+
+  // No account information at all — keep the old shape rather than invent one.
+  assert.equal(
+    buildPnlExportFilename({ accounts: [], accountHolders: {}, isoDate: "2026-08-05", extension: "xlsx" }),
+    "pnl-summary-calculated-2026-08-05.xlsx"
+  );
+});
+
+test("buildPnlExportFilename - a very long holder name is capped, extension intact", async () => {
+  const long = "A".repeat(200) + " Investments And Holdings Proprietary Limited";
+  const name = buildPnlExportFilename({
+    accounts: ["114716"],
+    accountHolders: { "114716": long },
+    isoDate: "2026-08-05",
+    extension: "xlsx",
+  });
+  assert.ok(name.endsWith(".xlsx"), name);
+  assert.ok(name.startsWith("pnl-114716-"), name);
+  // Comfortably inside any filesystem's per-component limit (255 bytes).
+  assert.ok(name.length < 120, `too long: ${name.length}`);
 });
 
 test("PNL Calculator - collectPlacementClientNames dedupes across sheets", async () => {

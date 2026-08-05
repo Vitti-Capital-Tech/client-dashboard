@@ -1486,6 +1486,66 @@ export function resolvePlacementClientHints(args: {
 }
 
 /**
+ * Reduces a name to a safe filename fragment.
+ *
+ * Windows rejects `\ / : * ? " < > |` outright and both platforms choke on control
+ * characters, so anything outside `[A-Za-z0-9]` collapses to a single dash. A
+ * trailing dot is also stripped — Windows silently drops those, which would corrupt
+ * the extension.
+ */
+function filenamePart(value: string, maxLength = 48): string {
+  const cleaned = String(value || "")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned.slice(0, maxLength).replace(/-+$/, "");
+}
+
+/**
+ * Names an export after the client it belongs to.
+ *
+ * A folder of `pnl-summary-calculated-2026-08-05.xlsx` files is unusable — nothing
+ * says whose figures are inside, and one per client per day collides. So the account
+ * number AND the holder's name both go in the name.
+ *
+ * Multiple accounts drop the names and keep the numbers: concatenating several
+ * "Mr Shaishav Kumar Patel + Mrs Vidushi Patel" would blow past path limits. Beyond
+ * three, even the numbers are summarised.
+ */
+export function buildPnlExportFilename(args: {
+  /** Account numbers in scope — the selected one, or every one in the file. */
+  accounts: string[];
+  accountHolders: Record<string, string>;
+  /** `YYYY-MM-DD`. */
+  isoDate: string;
+  extension: "xlsx" | "csv";
+}): string {
+  const { accountHolders, isoDate, extension } = args;
+  const accounts = [...new Set((args.accounts || []).map((a) => String(a || "").trim()).filter(Boolean))];
+
+  const stamp = filenamePart(isoDate, 10);
+  const base = "pnl";
+
+  if (accounts.length === 0) {
+    // Nothing identifies the client — keep the old shape rather than invent one.
+    return `pnl-summary-calculated-${stamp}.${extension}`;
+  }
+
+  if (accounts.length === 1) {
+    const ref = filenamePart(accounts[0], 24);
+    const holder = filenamePart(accountHolders[accounts[0]] || "");
+    return holder
+      ? `${base}-${ref}-${holder}-${stamp}.${extension}`
+      : `${base}-${ref}-${stamp}.${extension}`;
+  }
+
+  if (accounts.length <= 3) {
+    return `${base}-${accounts.map((a) => filenamePart(a, 24)).join("-")}-${stamp}.${extension}`;
+  }
+
+  return `${base}-${accounts.length}-accounts-${stamp}.${extension}`;
+}
+
+/**
  * Every distinct account holder named across a set of parsed Placement Tracker
  * sheets — the candidate list staff pick from when a trade-file name does not
  * identify the client on its own.

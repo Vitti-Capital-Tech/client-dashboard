@@ -824,10 +824,26 @@ export function PnlCalculatorClient() {
     if (placementFileInputRef.current) placementFileInputRef.current.value = "";
   };
 
+  /**
+   * Which client the export covers, so the file is named after them.
+   *
+   * Scoped to the account filter in force: exporting one account must not label the
+   * file with every account in the upload.
+   */
+  const exportScope = () => ({
+    accounts:
+      selectedAccount !== "all"
+        ? [selectedAccount]
+        : result?.accounts && result.accounts.length > 0
+        ? result.accounts
+        : [],
+    accountHolders,
+  });
+
   const handleDownloadXlsx = () => {
     if (!result || !result.summary.length) return;
     startExportingXlsx(async () => {
-      const { base64, filename } = await exportPnlXlsxAction(result.summary);
+      const { base64, filename } = await exportPnlXlsxAction(result.summary, exportScope());
       const binary = atob(base64);
       const array = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
@@ -848,7 +864,7 @@ export function PnlCalculatorClient() {
   const handleDownloadCsv = () => {
     if (!result || !result.summary.length) return;
     startExportingCsv(async () => {
-      const { csv, filename } = await exportPnlCsvAction(result.summary);
+      const { csv, filename } = await exportPnlCsvAction(result.summary, exportScope());
       const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

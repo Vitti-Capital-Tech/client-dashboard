@@ -4,6 +4,7 @@ import {
   parsePnlFileBuffer,
   buildPnlExportXlsxBuffer,
   buildPnlExportCsvString,
+  buildPnlExportFilename,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
@@ -48,28 +49,52 @@ export async function parsePnlFileAction(formData: FormData): Promise<ParseResul
 }
 
 /**
+ * Which client an export belongs to, so the file can be named after them.
+ *
+ * Optional: an export from a file with no `Account` column still works, it just
+ * falls back to the old undifferentiated name.
+ */
+export interface PnlExportScope {
+  /** Account numbers in scope — the selected one, or every one in the file. */
+  accounts?: string[];
+  /** Account number → holder name, as resolved by `resolveAccountHoldersAction`. */
+  accountHolders?: Record<string, string>;
+}
+
+/**
  * Server action to generate an Excel (.xlsx) export buffer (base64) for download.
  */
 export async function exportPnlXlsxAction(
-  summaryRows: PnlSummaryItem[]
+  summaryRows: PnlSummaryItem[],
+  scope?: PnlExportScope
 ): Promise<{ base64: string; filename: string }> {
   const buffer = await buildPnlExportXlsxBuffer(summaryRows);
   const base64 = buffer.toString("base64");
-  const isoDate = new Date().toISOString().split("T")[0];
-  const filename = `pnl-summary-calculated-${isoDate}.xlsx`;
-  return { base64, filename };
+  return { base64, filename: exportFilename(scope, "xlsx") };
 }
 
 /**
  * Server action to generate a CSV export string for download.
  */
 export async function exportPnlCsvAction(
-  summaryRows: PnlSummaryItem[]
+  summaryRows: PnlSummaryItem[],
+  scope?: PnlExportScope
 ): Promise<{ csv: string; filename: string }> {
   const csv = buildPnlExportCsvString(summaryRows);
-  const isoDate = new Date().toISOString().split("T")[0];
-  const filename = `pnl-summary-calculated-${isoDate}.csv`;
-  return { csv, filename };
+  return { csv, filename: exportFilename(scope, "csv") };
+}
+
+/**
+ * Builds the download name here rather than taking one from the browser, so the
+ * sanitising in `buildPnlExportFilename` cannot be bypassed by the caller.
+ */
+function exportFilename(scope: PnlExportScope | undefined, extension: "xlsx" | "csv"): string {
+  return buildPnlExportFilename({
+    accounts: scope?.accounts || [],
+    accountHolders: scope?.accountHolders || {},
+    isoDate: new Date().toISOString().split("T")[0],
+    extension,
+  });
 }
 
 export interface PlacementUrlResult {
