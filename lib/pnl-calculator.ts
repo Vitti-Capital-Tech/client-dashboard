@@ -84,6 +84,8 @@ export interface PlacementAddOn {
  * took part in (`mergePlacementTrackerIntoSummary`).
  */
 export interface PlacementYearCandidate {
+  /** The tab it came from (`KNI (b)`), for the audit note. Absent on Overview-only rows. */
+  sheetName?: string;
   /** From the Overview's Date Issued, else the Overview sheet's own year. */
   issueYear?: number;
   /** ISO `YYYY-MM-DD`, when the sheet states one. */
@@ -211,6 +213,14 @@ export interface PnlSummaryItem {
   placementYearUnresolved?: boolean;
   /** Human-readable reason for `placementYearUnresolved`, shown on hover. */
   placementYearNote?: string;
+  /**
+   * The grants on the placement row(s) this client was actually found in — the ONLY
+   * source `buildUnlistedOptionRows` trusts once the merge has run.
+   *
+   * An empty array is a real answer ("that placement grants nothing"), which is why
+   * it is distinct from `undefined` ("the merge never identified a placement").
+   */
+  placementAddOns?: PlacementAddOn[];
 }
 
 /**
@@ -1152,6 +1162,11 @@ export async function parsePlacementTrackerBuffer(
   }
 
   const placementMap = new Map<string, PlacementTickerInfo>();
+  // One entry per PLACEMENT, not per ticker: a stock placed twice has two tabs and two
+  // Overview rows, and only one of them may be the client's.
+  const entriesByTicker = new Map<string, PlacementYearCandidate[]>();
+  // How many tabs a ticker has produced so far, to pair the nth tab with the nth row.
+  const tabsSeen = new Map<string, number>();
 
   // Exclude non-ticker system/utility sheets. The Overview sheet is not a ticker
   // tab, but it is the ONLY place the Add-Ons column lives, so it gets its own
@@ -1291,9 +1306,18 @@ export async function parsePlacementTrackerBuffer(
     }
 
     if (allocations.length > 0) {
-      const overview = addOnsByTicker.get(parentTicker);
-      placementMap.set(parentTicker, {
-        ticker: parentTicker,
+      // `KNI (a)` and `KNI (b)` are two placements of the same stock, each with its
+      // own Overview row — its own date and its own Options cell. They are paired by
+      // ORDER: the nth tab for a ticker to the nth Overview row for it, both being
+      // chronological. `set()` used to overwrite here, so whichever tab came second
+      // was the only one that survived and the earlier parcel vanished from the merge.
+      const overviewRows = addOnsByTicker.get(parentTicker) ?? [];
+      const seen = tabsSeen.get(parentTicker) ?? 0;
+      tabsSeen.set(parentTicker, seen + 1);
+      const overview = overviewRows[seen] ?? overviewRows[0];
+
+      const entry: PlacementYearCandidate = {
+        sheetName: rawSheetName,
         totalShares,
         totalActualDollar: Math.round(totalActualDollar * 100) / 100,
         clientAllocations: allocations,
@@ -1302,7 +1326,11 @@ export async function parsePlacementTrackerBuffer(
         // Falls back to the workbook's own year so a tracker whose Overview has no
         // usable date can still be told apart from the other year's tracker.
         issueYear: overview?.issueYear ?? workbookYear,
-      });
+      };
+
+      const existing = entriesByTicker.get(parentTicker);
+      if (existing) existing.push(entry);
+      else entriesByTicker.set(parentTicker, [entry]);
     }
   }
 
@@ -1311,17 +1339,37 @@ export async function parsePlacementTrackerBuffer(
   // entitlement is driven by the client's Buy Qty in the trade file, not by the
   // allocation rows, so it must survive with an empty allocation list — which the
   // `matchedAllocations.length > 0` guard in the merge treats as "nothing to fill".
-  for (const [ticker, overview] of addOnsByTicker.entries()) {
-    if (placementMap.has(ticker)) continue;
-    if (!overview.addOns.some((a) => !a.listed)) continue;
+  for (const [ticker, overviewRows] of addOnsByTicker.entries()) {
+    if (entriesByTicker.has(ticker)) continue;
+    const granting = overviewRows.filter((r) => r.addOns.some((a) => !a.listed));
+    if (granting.length === 0) continue;
+
+    entriesByTicker.set(
+      ticker,
+      granting.map((r) => ({
+        totalShares: 0,
+        totalActualDollar: 0,
+        clientAllocations: [],
+        addOns: r.addOns,
+        issueDate: r.issueDate,
+        issueYear: r.issueYear ?? workbookYear,
+      }))
+    );
+  }
+
+  for (const [ticker, entries] of entriesByTicker.entries()) {
+    const first = entries[0];
     placementMap.set(ticker, {
       ticker,
-      totalShares: 0,
-      totalActualDollar: 0,
-      clientAllocations: [],
-      addOns: overview.addOns,
-      issueDate: overview.issueDate,
-      issueYear: overview.issueYear ?? workbookYear,
+      // The first placement's figures. With more than one, `candidates` is what any
+      // consumer must read — these describe one of them, not the ticker.
+      totalShares: first.totalShares,
+      totalActualDollar: first.totalActualDollar,
+      clientAllocations: first.clientAllocations,
+      addOns: first.addOns,
+      issueDate: first.issueDate,
+      issueYear: first.issueYear,
+      candidates: entries.length > 1 ? entries : undefined,
     });
   }
 
@@ -1493,8 +1541,8 @@ function utcDate(year: number, month: number, day: number): Date | null {
  * Listed add-ons are parsed and kept too: `buildUnlistedOptionRows` filters them
  * out, and keeping them makes "why is there no row for X" answerable.
  */
-function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow> {
-  const found = new Map<string, OverviewRow>();
+function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow[]> {
+  const found = new Map<string, OverviewRow[]>();
 
   let wb: XLSX.WorkBook;
   try {
@@ -1530,10 +1578,14 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow> {
     // told apart from the same ticker in another tracker.
     const sheetYear = yearFromText(sheetName);
 
-    // First sheet to describe a ticker wins, matching the first-row-wins rule below.
-    for (const [ticker, row] of readAddOnRows(rows)) {
-      if (found.has(ticker)) continue;
-      found.set(ticker, { ...row, issueYear: row.issueYear ?? sheetYear });
+    // EVERY row for a ticker, in sheet order — a stock placed twice in a year has two
+    // Overview rows with their own dates and their own Options cells, and one of them
+    // may grant options while the other grants none.
+    for (const [ticker, rowsForTicker] of readAddOnRows(rows)) {
+      const dated = rowsForTicker.map((r) => ({ ...r, issueYear: r.issueYear ?? sheetYear }));
+      const existing = found.get(ticker);
+      if (existing) existing.push(...dated);
+      else found.set(ticker, dated);
     }
   };
 
@@ -1568,14 +1620,18 @@ function looksLikeTickerTab(sheetName: string): boolean {
 }
 
 /**
- * Pulls `ticker -> { grants, date }` out of one already-read sheet.
+ * Pulls `ticker -> [{ grants, date }, …]` out of one already-read sheet.
  *
  * The date is read for EVERY row carrying a ticker, not just the ones with grants:
  * it is what tells two placements of the same ticker apart across tracker years, and
  * a ticker with no add-ons still needs that.
+ *
+ * Rows are kept in sheet order and NOT collapsed. A stock placed twice in one year
+ * has two rows — matching the two `KNI (a)` / `KNI (b)` tabs — and the grants on one
+ * of them do not belong to the other.
  */
-function readAddOnRows(rows: unknown[][]): Map<string, OverviewRow> {
-  const found = new Map<string, OverviewRow>();
+function readAddOnRows(rows: unknown[][]): Map<string, OverviewRow[]> {
+  const found = new Map<string, OverviewRow[]>();
 
   let headerRowIdx = -1;
   let colTicker = -1;
@@ -1676,16 +1732,16 @@ function readAddOnRows(rows: unknown[][]): Map<string, OverviewRow> {
     // to column 2 is a guess that is safe next to a parsed grant and not on its own.
     if (specs.length === 0 && (colTicker === -1 || !settlementDate)) continue;
 
-    // First row wins: a ticker placed twice in a year keeps its earliest add-ons
-    // rather than silently adopting the later row's strikes.
-    if (found.has(ticker)) continue;
-
     const isoDate = settlementDate ? settlementDate.toISOString().slice(0, 10) : undefined;
-    found.set(ticker, {
+    const row: OverviewRow = {
       addOns: specs,
       issueDate: isoDate,
       issueYear: settlementDate ? settlementDate.getUTCFullYear() : undefined,
-    });
+    };
+
+    const existing = found.get(ticker);
+    if (existing) existing.push(row);
+    else found.set(ticker, [row]);
   }
 
   return found;
@@ -1804,6 +1860,196 @@ function rowTradeYears(row: PnlSummaryItem): number[] {
   return row.tradeYears ?? [];
 }
 
+/**
+ * Which placements of a ticker this client is actually in, and their parcels.
+ *
+ * The tracker is read the same way a person reads it: find the client's name in the
+ * placement's participant list, and take THAT row — its allocation and its Options
+ * cell alike. Grants belong to a placement, not to a stock, so a client who took the
+ * January 2026 ACM placement (empty Add-Ons cell) earns nothing from the June 2025
+ * one that granted `1:2@0.1 Unlisted`.
+ *
+ * A placement with exactly ONE participant is used even when the name did not match —
+ * there is no one else it could belong to, and this is what lets a merge work before
+ * the account holder has been resolved. A placement with several participants and no
+ * match is `ambiguous`: filling from it would sum strangers' allocations.
+ *
+ * The year is a TIE-BREAK, not the primary key, and only bites when the client's
+ * placements span more than one year: then the ledger's Contract Date has to name one,
+ * and if it cannot, `unresolvedYear` sends the row to blank-and-red. Two placements in
+ * the SAME year (`KNI (a)` and `KNI (b)`) are both the client's and both come back —
+ * quantities sort them out downstream, not dates.
+ */
+function selectClientPlacements(
+  info: PlacementTickerInfo,
+  row: PnlSummaryItem,
+  hints: string[]
+): {
+  entries: PlacementYearCandidate[];
+  allocations: PlacementClientAllocation[];
+  ambiguous: boolean;
+  unresolvedYear: boolean;
+} {
+  const entries = placementEntries(info);
+
+  const byName = entries.map((entry) => ({
+    entry,
+    matched: hints.length
+      ? entry.clientAllocations.filter((a) => hints.some((h) => isClientMatch(a.clientName, h)))
+      : [],
+    ambiguous: false,
+  }));
+
+  // The single-participant fallback applies ONLY when the name found nothing anywhere.
+  // Per placement it would be actively wrong: `ABE (a)` listing one name and `ABE (b)`
+  // listing the client would hand this row the stranger's parcel as well as their own.
+  const perEntry = byName.some((p) => p.matched.length > 0)
+    ? byName
+    : entries.map((entry) => {
+        // One participant — no question about whose allocation this is.
+        if (entry.clientAllocations.length === 1) {
+          return { entry, matched: entry.clientAllocations, ambiguous: false };
+        }
+        return { entry, matched: [], ambiguous: entry.clientAllocations.length > 1 };
+      });
+
+  let inPlay = perEntry.filter((p) => p.matched.length > 0);
+
+  if (inPlay.length === 0) {
+    // No parcel to fill with. An entry carrying grants but no allocation rows at all
+    // (the Overview-only case) still counts as "the client's", since the entitlement
+    // runs off their ledger Buy Qty rather than off a participant list.
+    const grantOnly = perEntry.filter((p) => p.entry.clientAllocations.length === 0);
+    return {
+      entries: grantOnly.map((p) => p.entry),
+      allocations: [],
+      ambiguous: perEntry.some((p) => p.ambiguous),
+      unresolvedYear: false,
+    };
+  }
+
+  const years = new Set(inPlay.map((p) => p.entry.issueYear));
+
+  if (years.size > 1) {
+    // Placements a year apart: the Contract Date answers first.
+    const tradeYears = rowTradeYears(row);
+    const byYear = inPlay.filter(
+      (p) => p.entry.issueYear != null && tradeYears.includes(p.entry.issueYear)
+    );
+
+    if (byYear.length > 0 && new Set(byYear.map((p) => p.entry.issueYear)).size === 1) {
+      inPlay = byYear;
+    } else {
+      // The dates could not name one. QUANTITIES can: if one combination of the
+      // client's parcels reconciles exactly with the row's buy and sell, that is the
+      // placement they were in — harder evidence than any date heuristic. Only an
+      // exact, unambiguous fit counts; anything else goes to blank-and-red.
+      const byQty = narrowToReconcilingParcels(inPlay, row);
+      if (!byQty) return { entries: [], allocations: [], ambiguous: false, unresolvedYear: true };
+      inPlay = byQty;
+    }
+  } else if (inPlay.length > 1 && row.buyQty > 0 && row.buyQty < row.sellQty) {
+    // Same year, several parcels (`KNI (a)` + `KNI (b)`), and the ledger already
+    // records one of them as a real buy. Adding all of them would count that one
+    // twice, so only the parcels accounting for the shortfall are taken. No fit means
+    // no narrowing: every parcel is used, exactly as before, and flagged Partial Buy.
+    inPlay = narrowToReconcilingParcels(inPlay, row) ?? inPlay;
+  }
+
+  return {
+    entries: inPlay.map((p) => p.entry),
+    allocations: inPlay.flatMap((p) => p.matched),
+    ambiguous: false,
+    unresolvedYear: false,
+  };
+}
+
+/**
+ * Confirms a client's placements against the ledger's own quantities.
+ *
+ * Finding the name is not proof: the same name can sit in two placements of the same
+ * stock, and only one of them may be the parcel this trade file is about. The numbers
+ * settle it — the units the ledger cannot account for must equal what the placement
+ * delivered:
+ *
+ *   - blank buy side  -> the parcels should add up to the units SOLD;
+ *   - short buy side  -> to the SHORTFALL, `sellQty - buyQty`, since the buys already
+ *                        recorded are one of the parcels arriving as a contract note.
+ *
+ * Returns the one combination that fits exactly, or `null` when none does or when
+ * several do — a tie is not evidence, and the caller treats it accordingly.
+ */
+function narrowToReconcilingParcels<T extends { matched: PlacementClientAllocation[] }>(
+  inPlay: T[],
+  row: PnlSummaryItem
+): T[] | null {
+  const target = row.buyQty === 0 ? row.sellQty : row.sellQty - row.buyQty;
+  // 2^n over the placements, not the allocations: n is how many times one stock was
+  // placed, which is 2 or 3 in the real trackers.
+  if (target <= 0 || inPlay.length > 10) return null;
+
+  let fit: T[] | null = null;
+
+  for (let mask = 1; mask < 1 << inPlay.length; mask++) {
+    let sum = 0;
+    const subset: T[] = [];
+    for (let i = 0; i < inPlay.length; i++) {
+      if (mask & (1 << i)) {
+        subset.push(inPlay[i]);
+        for (const a of inPlay[i].matched) sum += a.roundShares;
+      }
+    }
+    if (sum !== target) continue;
+    // A second exact fit means the quantities do not identify anything.
+    if (fit) return null;
+    fit = subset;
+  }
+
+  return fit;
+}
+
+/**
+ * Which of a client's parcels account for the units sold but never bought.
+ *
+ * A stock placed twice in one year gets two tabs — `KNI (a)` and `KNI (b)` — and the
+ * client can be in both. The trade file's SELL quantity covers both parcels, but the
+ * BUY side often carries only one of them: the other never produced a contract note.
+ * Adding every parcel on top of a buy side that already contains one of them counts
+ * that parcel twice, which is the same doubling as the cross-year case, one file down.
+ *
+ * The year cannot separate these — they share one — so the QUANTITIES do. The subset
+ * of parcels summing exactly to the shortfall is the missing one(s); the fewest
+ * parcels wins if more than one subset fits. With no exact fit nothing is assumed and
+ * every parcel is returned, which is the long-standing behaviour and still flagged
+ * `Partial Buy` for a human to look at.
+ *
+ * Brute force over subsets: a stock placed more than three or four times in a year is
+ * not a thing, and 2^n on n≤10 is nothing. Above that the search is skipped entirely.
+ */
+function parcelsCoveringShortfall(
+  parcels: PlacementClientAllocation[],
+  shortfall: number
+): PlacementClientAllocation[] {
+  if (shortfall <= 0 || parcels.length > 10) return parcels;
+
+  let best: PlacementClientAllocation[] | null = null;
+
+  for (let mask = 1; mask < 1 << parcels.length; mask++) {
+    let sum = 0;
+    const subset: PlacementClientAllocation[] = [];
+    for (let i = 0; i < parcels.length; i++) {
+      if (mask & (1 << i)) {
+        sum += parcels[i].roundShares;
+        subset.push(parcels[i]);
+      }
+    }
+    if (sum !== shortfall) continue;
+    if (!best || subset.length < best.length) best = subset;
+  }
+
+  return best ?? parcels;
+}
+
 /** Why a ticker was left blank, in one line the desk can act on. */
 function describeYearMismatch(info: PlacementTickerInfo, row: PnlSummaryItem): string {
   const placed = (info.candidates ?? [])
@@ -1874,11 +2120,12 @@ export function mergePlacementTrackerIntoSummary(
     );
 
     if (existing) {
-      // WHICH YEAR'S placement, before which client's allocation. A ticker in two
-      // trackers has two parcels and at most one of them belongs on this row.
-      const chosen = chooseYearCandidate(info, existing);
+      // WHICH PLACEMENTS is this client in? Everything else follows from that — the
+      // parcels to fill with AND the option grants, which are read off the very rows
+      // the client was found in rather than off the ticker as a whole.
+      const selection = selectClientPlacements(info, existing, hints);
 
-      if (!chosen) {
+      if (selection.unresolvedYear) {
         // Nothing defensible to fill with. The row is left alone and flagged, so the
         // buy side reads blank-and-red rather than as a confident zero or, worse, as
         // both years added together.
@@ -1889,28 +2136,19 @@ export function mergePlacementTrackerIntoSummary(
         continue;
       }
 
-      // Keep only the allocation rows belonging to the account holder(s) in play.
-      let matchedAllocations = hints.length
-        ? chosen.clientAllocations.filter((alloc) =>
-            hints.some((hint) => isClientMatch(alloc.clientName, hint))
-          )
-        : [];
+      if (selection.ambiguous) ambiguousTickers.push(parentTicker);
 
-      if (matchedAllocations.length === 0) {
-        if (chosen.clientAllocations.length === 1) {
-          // Only one participant — no ambiguity about whose allocation this is.
-          matchedAllocations = chosen.clientAllocations;
-        } else if (chosen.clientAllocations.length > 1) {
-          ambiguousTickers.push(parentTicker);
-        }
+      // Set even when nothing is filled — a client whose parcel the ledger already
+      // records in full still earns that placement's options, and a placement with an
+      // empty Add-Ons cell must be able to say "none" rather than leave the question
+      // open for a different year's grants to answer.
+      if (selection.entries.length > 0) {
+        existing.placementAddOns = mergeAddOnSpecs(selection.entries.map((e) => e.addOns ?? []));
       }
 
+      const matchedAllocations = selection.allocations;
+
       if (matchedAllocations.length > 0) {
-        const placementQty = matchedAllocations.reduce((sum, a) => sum + a.roundShares, 0);
-        const placementPrice = matchedAllocations.reduce((sum, a) => sum + a.actualDollar, 0);
-
-        let updated = false;
-
         // A SHORT BUY side: units were sold that the ledger never saw bought, but
         // some buys ARE recorded — so the row is not simply blank. The placement
         // allocation is the missing parcel and is ADDED on top of what is already
@@ -1918,6 +2156,21 @@ export function mergePlacementTrackerIntoSummary(
         // which would otherwise change the answer for the price branch.
         const isShortBuy =
           existing.buyQty > 0 && existing.sellQty > 0 && existing.buyQty < existing.sellQty;
+
+        // With several parcels in the same year (the `KNI (a)` / `KNI (b)` case) the
+        // ledger often already carries one of them as a real contract note. Adding
+        // every parcel would then double that one, so the SHORTFALL — units sold but
+        // never bought — is matched against the parcels first: exactly the parcels
+        // that account for it are used, and the rest are left alone.
+        const parcelsUsed =
+          isShortBuy && matchedAllocations.length > 1
+            ? parcelsCoveringShortfall(matchedAllocations, existing.sellQty - existing.buyQty)
+            : matchedAllocations;
+
+        const placementQty = parcelsUsed.reduce((sum, a) => sum + a.roundShares, 0);
+        const placementPrice = parcelsUsed.reduce((sum, a) => sum + a.actualDollar, 0);
+
+        let updated = false;
 
         if (existing.buyQty === 0 && placementQty > 0) {
           // Blank buy side — fill it.
@@ -1947,7 +2200,9 @@ export function mergePlacementTrackerIntoSummary(
           existing.openQty = existing.buyQty - existing.sellQty;
           existing.isMatched = existing.buyQty === existing.sellQty && existing.buyQty > 0;
           existing.isEnriched = true;
-          existing.clientAllocations = matchedAllocations;
+          // The parcels actually applied, not every one on offer — the audit trail
+          // has to say which placement the filled figures came from.
+          existing.clientAllocations = parcelsUsed;
           if (existing.isPartialBuy) partialBuyCount++;
           applyDerivedComment(existing);
           mergedCount++;
@@ -2047,10 +2302,14 @@ export function splitTrackerUrls(raw: string): { urls: string[]; rejected: strin
  *  - two DIFFERENT placements a year apart — real, but only one of them is what the
  *    trade file in front of us is about.
  *
- * Neither is summable here, so each year is kept as its own `candidate` and the choice
- * is deferred to `mergePlacementTrackerIntoSummary`, which can compare the placement's
- * year against the ledger's Contract Date. Within ONE year the first workbook wins,
- * exactly as add-ons do — a repeat is a duplicate, not a second parcel.
+ * Neither is summable here, so every placement stays its own `candidate` and the choice
+ * is deferred to `mergePlacementTrackerIntoSummary`, which knows both the client and
+ * the ledger's Contract Dates.
+ *
+ * Two tabs of ONE workbook (`KNI (a)`, `KNI (b)`) are two real placements and are both
+ * kept. What is dropped is a placement REPEATED in a later workbook: an incoming
+ * placement identical to one already held — same year, same date, same participant
+ * list — is the same sheet carried forward, not a second parcel.
  *
  * A workbook whose year could not be read is keyed by its position instead, so two
  * undated files still produce two candidates and get reported rather than silently
@@ -2059,69 +2318,44 @@ export function splitTrackerUrls(raw: string): { urls: string[]; rejected: strin
 export function combinePlacementMaps(
   files: Array<{ map: Map<string, PlacementTickerInfo> }>
 ): Map<string, PlacementTickerInfo> {
-  // ticker -> year key -> that year's placement. Insertion order is file order.
-  const byTicker = new Map<string, Map<string, PlacementYearCandidate>>();
-  const meta = new Map<string, { ticker: string; company?: string; addOns?: PlacementAddOn[] }>();
+  const byTicker = new Map<string, PlacementYearCandidate[]>();
+  const meta = new Map<string, { ticker: string; company?: string }>();
 
   files.forEach((f, fileIdx) => {
     for (const [ticker, info] of f.map.entries()) {
-      // An undated workbook cannot be compared with any other, so it is kept apart
-      // rather than being assumed to be the same placement.
-      const yearKey = info.issueYear != null ? `y${info.issueYear}` : `f${fileIdx}`;
+      const entries = byTicker.get(ticker) ?? [];
+      if (!entries.length) byTicker.set(ticker, entries);
 
-      let years = byTicker.get(ticker);
-      if (!years) {
-        years = new Map();
-        byTicker.set(ticker, years);
-      }
+      for (const entry of placementEntries(info)) {
+        // An undated workbook cannot be compared with any other, so its placements are
+        // kept apart rather than assumed to repeat one already seen.
+        const year = entry.issueYear ?? undefined;
+        const key = entrySignature(entry, year != null ? `y${year}` : `f${fileIdx}`);
+        if (entries.some((e) => entrySignature(e, e.issueYear != null ? `y${e.issueYear}` : `f${fileIdx}`) === key)) {
+          continue;
+        }
 
-      // DEEP copy: sharing allocation objects with the caller's stored maps let a
-      // later merge mutate the source, which is what once made a ticker's Buy Qty
-      // grow on every re-upload.
-      const candidate = years.get(yearKey);
-      if (!candidate) {
-        years.set(yearKey, {
-          issueYear: info.issueYear,
-          issueDate: info.issueDate,
-          totalShares: info.totalShares,
-          totalActualDollar: info.totalActualDollar,
-          clientAllocations: info.clientAllocations.map((a) => ({ ...a })),
-          addOns: info.addOns ? info.addOns.map((a) => ({ ...a })) : undefined,
+        // DEEP copy: sharing allocation objects with the caller's stored maps let a
+        // later merge mutate the source, which is what once made a ticker's Buy Qty
+        // grow on every re-upload.
+        entries.push({
+          ...entry,
+          clientAllocations: entry.clientAllocations.map((a) => ({ ...a })),
+          addOns: entry.addOns ? entry.addOns.map((a) => ({ ...a })) : undefined,
         });
-      } else {
-        // Same placement seen again in another workbook. A client already listed keeps
-        // the first workbook's figures — repeating a row does not make it a second
-        // parcel — while a client only the later workbook names is added, since the
-        // two files can carry different slices of the same participant list.
-        for (const alloc of info.clientAllocations) {
-          if (candidate.clientAllocations.some((a) => a.clientName === alloc.clientName)) continue;
-          candidate.clientAllocations.push({ ...alloc });
-        }
-        candidate.totalShares = candidate.clientAllocations.reduce((s, a) => s + a.roundShares, 0);
-        candidate.totalActualDollar =
-          Math.round(candidate.clientAllocations.reduce((s, a) => s + a.actualDollar, 0) * 100) / 100;
-        candidate.issueDate ??= info.issueDate;
-        // Only WITHIN one year does "the first workbook that has them" apply — the
-        // same placement described twice, not a second grant.
-        if (!candidate.addOns?.length && info.addOns?.length) {
-          candidate.addOns = info.addOns.map((a) => ({ ...a }));
-        }
       }
 
       const m = meta.get(ticker);
-      if (!m) {
-        meta.set(ticker, { ticker: info.ticker, company: info.company });
-      } else if (!m.company && info.company) {
-        m.company = info.company;
-      }
+      if (!m) meta.set(ticker, { ticker: info.ticker, company: info.company });
+      else if (!m.company && info.company) m.company = info.company;
     }
   });
 
   const combined = new Map<string, PlacementTickerInfo>();
 
-  for (const [ticker, years] of byTicker.entries()) {
-    const candidates = [...years.values()];
-    const first = candidates[0];
+  for (const [ticker, entries] of byTicker.entries()) {
+    if (entries.length === 0) continue;
+    const first = entries[0];
     const m = meta.get(ticker)!;
 
     combined.set(ticker, {
@@ -2130,19 +2364,49 @@ export function combinePlacementMaps(
       issueDate: first.issueDate,
       issueYear: first.issueYear,
       // With one candidate these ARE the placement. With several they describe the
-      // first year only and must not be used to fill anything — hence `candidates`,
+      // first one only and must not be used to fill anything — hence `candidates`,
       // which every consumer of this map has to honour. `addOns` included: taking
-      // them from whichever year happened to have some is what minted an option
+      // them from whichever placement happened to have some is what minted an option
       // position off a placement the client was never in.
       totalShares: first.totalShares,
       totalActualDollar: first.totalActualDollar,
       clientAllocations: first.clientAllocations.map((a) => ({ ...a })),
       addOns: first.addOns ? first.addOns.map((a) => ({ ...a })) : undefined,
-      candidates: candidates.length > 1 ? candidates : undefined,
+      candidates: entries.length > 1 ? entries : undefined,
     });
   }
 
   return combined;
+}
+
+/** Every placement behind a ticker — the `candidates` list, or the info itself. */
+function placementEntries(info: PlacementTickerInfo): PlacementYearCandidate[] {
+  if (info.candidates?.length) return info.candidates;
+  return [
+    {
+      issueYear: info.issueYear,
+      issueDate: info.issueDate,
+      totalShares: info.totalShares,
+      totalActualDollar: info.totalActualDollar,
+      clientAllocations: info.clientAllocations,
+      addOns: info.addOns,
+    },
+  ];
+}
+
+/**
+ * Identifies a placement well enough to spot the same one arriving twice.
+ *
+ * Year, date, size and the participant list: a sheet copied into the next year's
+ * workbook matches on all four, while two genuine placements of one stock differ in at
+ * least the size or the participants.
+ */
+function entrySignature(entry: PlacementYearCandidate, yearKey: string): string {
+  const clients = entry.clientAllocations
+    .map((a) => `${a.clientName.trim().toLowerCase()}:${a.roundShares}`)
+    .sort()
+    .join("|");
+  return `${yearKey}/${entry.issueDate ?? ""}/${entry.totalShares}/${clients}`;
 }
 
 /**
@@ -2648,17 +2912,19 @@ function isoFromDayFirst(dd: string, mm: string, yy: string): string | null {
 /**
  * The unlisted grants that belong to the placement THIS row actually took part in.
  *
- * Grants are a property of one year's placement, not of the ticker. ACM was placed in
- * June 2025 with `1:2@0.1 Unlisted` attached and again in January 2026 with an empty
- * Add-Ons cell; the client took the 2026 parcel, and reading the grants off "whichever
- * year had some" minted 23,333 options out of a placement they were never in.
+ * Grants are a property of a placement, not of a stock. ACM was placed in June 2025
+ * with `1:2@0.1 Unlisted` attached and again in January 2026 with an empty Add-Ons
+ * cell; the client took the 2026 parcel, and reading the grants off "whichever row of
+ * that ticker had some" minted 23,333 options out of a placement they were never in.
  *
- * Returns nothing when the year cannot be resolved — the row is already blank and red,
- * and an option position derived from an unknown parcel would be no better founded.
+ * The merge has already found which placement row the client is in, so `placementAddOns`
+ * is the answer whenever it is set — INCLUDING when it is empty, which means "that
+ * placement grants nothing", not "look elsewhere". Only a row the merge never reached
+ * falls back to picking a placement by year.
  */
 function unlistedAddOnsFor(info: PlacementTickerInfo, equityRow: PnlSummaryItem): PlacementAddOn[] {
-  const chosen = chooseYearCandidate(info, equityRow);
-  return (chosen?.addOns ?? []).filter((a) => !a.listed);
+  const source = equityRow.placementAddOns ?? chooseYearCandidate(info, equityRow)?.addOns ?? [];
+  return source.filter((a) => !a.listed);
 }
 
 /** The ASX codes whose spot price an unlisted-option valuation needs. */
