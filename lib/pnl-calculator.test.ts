@@ -15,6 +15,7 @@ import {
   isClientMatch,
   parseAddOnSpec,
   parseAddOnSpecs,
+  ASSUMED_UNLISTED_OPTION_TERM_YEARS,
   buildUnlistedOptionRows,
   collectUnlistedOptionTickers,
   exportStatus,
@@ -1177,6 +1178,103 @@ test("parsePlacementTrackerBuffer - reads a real workbook via SheetJS", async ()
   assert.equal(grv.addOns?.[0].listed, false);
 });
 
+test("parsePlacementTrackerBuffer - the 2025 tracker's 'Options' column is read too", async () => {
+  // The 2025 workbook heads the grant column "Options"; 2026 renamed it "Add-Ons".
+  // Matching only "Add-Ons" made every 2025 unlisted option vanish from the P&L.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  const ov = wb.addWorksheet("2025 Overview");
+  ov.addRow([]);
+  ov.addRow(["Counter", "Date Issued", "Options"]);
+  ov.addRow(["ABE", "3 Mar 2025", "1:2 @$0.10 Unlisted Exp 31/12/29"]);
+  ov.addRow(["ZEU", "4 Mar 2025", "Entitlement Offer"]);
+
+  const ws = wb.addWorksheet("ABE");
+  ws.addRow(["CLIENT NAME", "ADVISOR/BROKER", "Allocation ($)", "Round Shares", "ACTUAL $"]);
+  ws.addRow(["Mr Akshit Verma", "VTC", 5000, 50000, 5000]);
+
+  const map = await parsePlacementTrackerBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer)
+  );
+
+  const abe = map.get("ABE");
+  assert.ok(abe, "the ticker tab must still be parsed");
+  assert.equal(abe.addOns?.length, 1);
+  assert.equal(abe.addOns?.[0].strike, 0.1);
+  assert.equal(abe.addOns?.[0].expiry, "2029-12-31");
+  assert.equal(abe.addOns?.[0].listed, false);
+
+  // "Entitlement Offer" is not a grant, so ZEU earns no entry at all.
+  assert.equal(map.get("ZEU"), undefined);
+});
+
+test("parsePlacementTrackerBuffer - both Overview sheets in one workbook are read", async () => {
+  // The two years live in one file often enough that reading only the first sheet
+  // would drop a whole year of grants.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  const ov25 = wb.addWorksheet("2025 Overview");
+  ov25.addRow(["Counter", "Options"]);
+  ov25.addRow(["ABE", "1:2 @$0.10 Unlisted Exp 31/12/29"]);
+
+  const ov26 = wb.addWorksheet("2026 Overview");
+  ov26.addRow(["Counter", "Add-Ons"]);
+  ov26.addRow(["GRV", "1:3 @$0.14 Unlisted Expiry 31/12/27"]);
+
+  const map = await parsePlacementTrackerBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer)
+  );
+
+  // Neither has an allocation tab; both survive on the add-on-only path.
+  assert.equal(map.get("ABE")?.addOns?.[0].strike, 0.1);
+  assert.equal(map.get("GRV")?.addOns?.[0].strike, 0.14);
+});
+
+test("parseOverviewAddOns - a duplicated grant column does not double the entitlement", async () => {
+  // A year in transition carries both spellings side by side, often copy-pasted.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  const ov = wb.addWorksheet("Overview");
+  ov.addRow(["Counter", "Options", "Add-Ons"]);
+  ov.addRow([
+    "ABE",
+    "1:2 @$0.10 Unlisted Exp 31/12/29",
+    "1:2 @$0.10 Unlisted Exp 31/12/29 + 1:4 @$0.20 Unlisted Piggyback Exp 31/12/30",
+  ]);
+
+  const map = await parsePlacementTrackerBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer)
+  );
+
+  const addOns = map.get("ABE")?.addOns;
+  assert.equal(addOns?.length, 2, "the repeated tranche collapses; the piggyback is kept");
+  assert.deepEqual(
+    addOns?.map((a) => a.tranche),
+    [1, 2],
+    "tranches are renumbered across the merged columns"
+  );
+  assert.equal(addOns?.[1].piggyback, true);
+});
+
+test("parseOverviewAddOns - an unrecognised column header is found by its contents", async () => {
+  // Third rename insurance: no header matches, so the column is located by the cells.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  const ov = wb.addWorksheet("2025 Overview");
+  ov.addRow(["Counter", "Date Issued", "Extras"]);
+  ov.addRow(["ABE", "3 Mar 2025", "1:2 @$0.10 Unlisted Exp 31/12/29"]);
+
+  const map = await parsePlacementTrackerBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer)
+  );
+
+  assert.equal(map.get("ABE")?.addOns?.[0].strike, 0.1);
+});
+
 test("parsePlacementTrackerBuffer - a non-xlsx buffer fails with an actionable message", async () => {
   await assert.rejects(
     () => parsePlacementTrackerBuffer(Buffer.from("not a spreadsheet at all")),
@@ -1870,6 +1968,96 @@ test("parseAddOnSpecs - separator-agnostic, and single grants still work", async
   // A repeated tranche is not counted twice.
   const dupe = parseAddOnSpecs("1:2 @$0.60 Unlisted Exp 30/06/27 + 1:2 @$0.60 Unlisted Exp 30/06/27");
   assert.equal(dupe.length, 1);
+});
+
+test("parseAddOnSpec - a cell with no expiry is dated 2 years off settlement", async () => {
+  // Most of the 2025 Options column looks exactly like this. Rejecting it (the old
+  // behaviour) reported a real entitlement as nothing at all.
+  const settlement = new Date(Date.UTC(2025, 2, 3)); // 3 Mar 2025
+
+  const spec = parseAddOnSpec("1:2@0.1 Unlisted", 1, settlement);
+  assert.ok(spec, "a grant with no expiry must still parse when settlement is known");
+  assert.equal(spec.strike, 0.1);
+  assert.equal(spec.listed, false);
+  assert.equal(spec.expiry, "2027-03-03");
+  assert.equal(spec.expiryAssumed, true);
+  assert.equal(ASSUMED_UNLISTED_OPTION_TERM_YEARS, 2);
+
+  // A stated expiry always wins and is never flagged.
+  const stated = parseAddOnSpec("1:2@0.03 UnlistedExp 31/12/27", 1, settlement);
+  assert.equal(stated?.expiry, "2027-12-31");
+  assert.equal(stated?.expiryAssumed, undefined);
+
+  // No settlement date to count from -> nothing to derive, so no grant.
+  assert.equal(parseAddOnSpec("1:2@0.1 Unlisted"), null);
+
+  // An expiry that WAS typed but is not a real date is a data error, not a blank:
+  // silently substituting the assumed term would bury it.
+  assert.equal(parseAddOnSpec("1:2@0.1 Unlisted Exp 31/02/27", 1, settlement), null);
+});
+
+test("parseAddOnSpec - 'Unisted' is a typo for unlisted, not a listed grant", async () => {
+  // Verbatim from the 2025 column. Reading it as LISTED dropped the grant entirely,
+  // because listed add-ons are filtered out downstream.
+  const settlement = new Date(Date.UTC(2025, 0, 20));
+
+  for (const text of ["1:2@0.008 Unisted", "1:2@0.008 Unlisted", "1:2@0.008 un-listed"]) {
+    assert.equal(parseAddOnSpec(text, 1, settlement)?.listed, false, text);
+  }
+
+  // A genuinely listed grant is still listed.
+  assert.equal(parseAddOnSpec("1:2@0.1 Listed", 1, settlement)?.listed, true);
+});
+
+test("parsePlacementTrackerBuffer - settlement dates drive the assumed expiries", async () => {
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  // "Settlement Date" outranks "Date Issued" on a sheet carrying both.
+  const ov = wb.addWorksheet("2025 Overview");
+  ov.addRow(["Counter", "Date Issued", "Settlement Date", "Options"]);
+  ov.addRow(["ABE", "1 Jan 2025", "3/03/2025", "1:2@0.1 Unlisted"]);
+  ov.addRow(["GRV", "1 Jan 2025", "3 Mar 2025", "1:2@0.1 Unlisted"]);
+  // No settlement date at all: nothing to count from, so no grant is invented.
+  ov.addRow(["ZEU", "1 Jan 2025", "", "1:2@0.1 Unlisted"]);
+
+  const map = await parsePlacementTrackerBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer)
+  );
+
+  // Day-first "3/03/2025" and the written "3 Mar 2025" must land on the same day.
+  assert.equal(map.get("ABE")?.addOns?.[0].expiry, "2027-03-03");
+  assert.equal(map.get("ABE")?.addOns?.[0].expiryAssumed, true);
+  assert.equal(map.get("GRV")?.addOns?.[0].expiry, "2027-03-03");
+  assert.equal(map.get("ZEU"), undefined);
+});
+
+test("buildUnlistedOptionRows - an assumed expiry is labelled in the row itself", async () => {
+  const settlement = new Date(Date.UTC(2025, 2, 3));
+  const placement = new Map<string, PlacementTickerInfo>([
+    [
+      "GRV",
+      {
+        ticker: "GRV",
+        totalShares: 0,
+        totalActualDollar: 0,
+        clientAllocations: [],
+        addOns: parseAddOnSpecs("1:2@0.1 Unlisted", settlement),
+      },
+    ],
+  ]);
+
+  const { summary } = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    placement,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-06T00:00:00Z")
+  );
+
+  const row = summary.find((s) => s.isUnlistedOption)!;
+  assert.equal(row.sellQty, 5000);
+  assert.ok(row.company.includes("(assumed)"), row.company);
+  assert.equal(row.unlistedOption?.addOn.expiryAssumed, true);
 });
 
 test("parseAddOnSpecs - a mixed listed + unlisted cell keeps both, tagged", async () => {

@@ -28,6 +28,7 @@ import {
   isOptionRow,
   summaryParentTicker,
   LIVE_SPOT_SOURCES,
+  ASSUMED_UNLISTED_OPTION_TERM_YEARS,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
@@ -2179,7 +2180,12 @@ export function PnlCalculatorClient() {
                   ["Options granted", fmtQty(unlistedTip.item.sellQty)],
                   ["Spot", `${fmtCurrency(unlistedTip.item.unlistedOption.spot)} · ${unlistedTip.item.unlistedOption.spotSource}`],
                   ["Strike", fmtCurrency(unlistedTip.item.unlistedOption.addOn.strike)],
-                  ["Expiry", unlistedTip.item.unlistedOption.addOn.expiry],
+                  [
+                    "Expiry",
+                    `${unlistedTip.item.unlistedOption.addOn.expiry}${
+                      unlistedTip.item.unlistedOption.addOn.expiryAssumed ? " · assumed" : ""
+                    }`,
+                  ],
                   ["Time to expiry", `${unlistedTip.item.unlistedOption.timeToExpiryYears.toFixed(2)} yrs`],
                   [
                     "Vol / Rate / Div",
@@ -2210,6 +2216,16 @@ export function PnlCalculatorClient() {
                 {fmtCurrency(unlistedTip.item.pnlCalculated)}
               </dd>
             </dl>
+
+            {/* The tracker cell named no expiry, so the term is a convention, not a
+                read value — say so where the number is read. */}
+            {unlistedTip.item.unlistedOption.addOn.expiryAssumed && (
+              <p className="mt-2 text-[10px] text-amber-d bg-amber-bg border border-amber rounded-lg px-2 py-1.5 leading-snug">
+                No expiry in the Placement Tracker — assumed{" "}
+                {ASSUMED_UNLISTED_OPTION_TERM_YEARS} years from settlement. Add the expiry to
+                the tracker to price it exactly.
+              </p>
+            )}
 
             {/* `yahoo` and `asx` are both live quotes, so neither is warned about —
                 only a stale snapshot or no price at all. */}

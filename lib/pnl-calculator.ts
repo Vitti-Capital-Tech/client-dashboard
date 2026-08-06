@@ -66,6 +66,12 @@ export interface PlacementAddOn {
   strike: number;
   /** ISO `YYYY-MM-DD`. The source is day-first `DD/MM/YY`. */
   expiry: string;
+  /**
+   * True when the cell named no expiry and one was DERIVED from the placement's
+   * issue date (see `ASSUMED_UNLISTED_OPTION_TERM_YEARS`). Carried all the way to
+   * the tooltip and the export so a modelled term is never mistaken for a read one.
+   */
+  expiryAssumed?: boolean;
   listed: boolean;
 }
 
@@ -77,7 +83,8 @@ export interface PlacementTickerInfo {
   totalShares: number;
   totalActualDollar: number;
   clientAllocations: PlacementClientAllocation[];
-  /** Every grant parsed out of the Overview sheet's Add-Ons cell, in cell order. */
+  /** Every grant parsed out of the Overview sheet's grant cell ("Add-Ons" in the
+   *  2026 tracker, "Options" in the 2025 one), in cell order. */
   addOns?: PlacementAddOn[];
 }
 
@@ -1202,7 +1209,155 @@ export async function parsePlacementTrackerBuffer(
 }
 
 /**
- * Reads the **Add-Ons** column off the Placement Tracker's Overview sheet.
+ * Header text marking a column that carries option grants.
+ *
+ * The column has been renamed between workbooks: the 2025 tracker heads it
+ * **Options**, the 2026 one **Add-Ons**. Matching only "Add-Ons" silently dropped
+ * every 2025 unlisted grant, so both spellings — plus the "Free/Attaching/Unlisted
+ * Options" variants seen in older tabs — are accepted.
+ *
+ * Being generous costs nothing: a matched column only contributes cells that
+ * actually parse into a ratio + strike + expiry, so an "Option Fee ($)" column of
+ * numbers yields no grants rather than junk ones.
+ */
+function isAddOnHeader(norm: string): boolean {
+  return norm.startsWith("addon") || norm.includes("option");
+}
+
+/**
+ * Finds grant columns by their CONTENT when no header matched.
+ *
+ * A cell only counts if it parses into a ratio + strike, which no date, fee or note
+ * column does — so this locates the column whatever it is called. The sentinel date
+ * makes expiry-less cells ("1:2@0.1 Unlisted") count too; it is used for DETECTION
+ * only, never kept — the real rows are re-parsed against their own settlement date.
+ */
+function sniffAddOnColumns(rows: unknown[][], startRow: number): number[] {
+  const hits = new Map<number, number>();
+  const detectionDate = new Date(Date.UTC(2000, 0, 1));
+
+  for (let r = startRow; r < rows.length; r++) {
+    const cells = rows[r];
+    if (!Array.isArray(cells)) continue;
+    for (let c = 0; c < cells.length; c++) {
+      if (parseAddOnSpecs(cells[c], detectionDate).length === 0) continue;
+      hits.set(c, (hits.get(c) ?? 0) + 1);
+    }
+  }
+
+  return [...hits.keys()].sort((a, b) => a - b);
+}
+
+/**
+ * Concatenates the grants of several cells on one row, dropping repeats.
+ *
+ * Two columns describing the same grant (an "Options" column copied into a newer
+ * "Add-Ons" one) must not double the entitlement, so identical tranches collapse —
+ * the same rule `parseAddOnSpecs` applies within a single cell. Tranche numbers are
+ * reassigned across the merged list to keep them 1..n.
+ */
+function mergeAddOnSpecs(perColumn: PlacementAddOn[][]): PlacementAddOn[] {
+  const merged: PlacementAddOn[] = [];
+  const seen = new Set<string>();
+
+  for (const specs of perColumn) {
+    for (const spec of specs) {
+      const key = `${spec.ratioOptions}:${spec.ratioPerShares}@${spec.strike}/${spec.expiry}/${spec.listed}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push({ ...spec, tranche: merged.length + 1 });
+    }
+  }
+
+  return merged;
+}
+
+/** Header text for the Overview's ticker column ("Counter" in the real workbook). */
+function isTickerHeader(norm: string): boolean {
+  return (
+    norm === "counter" ||
+    norm === "ticker" ||
+    norm === "code" ||
+    norm === "security" ||
+    norm === "asx" ||
+    norm === "asxcode"
+  );
+}
+
+/**
+ * Header text for the column an assumed expiry is counted from.
+ *
+ * Settlement is what the convention names, so it is preferred; an issue/allotment
+ * date is accepted as a stand-in because some tabs carry only that, and being a few
+ * days out on a two-year term is immaterial next to dropping the grant entirely.
+ * Ranked, not boolean, so "Settlement Date" always beats "Date Issued" on a sheet
+ * that has both.
+ */
+function dateHeaderRank(norm: string): number {
+  if (norm.includes("settle")) return 2;
+  if (norm.includes("dateissued") || norm.includes("issuedate") || norm.includes("allot")) return 1;
+  if (norm === "date") return 1;
+  return 0;
+}
+
+/**
+ * Reads a Placement Tracker date cell.
+ *
+ * Cells arrive as DISPLAYED text (`raw: false`), and the column is formatted every
+ * which way across the tabs, so all of "3/03/2025", "3 Mar 2025", "3-Mar-25" and
+ * "2025-03-03" have to land on the same day. Day-first for the numeric form, as
+ * everywhere else in this file. A bare serial number is read as an Excel date.
+ */
+function parseTrackerDate(cellVal: unknown): Date | null {
+  if (cellVal instanceof Date) return Number.isNaN(cellVal.getTime()) ? null : cellVal;
+
+  const raw = String(cellVal ?? "").trim();
+  if (!raw) return null;
+
+  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) return utcDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  const dayFirst = raw.match(/^(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{2,4})/);
+  if (dayFirst) {
+    const isoText = isoFromDayFirst(dayFirst[1], dayFirst[2], dayFirst[3]);
+    return isoText ? new Date(`${isoText}T00:00:00Z`) : null;
+  }
+
+  // "3 Mar 2025", "3-Mar-25", "03 March 2025"
+  const named = raw.match(/^(\d{1,2})\s*[-\s]\s*([A-Za-z]{3,})\.?\s*[-,\s]\s*(\d{2,4})$/);
+  if (named) {
+    const month = MONTH_NAMES.indexOf(named[2].slice(0, 3).toLowerCase()) + 1;
+    if (month > 0) {
+      const year = Number(named[3]) + (named[3].length <= 2 ? 2000 : 0);
+      return utcDate(year, month, Number(named[1]));
+    }
+  }
+
+  // An Excel serial that never got a date format. Day 1 is 1900-01-01, offset by the
+  // spreadsheet's phantom 29 Feb 1900 — hence the 1899-12-30 epoch.
+  if (/^\d+(\.\d+)?$/.test(raw)) {
+    const serial = Number(raw);
+    // Below ~1990 the "serial" is far more likely to be a plain number in the wrong
+    // column than a real 1900s date.
+    if (serial > 32000 && serial < 80000) {
+      return new Date(Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000);
+    }
+  }
+
+  return null;
+}
+
+const MONTH_NAMES = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+/** A calendar-valid UTC midnight, or null if the parts do not form a real date. */
+function utcDate(year: number, month: number, day: number): Date | null {
+  if (!(month >= 1 && month <= 12) || !(day >= 1 && day <= 31)) return null;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  return d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null;
+}
+
+/**
+ * Reads the option-grant column off the Placement Tracker's Overview sheet.
  *
  * The sheet is named per year ("2026 Overview"), the header row is not row 1, and
  * the Add-Ons column sits at the far right past a block of fee columns — so both
@@ -1221,55 +1376,149 @@ export async function parsePlacementTrackerBuffer(
 function parseOverviewAddOns(buffer: Buffer): Map<string, PlacementAddOn[]> {
   const found = new Map<string, PlacementAddOn[]>();
 
-  let rows: unknown[][];
+  let wb: XLSX.WorkBook;
   try {
-    const wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
-    const sheetName = wb.SheetNames.find((n) => normHeader(n).includes("overview"));
-    if (!sheetName) return found;
-    rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
-      header: 1,
-      raw: false,
-      defval: "",
-    });
+    wb = XLSX.read(buffer, { type: "buffer", cellDates: true });
   } catch {
     // A CSV or a workbook SheetJS cannot open simply has no Overview to read.
     return found;
   }
 
+  // A workbook can hold more than one ("2025 Overview" beside "2026 Overview"), and
+  // reading only the first would drop a whole year of grants.
+  const overviewSheets = wb.SheetNames.filter((n) => normHeader(n).includes("overview"));
+  // Tried only if the Overview sheets yielded nothing, so a renamed SHEET is no more
+  // fatal than the renamed COLUMN was. Ticker tabs are excluded — their tables are
+  // read by the caller, and scanning ~50 of them for nothing is wasted work.
+  const fallbackSheets = wb.SheetNames.filter(
+    (n) => !normHeader(n).includes("overview") && !looksLikeTickerTab(n)
+  );
+
+  const readSheet = (sheetName: string) => {
+    let rows: unknown[][];
+    try {
+      rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[sheetName], {
+        header: 1,
+        raw: false,
+        defval: "",
+      });
+    } catch {
+      return;
+    }
+    // First sheet to describe a ticker wins, matching the first-row-wins rule below.
+    for (const [ticker, specs] of readAddOnRows(rows)) {
+      if (!found.has(ticker)) found.set(ticker, specs);
+    }
+  };
+
+  for (const sheetName of overviewSheets) readSheet(sheetName);
+  if (found.size === 0) {
+    for (const sheetName of fallbackSheets) {
+      readSheet(sheetName);
+      if (found.size > 0) break;
+    }
+  }
+
+  return found;
+}
+
+/** `GRV`, `GRV (b)` — a per-placement tab, not a summary sheet. */
+function looksLikeTickerTab(sheetName: string): boolean {
+  return /^[A-Za-z0-9]{2,5}(\s*\(.*\))?$/.test(sheetName.trim());
+}
+
+/** Pulls `ticker -> grants` out of one already-read sheet. */
+function readAddOnRows(rows: unknown[][]): Map<string, PlacementAddOn[]> {
+  const found = new Map<string, PlacementAddOn[]>();
+
   let headerRowIdx = -1;
   let colTicker = -1;
-  let colAddOns = -1;
+  // The settlement date an unstated expiry is counted from. -1 means the sheet has
+  // no such column, so those grants stay unpriceable.
+  let colDate = -1;
+  let colDateRank = 0;
+  // Every grant column on the header row, not just the first: a sheet may carry both
+  // an "Options" and an "Add-Ons" column, and dropping either loses real entitlements.
+  let addOnCols: number[] = [];
+
+  // Remembered so a sheet whose grant column is headed something unexpected can still
+  // be read by sniffing the cells (below) instead of giving up.
+  let tickerOnlyRowIdx = -1;
+  let tickerOnlyCol = -1;
 
   for (let r = 0; r < Math.min(25, rows.length); r++) {
     const cells = rows[r];
     if (!Array.isArray(cells)) continue;
 
-    let sawAddOns = -1;
+    const sawAddOns: number[] = [];
     let sawTicker = -1;
+    let sawDate = -1;
+    let sawDateRank = 0;
     cells.forEach((cellVal, colIdx) => {
       const str = normHeader(String(cellVal ?? ""));
-      if (str.startsWith("addon")) sawAddOns = colIdx;
+      if (!str) return;
+      if (isAddOnHeader(str)) sawAddOns.push(colIdx);
       // The ticker column is headed "Counter" in the real workbook.
-      else if (str === "counter" || str === "ticker" || str === "code" || str === "security") {
-        sawTicker = colIdx;
+      else if (isTickerHeader(str)) sawTicker = colIdx;
+      else if (dateHeaderRank(str) > sawDateRank) {
+        sawDate = colIdx;
+        sawDateRank = dateHeaderRank(str);
       }
     });
 
-    if (sawAddOns !== -1) {
+    if (sawAddOns.length > 0) {
       headerRowIdx = r;
-      colAddOns = sawAddOns;
+      addOnCols = sawAddOns;
       colTicker = sawTicker;
+      colDate = sawDate;
+      colDateRank = sawDateRank;
       break;
+    }
+
+    if (sawTicker !== -1 && tickerOnlyRowIdx === -1) {
+      tickerOnlyRowIdx = r;
+      tickerOnlyCol = sawTicker;
     }
   }
 
-  if (headerRowIdx === -1) return found;
+  // No recognisable header: fall back to the columns whose CELLS read as grants. The
+  // column has already been renamed once (Options -> Add-Ons), so a header-only match
+  // is one rename away from silently losing a year of options again.
+  if (headerRowIdx === -1) {
+    if (tickerOnlyRowIdx === -1) return found;
+    headerRowIdx = tickerOnlyRowIdx;
+    colTicker = tickerOnlyCol;
+    addOnCols = sniffAddOnColumns(rows, headerRowIdx + 1);
+  }
+
+  if (addOnCols.length === 0) return found;
+
+  // Two-line headers put "Counter" (and the dates) one row above "Add-Ons". Without
+  // this the ticker falls back to column 2 and every grant is filed under the wrong
+  // code, and an unstated expiry has nothing to count from.
+  for (const r of [headerRowIdx - 1, headerRowIdx + 1]) {
+    if (colTicker !== -1 && colDate !== -1) break;
+    const cells = rows[r];
+    if (!Array.isArray(cells)) continue;
+    cells.forEach((cellVal, colIdx) => {
+      const str = normHeader(String(cellVal ?? ""));
+      if (!str) return;
+      if (colTicker === -1 && isTickerHeader(str)) colTicker = colIdx;
+      else if (dateHeaderRank(str) > colDateRank) {
+        colDate = colIdx;
+        colDateRank = dateHeaderRank(str);
+      }
+    });
+  }
 
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const cells = rows[r];
     if (!Array.isArray(cells)) continue;
 
-    const specs = parseAddOnSpecs(cells[colAddOns]);
+    // Grants that name no expiry are dated off this; the rest ignore it entirely.
+    const settlementDate = colDate > -1 ? parseTrackerDate(cells[colDate]) : null;
+
+    const specs = mergeAddOnSpecs(addOnCols.map((c) => parseAddOnSpecs(cells[c], settlementDate)));
     if (specs.length === 0) continue;
 
     // Sheet names carry suffixes the Overview does not ("FIN (b)" vs "FIN"), so
@@ -1893,6 +2142,27 @@ export const UNLISTED_OPTION_SUFFIX = "-UO";
 const ADD_ON_RATIO = /(\d+)\s*:\s*(\d+)/g;
 
 /**
+ * Term assumed for a grant whose cell states no expiry — most of the 2025 tracker
+ * ("1:2@0.1 Unlisted" and nothing more).
+ *
+ * Two years from the placement's SETTLEMENT date, by desk convention. Dropping these
+ * grants instead — the previous behaviour — reported a real entitlement as nothing at
+ * all, which is a worse error than a term that is out by a few months. Every row built
+ * this way is flagged `expiryAssumed` so the estimate is never read as a stated term.
+ */
+export const ASSUMED_UNLISTED_OPTION_TERM_YEARS = 2;
+
+/**
+ * Marks a grant as unlisted, tolerating how it is actually typed.
+ *
+ * "Unisted" (missing the l) appears in the real 2025 column, and the plain
+ * `/unlisted/` test read it as LISTED — which silently discarded the grant, since
+ * listed add-ons are dropped downstream. No trailing `\b`: "UnlistedExp 31/12/27"
+ * runs the word straight into the expiry.
+ */
+const UNLISTED_WORD = /\bun\s*-?\s*l?isted/i;
+
+/**
  * Parses ONE tranche segment from an **Add-Ons** cell.
  *
  * The column is hand-typed, so the real workbook contains all of these:
@@ -1901,15 +2171,24 @@ const ADD_ON_RATIO = /(\d+)\s*:\s*(\d+)/g;
  *   1:2 @$1.20 Unlisted Exp 31/12/27
  *   1:1 @ $0.028 Unlisted Exp 31/01/29  <- space after @
  *   1:3@0.14 Unlisted Expiry 31/12/27   <- no space, no $, "Expiry"
+ *   1:2@0.1 Unlisted                    <- no expiry at all (most of the 2025 tab)
+ *   1:2@0.008 Unisted                   <- typed without the l
  *   IPO / Entitlement Offer / 00:00     <- not an option at all
  *
- * Returns null unless a ratio, a strike AND an expiry are all present — a partial
- * segment is not enough to price anything, and guessing a missing strike would
- * invent a number. That requirement is also what rejects the `0:00` time cells.
+ * Returns null unless a ratio AND a strike are present — guessing a missing strike
+ * would invent a number, and that requirement is also what rejects the `0:00` time
+ * cells. A missing EXPIRY is different: it is the norm in the 2025 column, so when
+ * `settlementDate` is known the standard term is applied and the result is flagged
+ * `expiryAssumed`. With no date to count from there is nothing to derive, and the
+ * segment is rejected as before.
  *
  * For a cell that may hold several grants use `parseAddOnSpecs`.
  */
-export function parseAddOnSpec(rawText: unknown, tranche = 1): PlacementAddOn | null {
+export function parseAddOnSpec(
+  rawText: unknown,
+  tranche = 1,
+  settlementDate?: Date | null
+): PlacementAddOn | null {
   const raw = String(rawText ?? "").trim();
   if (!raw) return null;
 
@@ -1927,12 +2206,19 @@ export function parseAddOnSpec(rawText: unknown, tranche = 1): PlacementAddOn | 
 
   // "Exp 30/11/28", "Expiry 31/12/27", "Exp. 31/1/29"
   const expiryMatch = raw.match(/exp(?:iry)?\.?\s*(\d{1,2})\s*\/\s*(\d{1,2})\s*\/\s*(\d{2,4})/i);
-  if (!expiryMatch) return null;
-  const expiry = isoFromDayFirst(expiryMatch[1], expiryMatch[2], expiryMatch[3]);
+  const statedExpiry = expiryMatch
+    ? isoFromDayFirst(expiryMatch[1], expiryMatch[2], expiryMatch[3])
+    : null;
+
+  // An expiry that was typed but is not a real date (31/02) is a data error, not a
+  // blank — deriving one from the issue date would paper over it.
+  if (expiryMatch && !statedExpiry) return null;
+
+  const expiry = statedExpiry ?? assumedExpiryFrom(settlementDate);
   if (!expiry) return null;
 
   // "Unlisted" CONTAINS "listed", so the negative has to be tested first.
-  const listed = !/unlisted/i.test(raw);
+  const listed = !UNLISTED_WORD.test(raw);
 
   // Wording that distinguishes one tranche from another, e.g. "Piggyback".
   const noteMatch = raw.match(/\b(piggyback|piggy\s*back|tranche\s*\d+|t\d)\b/i);
@@ -1946,8 +2232,29 @@ export function parseAddOnSpec(rawText: unknown, tranche = 1): PlacementAddOn | 
     ratioPerShares,
     strike,
     expiry,
+    expiryAssumed: statedExpiry ? undefined : true,
     listed,
   };
+}
+
+/**
+ * `settlementDate + ASSUMED_UNLISTED_OPTION_TERM_YEARS` as ISO, or null with no date.
+ *
+ * A 29 Feb settlement rolls to 1 March rather than being rejected: unlike a typed
+ * expiry, this date is already an approximation, so a day either way changes nothing.
+ */
+function assumedExpiryFrom(settlementDate?: Date | null): string | null {
+  if (!settlementDate || Number.isNaN(settlementDate.getTime())) return null;
+
+  const d = new Date(
+    Date.UTC(
+      settlementDate.getUTCFullYear() + ASSUMED_UNLISTED_OPTION_TERM_YEARS,
+      settlementDate.getUTCMonth(),
+      settlementDate.getUTCDate()
+    )
+  );
+
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -1963,8 +2270,11 @@ export function parseAddOnSpec(rawText: unknown, tranche = 1): PlacementAddOn | 
  *
  * Duplicate tranches (same ratio, strike and expiry) collapse to one — a cell that
  * repeats itself should not double the entitlement.
+ *
+ * `settlementDate` is the placement's settlement date, used to derive an expiry for
+ * tranches that state none. Omit it and those tranches are skipped.
  */
-export function parseAddOnSpecs(rawText: unknown): PlacementAddOn[] {
+export function parseAddOnSpecs(rawText: unknown, settlementDate?: Date | null): PlacementAddOn[] {
   const raw = String(rawText ?? "").trim();
   if (!raw) return [];
 
@@ -1979,7 +2289,7 @@ export function parseAddOnSpecs(rawText: unknown): PlacementAddOn[] {
 
   for (let i = 0; i < starts.length; i++) {
     const segment = raw.slice(starts[i], i + 1 < starts.length ? starts[i + 1] : undefined);
-    const spec = parseAddOnSpec(segment, specs.length + 1);
+    const spec = parseAddOnSpec(segment, specs.length + 1, settlementDate);
     if (!spec) continue;
 
     const key = `${spec.ratioOptions}:${spec.ratioPerShares}@${spec.strike}/${spec.expiry}/${spec.listed}`;
@@ -2139,7 +2449,9 @@ export function buildUnlistedOptionRows(
         ticker: `${parent}${suffix}`,
         parentTicker: parent,
         instrument: "OPTION",
-        company: `${equityRow.company} — Unlisted Option${label} ${addOn.ratioOptions}:${addOn.ratioPerShares} @$${addOn.strike} exp ${addOn.expiry}`,
+        company: `${equityRow.company} — Unlisted Option${label} ${addOn.ratioOptions}:${addOn.ratioPerShares} @$${addOn.strike} exp ${addOn.expiry}${
+          addOn.expiryAssumed ? " (assumed)" : ""
+        }`,
         buyQty: 0,
         sellQty: optionQty,
         buyPrice: 0,
