@@ -356,6 +356,13 @@ function parseNum(val: any): number {
  */
 function parseStr(val: any): string {
   if (val == null) return "";
+  // A REAL date cell — which every .xlsx Contract Date is — arrives as a `Date`, and
+  // `String(date)` renders it "Sun Jun 21 2026 10:00:00 GMT+0530 (India Standard
+  // Time)". Nothing downstream can read that back, so an entire uploaded ledger
+  // counted as having no readable Contract Date and every reporting period came out
+  // empty while the lifetime view looked perfectly fine. ISO is the one form the rest
+  // of this file already speaks.
+  if (val instanceof Date) return isoFromDateValue(val);
   if (typeof val === "object") {
     if ("result" in val) return parseStr(val.result);
     if ("text" in val) return parseStr(val.text);
@@ -364,6 +371,32 @@ function parseStr(val: any): string {
     }
   }
   return String(val).trim();
+}
+
+/**
+ * A spreadsheet date cell as `YYYY-MM-DD`.
+ *
+ * Which end to read it from is the whole difficulty. A serial date is a calendar day
+ * with no timezone, but the readers disagree on how to hand it over: some give UTC
+ * midnight (`2026-06-22T00:00:00Z`), others apply the machine's offset and give
+ * `2026-06-21T14:00:00Z` for the same cell. Reading UTC parts off the second, or local
+ * parts off the first, moves the date a day — enough to drop a trade out of a
+ * reporting period.
+ *
+ * So: exact UTC midnight is taken as UTC (that reader meant the calendar day), and
+ * anything else is read with LOCAL parts, which is what the offset was applied to.
+ */
+function isoFromDateValue(d: Date): string {
+  if (Number.isNaN(d.getTime())) return "";
+
+  const atUtcMidnight =
+    d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+
+  const year = atUtcMidnight ? d.getUTCFullYear() : d.getFullYear();
+  const month = (atUtcMidnight ? d.getUTCMonth() : d.getMonth()) + 1;
+  const day = atUtcMidnight ? d.getUTCDate() : d.getDate();
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 /**
@@ -832,15 +865,59 @@ export function filterTradesByDateRange(
 }
 
 /*
- * There is deliberately NO placement-side date filter.
+ * Keeps the placements struck INSIDE the reporting period — the desk's rule: a period's
+ * unlisted options are the ones its own placements granted.
  *
- * One existed and was wrong. A placement settles days before its shares are traded, so
- * a window holding the trade routinely missed the placement, and the unlisted options
- * disappeared from a period that plainly contained them. The window reaches the option
- * rows through the TRADES instead: an entitlement needs `buyQty > 0`, and that Buy Qty
- * is aggregated from in-window trades only, so a parcel bought in the period earns its
- * options and one bought outside it earns none.
+ * The end of the window is the part that is unarguable: an SKK placement issued 3 July
+ * cannot have granted anything to a period ending 30 June, because the grant did not
+ * exist yet.
+ *
+ * The start is a deliberate choice with a cost worth knowing. A placement settles days
+ * before its shares are traded, so a window can hold the trade and miss the placement —
+ * GRV settling 28 Jan and bought 4 Feb earns nothing in a February-only window. When a
+ * grant is expected and missing, widening `from` past the placement's date is the fix,
+ * not a bug.
+ *
+ * Only what can be *proved* outside is dropped. A placement dated to a YEAR alone is
+ * kept when that year overlaps the window at all — a bare year cannot say which side of
+ * a date inside it the placement fell — which is also what saves the rows whose date
+ * cell is unusable (`0 Jan 1900` in the real Overview) but whose sheet names its year.
  */
+export function filterPlacementsByDateRange(
+  placementData: Map<string, PlacementTickerInfo>,
+  range?: DateRange | null
+): Map<string, PlacementTickerInfo> {
+  if (!hasDateRange(range) || !range) return placementData;
+
+  const fromYear = range.from ? Number(range.from.slice(0, 4)) : -Infinity;
+  const toYear = range.to ? Number(range.to.slice(0, 4)) : Infinity;
+  const filtered = new Map<string, PlacementTickerInfo>();
+
+  for (const [ticker, info] of placementData.entries()) {
+    const kept = placementEntries(info).filter((entry) => {
+      if (entry.issueDate) return isoInRange(entry.issueDate, range);
+      if (entry.issueYear != null) return entry.issueYear >= fromYear && entry.issueYear <= toYear;
+      // Neither a date nor a year: nothing to place it inside or outside the window.
+      return false;
+    });
+
+    if (kept.length === 0) continue;
+
+    const first = kept[0];
+    filtered.set(ticker, {
+      ...info,
+      totalShares: first.totalShares,
+      totalActualDollar: first.totalActualDollar,
+      clientAllocations: first.clientAllocations,
+      addOns: first.addOns,
+      issueDate: first.issueDate,
+      issueYear: first.issueYear,
+      candidates: kept.length > 1 ? kept : undefined,
+    });
+  }
+
+  return filtered;
+}
 
 /**
  * Aggregates an array of parsed trade rows into ticker-level summary items.
@@ -1546,6 +1623,16 @@ function parseTrackerDate(cellVal: unknown): Date | null {
 
   const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
   if (iso) return utcDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  // "Sun Jun 21 2026 10:00:00 GMT+0530 (…)" — what `String(new Date())` produces.
+  // `parseStr` converts date cells to ISO before they reach here, so this is only a
+  // backstop for a file that already carries the text form; without it such a date is
+  // written off as unreadable and its trade falls out of every reporting period.
+  const jsDateString = raw.match(/^[A-Za-z]{3}\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{4})\b/);
+  if (jsDateString) {
+    const month = MONTH_NAMES.indexOf(jsDateString[1].toLowerCase()) + 1;
+    if (month > 0) return utcDate(Number(jsDateString[3]), month, Number(jsDateString[2]));
+  }
 
   const dayFirst = raw.match(/^(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{2,4})/);
   if (dayFirst) {
@@ -3040,7 +3127,23 @@ function isoFromDayFirst(dd: string, mm: string, yy: string): string | null {
  */
 function unlistedAddOnsFor(info: PlacementTickerInfo, equityRow: PnlSummaryItem): PlacementAddOn[] {
   const source = equityRow.placementAddOns ?? chooseYearCandidate(info, equityRow)?.addOns ?? [];
-  return source.filter((a) => !a.listed);
+
+  // `placementAddOns` was stamped on the row by the merge, which runs on the FULL
+  // placement map — allocations must not be date-filtered, since a parcel bought in
+  // 2025 and sold in a 2026 window still needs its 2025 cost base. `info` here is the
+  // map the caller passed, which for a reporting period has already been narrowed to
+  // that period's placements. Intersecting the two is what stops a row-level stamp
+  // from smuggling a grant past the window: SKK is in both trackers, only the 2026 one
+  // grants options, and a period ending in Oct 2025 was still showing them.
+  const offered = placementEntries(info).flatMap((e) => e.addOns ?? []);
+  const offeredKeys = new Set(offered.map(grantKey));
+
+  return source.filter((a) => !a.listed && offeredKeys.has(grantKey(a)));
+}
+
+/** Identifies a grant by what it actually confers, not by which object it is. */
+function grantKey(a: PlacementAddOn): string {
+  return `${a.ratioOptions}:${a.ratioPerShares}@${a.strike}/${a.expiry}/${a.listed}`;
 }
 
 /** The ASX codes whose spot price an unlisted-option valuation needs. */

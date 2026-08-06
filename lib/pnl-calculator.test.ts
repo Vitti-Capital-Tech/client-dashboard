@@ -22,6 +22,7 @@ import {
   isBuySideUnknown,
   aggregateTradesToSummary,
   filterTradesByDateRange,
+  filterPlacementsByDateRange,
 
   hasDateRange,
   type PlacementTickerInfo,
@@ -2189,6 +2190,148 @@ test("PNL Calculator - two placements in one period: name, buy qty and sell qty 
   const ambiguous = mergePlacementTrackerIntoSummary(row(0, 0, 70000), shared, "Saturn Fund");
   assert.equal(ambiguous.summary[0].buyQty, 0);
   assert.deepEqual(ambiguous.ambiguousTickers, ["SKK"]);
+});
+
+test("parsePnlFileBuffer - a real .xlsx date cell survives as a readable date", async () => {
+  // The bug: an .xlsx Contract Date is a real `Date`, and stringifying it produced
+  // "Sun Jun 21 2026 10:00:00 GMT+0530 (India Standard Time)". Nothing could read that
+  // back, so a 36-trade ledger reported 36 trades with "no readable Contract Date" and
+  // every reporting period came out empty while the lifetime view looked fine.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Sheet1");
+  ws.addRow(["CNote", "Account", "Type", "Security", "Company", "Contract Date", "Units", "Avg Price", "Value", "Status"]);
+  ws.addRow([2506814, 1102282, "BUY", "NHU", "NEUHORIZON", new Date(Date.UTC(2026, 5, 22)), 21111, 0.2, 4222.2, "SETTLED"]);
+  ws.addRow([2306398, 1102282, "SELL", "WWI", "WEST WITS", new Date(Date.UTC(2026, 1, 4)), 49020, 0.0828, 3946.41, "SETTLED"]);
+  ws.addRow([2242792, 1102282, "SELL", "GED", "GOLDEN DEEPS", new Date(Date.UTC(2025, 11, 17)), 37500, 0.06, 2140, "SETTLED"]);
+
+  const res = await parsePnlFileBuffer(
+    Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer),
+    "Book3.xlsx"
+  );
+
+  assert.equal(res.rawTrades.length, 3);
+  assert.deepEqual(
+    res.rawTrades.map((t) => t.contractDate),
+    ["2026-06-22", "2026-02-04", "2025-12-17"],
+    "date cells become ISO, not a locale string"
+  );
+
+  // Which is the whole point: the reporting period can now place them.
+  const fy = filterTradesByDateRange(res.rawTrades, { from: "2025-07-01", to: "2026-06-30" });
+  assert.equal(fy.trades.length, 3);
+  assert.equal(fy.undated, 0, "not one of them is 'undated' any more");
+
+  const feb = filterTradesByDateRange(res.rawTrades, { from: "2026-02-01", to: "2026-02-28" });
+  assert.deepEqual(feb.trades.map((t) => t.ticker), ["WWI"]);
+});
+
+test("Reporting period - a grant from a year outside the window cannot leak in", async () => {
+  // SKK is in BOTH trackers: the 2025 placement grants nothing, the 2026 one grants
+  // 1:3 unlisted options. A period of 1 Jul → 31 Oct 2025 was still showing the option,
+  // because the merge (which runs on the full map, since allocations must not be date
+  // filtered) had stamped the 2026 grant onto the row and the option builder trusted
+  // that stamp over the date-filtered map.
+  const y2025 = placementFile("SKK", "Mr Akshit Verma", 44780, 4000, 2025);
+  y2025.map.get("SKK")!.issueDate = "2025-09-19";
+  const y2026 = placementFile("SKK", "Mr Akshit Verma", 44780, 4000, 2026);
+  y2026.map.get("SKK")!.issueDate = "2026-02-11";
+  y2026.map.get("SKK")!.addOns = parseAddOnSpecs("1:3 @$0.10 Unlisted Exp 31/12/29");
+
+  const full = combinePlacementMaps([y2025, y2026]);
+
+  const rowTradedIn = (year: number): PnlSummaryItem[] => [
+    {
+      ticker: "SKK",
+      parentTicker: "SKK",
+      instrument: "EQUITY",
+      company: "STAKK LIMITED",
+      buyQty: 44780,
+      sellQty: 0,
+      buyPrice: 4000,
+      sellPrice: 0,
+      totalBuyValue: 4000,
+      totalSellValue: 0,
+      pnlCalculated: -4000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 44780,
+      tradeCount: 1,
+      buyYears: [year],
+      tradeYears: [year],
+    },
+  ];
+
+  const spots = new Map([["SKK", { price: 0.2, source: "yahoo" as const }]]);
+  const asOf = new Date("2026-08-06T00:00:00Z");
+  const julToOct2025 = { from: "2025-07-01", to: "2025-10-31" };
+
+  // The merge sees every placement — allocations must not be date filtered — so a row
+  // whose trades are dated 2026 gets stamped with the 2026 placement's grant.
+  const stamped2026 = mergePlacementTrackerIntoSummary(rowTradedIn(2026), full, "Mr Akshit Verma").summary;
+  assert.equal(stamped2026[0].placementAddOns?.length, 1, "the row carries the 2026 grant");
+
+  // THE LEAK: that stamp used to outrank the period's own placement list.
+  const windowed = filterPlacementsByDateRange(full, julToOct2025);
+  assert.equal(windowed.get("SKK")?.candidates, undefined, "only the 2025 placement is in range");
+  assert.equal(windowed.get("SKK")?.addOns, undefined, "and it grants nothing");
+
+  assert.equal(
+    buildUnlistedOptionRows(stamped2026, windowed, spots, asOf).addedCount,
+    0,
+    "the 2026 grant must not reach a period ending in Oct 2025"
+  );
+  assert.deepEqual(collectUnlistedOptionTickers(stamped2026, windowed), []);
+
+  // Lifetime, and a window that does contain the 2026 placement, still grant it.
+  assert.equal(buildUnlistedOptionRows(stamped2026, full, spots, asOf).addedCount, 1);
+  const h1of2026 = filterPlacementsByDateRange(full, { from: "2026-01-01", to: "2026-06-30" });
+  assert.equal(buildUnlistedOptionRows(stamped2026, h1of2026, spots, asOf).addedCount, 1);
+
+  // And a client whose parcel came from the 2025 placement earns nothing even lifetime,
+  // because that placement is the one they were in and it granted nothing.
+  const stamped2025 = mergePlacementTrackerIntoSummary(rowTradedIn(2025), full, "Mr Akshit Verma").summary;
+  assert.deepEqual(stamped2025[0].placementAddOns, []);
+  assert.equal(buildUnlistedOptionRows(stamped2025, full, spots, asOf).addedCount, 0);
+});
+
+test("filterPlacementsByDateRange - a period's options are its own placements'", async () => {
+  // SKK issued 3 July cannot have granted anything to a period ending 30 June — the
+  // grant did not exist yet — but it was still producing an unlisted option row.
+  const placement = combinePlacementMaps([
+    placementFile("SKK", "Mr Akshit Verma", 40000, 8000, 2026),
+    placementFile("GRV", "Mr Akshit Verma", 10000, 2500, 2026),
+    placementFile("ABE", "Mr Akshit Verma", 5000, 1000, 2025),
+  ]);
+  placement.get("SKK")!.issueDate = "2026-07-03";
+  placement.get("GRV")!.issueDate = "2026-02-04";
+  // ABE carries no usable date cell — only the year its Overview sheet is named for.
+  placement.get("ABE")!.issueDate = undefined;
+
+  const fy = filterPlacementsByDateRange(placement, { from: "2025-07-01", to: "2026-06-30" });
+  assert.equal(fy.get("SKK"), undefined, "issued after the period ends");
+  assert.equal(fy.get("GRV")?.totalShares, 10000, "issued inside it");
+  assert.equal(fy.get("ABE")?.totalShares, 5000, "a year that overlaps cannot be ruled out");
+
+  // Inclusive at both ends.
+  assert.ok(filterPlacementsByDateRange(placement, { from: "2026-02-04", to: "2026-02-04" }).get("GRV"));
+  assert.ok(filterPlacementsByDateRange(placement, { from: "2026-07-03", to: "2026-07-31" }).get("SKK"));
+
+  // The cost of the desk's rule, stated so it is not mistaken for a bug: a placement
+  // settles before its shares are traded, so a February-only window earns nothing from
+  // a placement dated 4 Feb… but one dated 28 Jan is out. Widen `from` to include it.
+  placement.get("GRV")!.issueDate = "2026-01-28";
+  assert.equal(
+    filterPlacementsByDateRange(placement, { from: "2026-02-01", to: "2026-02-28" }).get("GRV"),
+    undefined
+  );
+  assert.ok(
+    filterPlacementsByDateRange(placement, { from: "2026-01-01", to: "2026-02-28" }).get("GRV")
+  );
+
+  // No window at all leaves the map untouched — the lifetime view.
+  assert.equal(filterPlacementsByDateRange(placement, {}), placement);
 });
 
 test("filterTradesByDateRange - an OPTIONAL window, inclusive at both ends", async () => {

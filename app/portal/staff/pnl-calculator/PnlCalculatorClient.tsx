@@ -32,6 +32,7 @@ import {
   isBuySideUnknown,
   sumPnl,
   filterTradesByDateRange,
+  filterPlacementsByDateRange,
   hasDateRange,
   type DateRange,
   type ParseResult,
@@ -405,15 +406,21 @@ export function PnlCalculatorClient() {
       // their settlement date on top of that was wrong: a placement settles days
       // before the shares are traded, so a window holding the trade could easily miss
       // the placement, and the options vanished from a period that plainly had them.
-      const unlistedTickers = placements
-        ? collectUnlistedOptionTickers(working.summary, placements)
+      // …and the placements themselves are held to the same window: a period's options
+      // are the ones ITS placements granted. SKK issued 3 July was showing options in a
+      // period ending 30 June, when the grant did not yet exist.
+      const grantable = placements
+        ? filterPlacementsByDateRange(placements, activeDateRange())
+        : placements;
+      const unlistedTickers = grantable
+        ? collectUnlistedOptionTickers(working.summary, grantable)
         : [];
-      if (placements && unlistedTickers.length > 0) {
+      if (grantable && unlistedTickers.length > 0) {
         const spotRes = await fetchSpotPricesAction(unlistedTickers);
         const spotMap = new Map<string, { price: number; source: SpotSource }>(
           spotRes.prices.map((p) => [p.ticker, { price: p.price, source: p.source }])
         );
-        const built = buildUnlistedOptionRows(working.summary, placements, spotMap, new Date());
+        const built = buildUnlistedOptionRows(working.summary, grantable, spotMap, new Date());
         working = { ...working, summary: built.summary, totalPnl: built.totalPnl };
 
         if (built.addedCount > 0) {
