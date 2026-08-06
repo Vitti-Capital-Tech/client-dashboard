@@ -60,6 +60,14 @@ export interface PnlExportScope {
   accounts?: string[];
   /** Account number → holder name, as resolved by `resolveAccountHoldersAction`. */
   accountHolders?: Record<string, string>;
+  /**
+   * The reporting period the figures cover, when one is set.
+   *
+   * Carried into the download name: a six-month P&L stamped only with today's date is
+   * indistinguishable from a lifetime one, and that difference is the whole figure.
+   */
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 /**
@@ -95,6 +103,7 @@ function exportFilename(scope: PnlExportScope | undefined, extension: "xlsx" | "
     accountHolders: scope?.accountHolders || {},
     isoDate: new Date().toISOString().split("T")[0],
     extension,
+    range: { from: scope?.dateFrom, to: scope?.dateTo },
   });
 }
 

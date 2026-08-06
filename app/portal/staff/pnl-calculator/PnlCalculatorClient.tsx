@@ -31,7 +31,11 @@ import {
   ASSUMED_UNLISTED_OPTION_TERM_YEARS,
   isBuySideUnknown,
   sumPnl,
+  filterTradesByDateRange,
+  hasDateRange,
+  type DateRange,
   type ParseResult,
+  type ParsedTradeRow,
   type PnlSummaryItem,
   type PlacementTickerInfo,
   type SpotSource,
@@ -65,6 +69,10 @@ export function PnlCalculatorClient() {
   const setParsedPlacementMap = usePnlCalculatorStore((s) => s.setParsedPlacementMap);
   const selectedAccount = usePnlCalculatorStore((s) => s.selectedAccount);
   const setSelectedAccount = usePnlCalculatorStore((s) => s.setSelectedAccount);
+  const dateFrom = usePnlCalculatorStore((s) => s.dateFrom);
+  const setDateFrom = usePnlCalculatorStore((s) => s.setDateFrom);
+  const dateTo = usePnlCalculatorStore((s) => s.dateTo);
+  const setDateTo = usePnlCalculatorStore((s) => s.setDateTo);
   const placementClient = usePnlCalculatorStore((s) => s.placementClient);
   const setPlacementClient = usePnlCalculatorStore((s) => s.setPlacementClient);
   const placementUrl = usePnlCalculatorStore((s) => s.placementUrl);
@@ -173,6 +181,31 @@ export function PnlCalculatorClient() {
    * `holders` may be passed explicitly because callers resolve it and re-merge in the
    * same tick, before the store state has flushed.
    */
+  /**
+   * The reporting window, read LIVE.
+   *
+   * Every caller of the re-aggregation path reaches it in the same tick as the
+   * `setDateFrom`/`setDateTo` that triggered it, so reading the rendered props here
+   * would apply the window the desk just replaced.
+   */
+  const activeDateRange = (): DateRange => ({ from: live().dateFrom, to: live().dateTo });
+
+  /**
+   * The trades a figure is allowed to be built from: the selected account AND the
+   * reporting window, in one place so no call site can apply only half of it.
+   */
+  const tradesInScope = (
+    rawTrades: ParsedTradeRow[],
+    account: string,
+    range: DateRange = activeDateRange()
+  ) => {
+    const byAccount =
+      account === "all"
+        ? rawTrades
+        : rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(account));
+    return filterTradesByDateRange(byAccount, range);
+  };
+
   const getClientHints = (
     files: UploadedTradeFile[] = tradeFiles,
     override: string = placementClient,
@@ -336,7 +369,15 @@ export function PnlCalculatorClient() {
 
       const dbRes = await fetchDatabaseHoldingsAction(targetAccountsScope);
       if (dbRes.ok && dbRes.holdings.length > 0) {
-        const merged = mergeDbHoldingsIntoSummary(working.summary, dbRes.holdings);
+        // A holdings snapshot is "as of today" and carries no date to test against a
+        // reporting period, so while one is set it may not invent rows: a position the
+        // client merely holds now would otherwise appear inside a period whose ledger
+        // shows no trade in it. Rows built from in-window trades are still valued off
+        // the snapshot, which is the only price available for an open parcel.
+        const windowed = hasDateRange(activeDateRange());
+        const merged = mergeDbHoldingsIntoSummary(working.summary, dbRes.holdings, {
+          createMissingRows: !windowed,
+        });
         working = { ...working, summary: merged.summary, totalPnl: merged.totalPnl };
         notes.push(
           `Auto-filled DB Portfolio Market Values for ${merged.mergedCount} open positions (Account ${
@@ -347,13 +388,26 @@ export function PnlCalculatorClient() {
               : "") +
             (merged.createdCount > 0
               ? ` Added ${merged.createdCount} row(s) for holdings the trade file never mentioned (mostly free placement options, which have no contract note) — their cost basis comes from the snapshot, so they are tagged "DB Holding".`
+              : "") +
+            (windowed
+              ? " Holdings the trade file never mentions are NOT added while a reporting period is set — the snapshot has no date to place them in it."
               : "")
         );
       }
 
       // Unlisted placement options: free options, so their whole modelled value is
       // P&L. Rebuilt every pass, which also refreshes the spot prices behind them.
-      const unlistedTickers = placements ? collectUnlistedOptionTickers(working.summary, placements) : [];
+      //
+      // The reporting window reaches these through the TRADES, not through the
+      // placement's own date. An entitlement needs `buyQty > 0`, and that Buy Qty is
+      // aggregated from in-window trades only — so a parcel bought in the period earns
+      // its options and one bought outside it earns none. Filtering the placements by
+      // their settlement date on top of that was wrong: a placement settles days
+      // before the shares are traded, so a window holding the trade could easily miss
+      // the placement, and the options vanished from a period that plainly had them.
+      const unlistedTickers = placements
+        ? collectUnlistedOptionTickers(working.summary, placements)
+        : [];
       if (placements && unlistedTickers.length > 0) {
         const spotRes = await fetchSpotPricesAction(unlistedTickers);
         const spotMap = new Map<string, { price: number; source: SpotSource }>(
@@ -409,11 +463,7 @@ export function PnlCalculatorClient() {
     setSelectedAccount(accNo);
     if (!result) return;
 
-    const tradesToUse =
-      accNo === "all"
-        ? result.rawTrades
-        : result.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(accNo));
-
+    const { trades: tradesToUse } = tradesInScope(result.rawTrades, accNo);
     const { summary: newSummary } = aggregateTradesToSummary(tradesToUse);
 
     let finalSummary = newSummary;
@@ -516,11 +566,7 @@ export function PnlCalculatorClient() {
     const override = clientOverride ?? live().placementClient;
     const activeAccount = live().selectedAccount;
 
-    const tradesToUse =
-      activeAccount === "all"
-        ? res.rawTrades
-        : res.rawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(activeAccount));
-
+    const { trades: tradesToUse } = tradesInScope(res.rawTrades, activeAccount);
     const { summary: baseSummary } = aggregateTradesToSummary(tradesToUse);
 
     if (files.length === 0) {
@@ -725,6 +771,37 @@ export function PnlCalculatorClient() {
     });
   };
 
+  /**
+   * Sets one end of the reporting window and rebuilds everything behind it.
+   *
+   * The window is OPTIONAL and empty by default — a blank end means "no bound that
+   * side", and two blanks mean the lifetime P&L the tool has always produced. Clearing
+   * a date therefore has to re-run the same pipeline as setting one.
+   *
+   * `reapplyPlacementMerges` is the whole pipeline: re-aggregate the raw trades in
+   * scope, re-merge the placements, then sync the DB holdings and re-price the
+   * unlisted options. Reaching for it here rather than re-aggregating locally is what
+   * keeps a windowed view from quietly losing its placement merge.
+   *
+   * Zustand's `set` is synchronous, so the store already holds the new date by the
+   * time `reapplyPlacementMerges` reads it through `live()`.
+   */
+  const handleDateRangeChange = (which: "from" | "to", value: string) => {
+    if (which === "from") setDateFrom(value);
+    else setDateTo(value);
+
+    if (!live().result) return;
+    reapplyPlacementMerges(live().placementFiles);
+  };
+
+  /** Back to the lifetime view. */
+  const handleClearDateRange = () => {
+    setDateFrom("");
+    setDateTo("");
+    if (!live().result) return;
+    reapplyPlacementMerges(live().placementFiles);
+  };
+
   /** Re-runs the merge against a different account holder. */
   const handleSelectPlacementClient = (name: string) => {
     setPlacementClient(name);
@@ -780,10 +857,7 @@ export function PnlCalculatorClient() {
     }
 
     const allAccounts = Array.from(accountsSet).sort();
-    const tradesToAggregate =
-      accToUse === "all"
-        ? allRawTrades
-        : allRawTrades.filter((t) => normalizeAccountNo(t.account) === normalizeAccountNo(accToUse));
+    const { trades: tradesToAggregate } = tradesInScope(allRawTrades, accToUse);
 
     const { summary: aggregatedSummary, totalPnl: aggregatedPnl } = aggregateTradesToSummary(tradesToAggregate);
 
@@ -995,6 +1069,9 @@ export function PnlCalculatorClient() {
         ? result.accounts
         : [],
     accountHolders,
+    // So the download name says which period the figures cover.
+    dateFrom,
+    dateTo,
   });
 
   const handleDownloadXlsx = () => {
@@ -1070,6 +1147,21 @@ export function PnlCalculatorClient() {
   const fmtQty = (num: number) => {
     return num.toLocaleString("en-AU");
   };
+
+  /**
+   * `2026-06-30` → `30 Jun 2026`, read as UTC.
+   *
+   * The date inputs emit a bare `YYYY-MM-DD`, which `new Date()` parses as UTC
+   * midnight and then renders in local time — west of Greenwich that prints the day
+   * before, so a period boundary would display as one thing and filter as another.
+   */
+  const fmtDayMonth = (iso: string) =>
+    new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
 
   // Inline row edit state
   const [editingTicker, setEditingTicker] = useState<string | null>(null);
@@ -1169,6 +1261,16 @@ export function PnlCalculatorClient() {
     if (filterType === "equity") return !isOptionRow(item);
     return true;
   });
+
+  /** "1 Jan 2026 → 30 Jun 2026", with an open end spelled out rather than left blank. */
+  const dateRangeLabel = hasDateRange({ from: dateFrom, to: dateTo })
+    ? `${dateFrom ? fmtDayMonth(dateFrom) : "the start"} → ${dateTo ? fmtDayMonth(dateTo) : "today"}`
+    : "all dates";
+
+  /** How much of the ledger the current period covers — the honest denominator. */
+  const periodScope = result
+    ? tradesInScope(result.rawTrades, selectedAccount, { from: dateFrom, to: dateTo })
+    : null;
 
   const summaryList = result?.summary || [];
   const totalBuyVolume = summaryList.reduce((acc, curr) => acc + curr.totalBuyValue, 0);
@@ -1696,6 +1798,73 @@ export function PnlCalculatorClient() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Reporting period. OPTIONAL by design: both ends blank is the lifetime
+                P&L, and one end blank leaves that side unbounded. Filters the ledger
+                on Contract Date and the trackers on placement date, so the options
+                shown are the ones granted in the same period. */}
+            {result && (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
+                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
+                  <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span>Reporting Period (Contract Date):</span>
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <label className="flex items-center gap-1.5 text-xs text-mut">
+                    <span className="font-semibold">From</span>
+                    <input
+                      type="date"
+                      value={dateFrom}
+                      max={dateTo || undefined}
+                      onChange={(e) => handleDateRangeChange("from", e.target.value)}
+                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-navy bg-paper-2 border border-paper-border focus:border-navy/40 focus:outline-none cursor-pointer"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-mut">
+                    <span className="font-semibold">To</span>
+                    <input
+                      type="date"
+                      value={dateTo}
+                      min={dateFrom || undefined}
+                      onChange={(e) => handleDateRangeChange("to", e.target.value)}
+                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-navy bg-paper-2 border border-paper-border focus:border-navy/40 focus:outline-none cursor-pointer"
+                    />
+                  </label>
+                  {hasDateRange({ from: dateFrom, to: dateTo }) ? (
+                    <button
+                      type="button"
+                      onClick={handleClearDateRange}
+                      className="px-3 py-1 rounded-xl text-xs font-semibold bg-navy text-white shadow-xs cursor-pointer"
+                      title="Clear the period and report on every trade in the file"
+                    >
+                      Clear · showing {dateRangeLabel}
+                    </button>
+                  ) : (
+                    <span className="px-3 py-1 rounded-xl text-xs font-semibold bg-paper-2 text-mut border border-paper-border">
+                      All dates (lifetime)
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* What the period actually covers. A P&L that silently dropped trades is
+                indistinguishable from one that had none, so the count is stated. */}
+            {periodScope && hasDateRange({ from: dateFrom, to: dateTo }) && (
+              <p className="-mt-1 text-[11px] text-mut leading-snug">
+                {periodScope.trades.length === 0
+                  ? `No trades fall in ${dateRangeLabel}${
+                      selectedAccount === "all" ? "" : ` for account #${selectedAccount}`
+                    } — every figure below is empty for that reason, not because the file is.`
+                  : `${fmtQty(periodScope.trades.length)} trade(s) in ${dateRangeLabel}; ${fmtQty(
+                      periodScope.excluded
+                    )} outside it. Unlisted options are limited to placements settled in the same period.`}
+                {periodScope.undated > 0 &&
+                  ` ${fmtQty(periodScope.undated)} trade(s) carry no readable Contract Date and cannot be placed in any period — they are left out.`}
+              </p>
             )}
 
             {/* Filter Pills Bar — Full width on Desktop so all tabs fit with ZERO scrolling */}

@@ -70,6 +70,15 @@ interface PnlCalculatorState {
   placementFiles: UploadedPlacementFile[];
   parsedPlacementMap: Map<string, PlacementTickerInfo> | null;
   selectedAccount: string;
+  /**
+   * Inclusive `YYYY-MM-DD` window on the ledger's Contract Date, `""` for open-ended.
+   *
+   * Held here rather than in component state for the same reason the account filter
+   * is: the route remounts on every portal-tab navigation, and a reporting period the
+   * desk just set must not silently widen back to "everything" behind their back.
+   */
+  dateFrom: string;
+  dateTo: string;
   placementClient: string;
   placementUrl: string;
   filterType: PnlFilterType;
@@ -96,6 +105,8 @@ interface PnlCalculatorState {
   setPlacementFiles: Setter<UploadedPlacementFile[]>;
   setParsedPlacementMap: Setter<Map<string, PlacementTickerInfo> | null>;
   setSelectedAccount: Setter<string>;
+  setDateFrom: Setter<string>;
+  setDateTo: Setter<string>;
   setPlacementClient: Setter<string>;
   setPlacementUrl: Setter<string>;
   setFilterType: Setter<PnlFilterType>;
@@ -117,6 +128,8 @@ const initialState = () => ({
   placementFiles: [] as UploadedPlacementFile[],
   parsedPlacementMap: null as Map<string, PlacementTickerInfo> | null,
   selectedAccount: "all",
+  dateFrom: "",
+  dateTo: "",
   placementClient: AUTO_CLIENT,
   placementUrl: "",
   filterType: "all" as PnlFilterType,
@@ -133,6 +146,8 @@ export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
   setPlacementFiles: (v) => set((s) => ({ placementFiles: next(v, s.placementFiles) })),
   setParsedPlacementMap: (v) => set((s) => ({ parsedPlacementMap: next(v, s.parsedPlacementMap) })),
   setSelectedAccount: (v) => set((s) => ({ selectedAccount: next(v, s.selectedAccount) })),
+  setDateFrom: (v) => set((s) => ({ dateFrom: next(v, s.dateFrom) })),
+  setDateTo: (v) => set((s) => ({ dateTo: next(v, s.dateTo) })),
   setPlacementClient: (v) => set((s) => ({ placementClient: next(v, s.placementClient) })),
   setPlacementUrl: (v) => set((s) => ({ placementUrl: next(v, s.placementUrl) })),
   setFilterType: (v) => set((s) => ({ filterType: next(v, s.filterType) })),

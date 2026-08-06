@@ -21,6 +21,9 @@ import {
   exportStatus,
   isBuySideUnknown,
   aggregateTradesToSummary,
+  filterTradesByDateRange,
+
+  hasDateRange,
   type PlacementTickerInfo,
   type PnlSummaryItem,
 } from "./pnl-calculator.ts";
@@ -1063,9 +1066,50 @@ test("buildPnlExportFilename - multi-account and empty scopes stay sane", async 
   const holders = { a: "Alpha Pty Ltd", b: "Beta Pty Ltd", c: "Gamma", d: "Delta" };
   const base = { accountHolders: holders, isoDate: "2026-08-05", extension: "csv" as const };
 
-  // Two or three accounts: numbers only — concatenating names would blow past path limits.
-  assert.equal(buildPnlExportFilename({ ...base, accounts: ["a", "b"] }), "pnl-a-b-2026-08-05.csv");
-  assert.equal(buildPnlExportFilename({ ...base, accounts: ["a", "b", "c"] }), "pnl-a-b-c-2026-08-05.csv");
+  // Two or three accounts: every one keeps its number AND its holder's name.
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["a", "b"] }),
+    "pnl-a-Alpha-Pty-Ltd-b-Beta-Pty-Ltd-2026-08-05.csv"
+  );
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["a", "b", "c"] }),
+    "pnl-a-Alpha-Pty-Ltd-b-Beta-Pty-Ltd-c-Gamma-2026-08-05.csv"
+  );
+
+  // An account the database could not name still contributes its number.
+  assert.equal(
+    buildPnlExportFilename({ ...base, accounts: ["a", "zz"] }),
+    "pnl-a-Alpha-Pty-Ltd-zz-2026-08-05.csv"
+  );
+
+  // With several accounts each name is trimmed harder — there are up to three of them.
+  const longHolders = {
+    a: "Mr Shaishav Kumar Patel + Mrs Vidushi Patel",
+    b: "Sri Guru Nanak Investments Proprietary Limited",
+    c: "Zidiplus Holdings And Investments Pty Ltd",
+  };
+  const trimmed = buildPnlExportFilename({
+    ...base,
+    accountHolders: longHolders,
+    accounts: ["a", "b", "c"],
+  });
+  assert.equal(trimmed, "pnl-a-Mr-Shaishav-Kumar-Pa-b-Sri-Guru-Nanak-Inves-c-Zidiplus-Holdings-An-2026-08-05.csv");
+
+  // Once even the trimmed form would run past what Windows accepts as a path, the
+  // NAMES go and the numbers stay — a number still identifies the account, where a
+  // truncated name identifies nothing.
+  const refs = ["1102011-SUB-ACCOUNT-A", "1103199-SUB-ACCOUNT-B", "114716-SUB-ACCOUNT-C"];
+  const capped = buildPnlExportFilename({
+    ...base,
+    accountHolders: { [refs[0]]: longHolders.a, [refs[1]]: longHolders.b, [refs[2]]: longHolders.c },
+    accounts: refs,
+    range: { from: "2026-01-01", to: "2026-06-30" },
+  });
+  assert.equal(
+    capped,
+    "pnl-1102011-SUB-ACCOUNT-A-1103199-SUB-ACCOUNT-B-114716-SUB-ACCOUNT-C-2026-01-01_to_2026-06-30.csv"
+  );
+  assert.ok(capped.length <= 120, capped);
   // Beyond three, even the numbers are summarised.
   assert.equal(
     buildPnlExportFilename({ ...base, accounts: ["a", "b", "c", "d"] }),
@@ -2043,6 +2087,262 @@ test("buildUnlistedOptionRows - options come from the row the client was found i
   const built = buildUnlistedOptionRows(theirs, placement, spots, asOf);
   assert.equal(built.addedCount, 1);
   assert.equal(built.summary.find((s) => s.isUnlistedOption)?.sellQty, 50000);
+});
+
+test("PNL Calculator - two placements in one period: name, buy qty and sell qty decide", async () => {
+  // SKK placed twice inside the same reporting window, the client in both sheets, so
+  // no date can separate them. The ledger does: whichever parcel reconciles with its
+  // buy and sell quantities is the one this row is about.
+  const skk = (label: string, shares: number, dollars: number, client: string) => ({
+    sheetName: label,
+    issueYear: 2026,
+    issueDate: label === "SKK (a)" ? "2026-02-10" : "2026-05-18",
+    totalShares: shares,
+    totalActualDollar: dollars,
+    clientAllocations: [
+      { clientName: client, advisor: "VTC", askingBid: 0, allocationDollar: dollars, roundShares: shares, actualDollar: dollars },
+    ],
+  });
+
+  const placement = new Map<string, PlacementTickerInfo>([
+    [
+      "SKK",
+      {
+        ticker: "SKK",
+        issueYear: 2026,
+        totalShares: 30000,
+        totalActualDollar: 3000,
+        clientAllocations: skk("SKK (a)", 30000, 3000, "Mr Akshit Verma").clientAllocations,
+        candidates: [
+          skk("SKK (a)", 30000, 3000, "Mr Akshit Verma"),
+          skk("SKK (b)", 70000, 8000, "Mr Akshit Verma"),
+        ],
+      },
+    ],
+  ]);
+
+  const row = (buyQty: number, buyPrice: number, sellQty: number): PnlSummaryItem[] => [
+    {
+      ticker: "SKK",
+      parentTicker: "SKK",
+      instrument: "EQUITY",
+      company: "STIKA",
+      buyQty,
+      sellQty,
+      buyPrice,
+      sellPrice: 20000,
+      totalBuyValue: buyPrice,
+      totalSellValue: 20000,
+      pnlCalculated: 20000 - buyPrice,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: buyQty - sellQty,
+      tradeCount: 2,
+      buyYears: buyQty > 0 ? [2026] : [],
+      tradeYears: [2026],
+    },
+  ];
+
+  // Nothing bought per the ledger, 70,000 sold — that is the (b) parcel exactly.
+  const onlyB = mergePlacementTrackerIntoSummary(row(0, 0, 70000), placement, "Mr Akshit Verma")
+    .summary[0];
+  assert.equal(onlyB.buyQty, 70000);
+  assert.equal(onlyB.buyPrice, 8000);
+
+  // 100,000 sold and nothing bought: both parcels together, which is the case the
+  // matching must not narrow away.
+  const both = mergePlacementTrackerIntoSummary(row(0, 0, 100000), placement, "Mr Akshit Verma")
+    .summary[0];
+  assert.equal(both.buyQty, 100000);
+  assert.equal(both.buyPrice, 11000);
+
+  // (a) already came through as a contract note: 30,000 bought, 100,000 sold. Only the
+  // 70,000 shortfall is missing, so adding both would count (a) twice.
+  const topUp = mergePlacementTrackerIntoSummary(row(30000, 3000, 100000), placement, "Mr Akshit Verma")
+    .summary[0];
+  assert.equal(topUp.buyQty, 100000);
+  assert.equal(topUp.buyPrice, 11000);
+  assert.equal(topUp.isPartialBuy, true);
+
+  // A name matching NEITHER sheet falls back to the long-standing sole-participant
+  // rule — each sheet lists exactly one client, so there is no one else the parcel
+  // could belong to — and the quantities then pick between them exactly as above.
+  const unmatchedName = mergePlacementTrackerIntoSummary(row(0, 0, 70000), placement, "Saturn Fund")
+    .summary[0];
+  assert.equal(unmatchedName.buyQty, 70000);
+
+  // But a sheet with SEVERAL participants and no name match is never filled from:
+  // that would sum strangers' allocations into this row.
+  const shared = new Map(placement);
+  shared.set("SKK", {
+    ...placement.get("SKK")!,
+    candidates: placement.get("SKK")!.candidates!.map((c) => ({
+      ...c,
+      clientAllocations: [
+        ...c.clientAllocations,
+        { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 1, roundShares: 1, actualDollar: 1 },
+      ],
+    })),
+  });
+
+  const ambiguous = mergePlacementTrackerIntoSummary(row(0, 0, 70000), shared, "Saturn Fund");
+  assert.equal(ambiguous.summary[0].buyQty, 0);
+  assert.deepEqual(ambiguous.ambiguousTickers, ["SKK"]);
+});
+
+test("filterTradesByDateRange - an OPTIONAL window, inclusive at both ends", async () => {
+  const trade = (contractDate: string) => ({
+    ticker: "ABE",
+    company: "ABERDEEN",
+    type: "BUY" as const,
+    units: 1000,
+    avgPrice: 0.2,
+    value: 200,
+    contractDate,
+  });
+
+  // Day-first from the ledger, ISO from the date inputs — both must land on the day.
+  const trades = [trade("31-12-2025"), trade("01-01-2026"), trade("2026-06-30"), trade("01-07-2026")];
+
+  // No window at all is the lifetime view, which is the default and must stay free.
+  assert.equal(filterTradesByDateRange(trades, {}).trades.length, 4);
+  assert.equal(filterTradesByDateRange(trades, null).trades.length, 4);
+  assert.equal(hasDateRange({}), false);
+  assert.equal(hasDateRange({ from: "2026-01-01" }), true);
+
+  const window = filterTradesByDateRange(trades, { from: "2026-01-01", to: "2026-06-30" });
+  assert.deepEqual(window.trades.map((t) => t.contractDate), ["01-01-2026", "2026-06-30"]);
+  assert.equal(window.excluded, 2);
+
+  // One end open bounds only that side.
+  assert.equal(filterTradesByDateRange(trades, { from: "2026-01-01" }).trades.length, 3);
+  assert.equal(filterTradesByDateRange(trades, { to: "2025-12-31" }).trades.length, 1);
+
+  // A trade whose date cannot be read cannot be placed in a period. It is dropped and
+  // COUNTED — silently keeping it would put outside money in the period's P&L, and
+  // silently dropping it would look like the file simply had less in it.
+  const undated = filterTradesByDateRange([...trades, trade("")], { from: "2026-01-01" });
+  assert.equal(undated.undated, 1);
+  assert.equal(undated.trades.length, 3);
+});
+
+test("Reporting period - options follow the TRADES, not the placement's own date", async () => {
+  // The bug: placements were filtered by their settlement date on top of the trades.
+  // A placement settles days before its shares are traded, so a window holding the
+  // trade missed the placement and the options vanished from a period that had them.
+  //
+  // GRV placed (and settled) 28 Jan 2026 with 1:2 unlisted options attached; the
+  // client's buy is dated 4 Feb 2026. A February window must still show the options.
+  const placement = new Map<string, PlacementTickerInfo>([
+    [
+      "GRV",
+      {
+        ticker: "GRV",
+        issueYear: 2026,
+        issueDate: "2026-01-28",
+        totalShares: 40000,
+        totalActualDollar: 4000,
+        clientAllocations: [],
+        addOns: parseAddOnSpecs("1:2 @$0.10 Unlisted Exp 31/12/29"),
+      },
+    ],
+  ]);
+
+  const febTrades = [
+    { ticker: "GRV", company: "GRV LTD", type: "BUY" as const, units: 40000, avgPrice: 0.1, value: 4000, contractDate: "04-02-2026" },
+    { ticker: "GRV", company: "GRV LTD", type: "SELL" as const, units: 40000, avgPrice: 0.12, value: 4800, contractDate: "20-02-2026" },
+  ];
+
+  const feb = { from: "2026-02-01", to: "2026-02-28" };
+  const inWindow = filterTradesByDateRange(febTrades, feb);
+  assert.equal(inWindow.trades.length, 2, "both trades are inside the window");
+
+  const { summary } = aggregateTradesToSummary(inWindow.trades);
+  const built = buildUnlistedOptionRows(
+    summary,
+    placement,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-06T00:00:00Z")
+  );
+
+  assert.equal(built.addedCount, 1, "the January placement still grants February's options");
+  assert.equal(built.summary.find((s) => s.isUnlistedOption)?.sellQty, 20000);
+
+  // And a window the trades fall OUTSIDE earns nothing, because the entitlement runs
+  // off a Buy Qty aggregated from in-window trades only.
+  const march = filterTradesByDateRange(febTrades, { from: "2026-03-01", to: "2026-03-31" });
+  assert.equal(march.trades.length, 0);
+  const nothing = buildUnlistedOptionRows(
+    aggregateTradesToSummary(march.trades).summary,
+    placement,
+    new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]),
+    new Date("2026-08-06T00:00:00Z")
+  );
+  assert.equal(nothing.addedCount, 0);
+});
+
+test("mergeDbHoldingsIntoSummary - a period does not import holdings the ledger never traded", async () => {
+  // The bug: PLS showed up inside a reporting period whose ledger has no PLS trade at
+  // all. The row came from the holdings snapshot, which is "as of today" and carries
+  // no date to test against a window.
+  const summary = aggregateTradesToSummary([
+    { ticker: "GRV", company: "GRV LTD", type: "BUY", units: 1000, avgPrice: 0.1, value: 100, contractDate: "04-02-2026" },
+  ]).summary;
+
+  const holdings = [
+    { ticker: "PLS", parentTicker: "PLS", companyName: "PILBARA MIN", qty: 5000, marketValue: 12000, costBase: 9000 },
+  ];
+
+  // Lifetime view: the orphan row is exactly what recovers a position the ledger
+  // never mentioned, so it is still created.
+  const lifetime = mergeDbHoldingsIntoSummary(summary, holdings);
+  assert.equal(lifetime.createdCount, 1);
+  assert.ok(lifetime.summary.some((s) => s.ticker === "PLS"));
+
+  // With a period set, it must not appear — no trade in the period produced it.
+  const windowed = mergeDbHoldingsIntoSummary(summary, holdings, { createMissingRows: false });
+  assert.equal(windowed.createdCount, 0);
+  assert.equal(windowed.summary.some((s) => s.ticker === "PLS"), false);
+
+  // Rows that DO come from in-window trades are still valued off the snapshot.
+  const open = aggregateTradesToSummary([
+    { ticker: "GRV", company: "GRV LTD", type: "BUY", units: 1000, avgPrice: 0.1, value: 100, contractDate: "04-02-2026" },
+  ]).summary;
+  const valued = mergeDbHoldingsIntoSummary(
+    open,
+    [{ ticker: "GRV", parentTicker: "GRV", qty: 1000, marketValue: 150, costBase: 100 }],
+    { createMissingRows: false }
+  );
+  assert.equal(valued.mergedCount, 1);
+  assert.equal(valued.summary.find((s) => s.ticker === "GRV")?.sellPrice, 150);
+});
+
+test("buildPnlExportFilename - a period-scoped export says so in its name", async () => {
+  const base = { accounts: ["114716"], accountHolders: {}, isoDate: "2026-08-05" };
+
+  assert.equal(
+    buildPnlExportFilename({ ...base, extension: "xlsx" }),
+    "pnl-114716-2026-08-05.xlsx",
+    "no period keeps today's stamp"
+  );
+
+  // Stamped with today's date alone, a six-month P&L is indistinguishable from a
+  // lifetime one — and that difference is the whole figure.
+  assert.equal(
+    buildPnlExportFilename({
+      ...base,
+      extension: "xlsx",
+      range: { from: "2026-01-01", to: "2026-06-30" },
+    }),
+    "pnl-114716-2026-01-01_to_2026-06-30.xlsx"
+  );
+
+  // An open end is named, not left blank.
+  assert.equal(
+    buildPnlExportFilename({ ...base, extension: "csv", range: { from: "2026-01-01" } }),
+    "pnl-114716-2026-01-01_to_2026-08-05.csv"
+  );
 });
 
 test("aggregateTradesToSummary - Contract Date years are carried onto the row", async () => {

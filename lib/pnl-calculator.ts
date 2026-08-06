@@ -780,6 +780,68 @@ function parsePnlSheetJsMatrix(buffer: Buffer): ParseResult | null {
   }
 }
 
+/** An inclusive `YYYY-MM-DD` window. Either end may be blank for "open-ended". */
+export interface DateRange {
+  from?: string;
+  to?: string;
+}
+
+/** Whether a range actually constrains anything. */
+export function hasDateRange(range?: DateRange | null): boolean {
+  return Boolean(range?.from || range?.to);
+}
+
+/** `2026-02-04` is in `[from, to]`, either end optional, both inclusive. */
+function isoInRange(iso: string, range: DateRange): boolean {
+  if (range.from && iso < range.from) return false;
+  if (range.to && iso > range.to) return false;
+  return true;
+}
+
+/**
+ * Keeps the trades whose **Contract Date** falls inside the window.
+ *
+ * Comparison is on the ISO form, not on `Date` objects: the ledger writes day-first
+ * `04-02-2026` and the date inputs emit `2026-02-04`, and string comparison on ISO is
+ * exact where a timezone-bearing `Date` is a coin toss either side of midnight.
+ *
+ * A trade the date of which cannot be read is EXCLUDED while a window is set, and
+ * counted in `undated` so the UI can say so. Keeping it would put money from outside
+ * the period into a figure that claims to cover the period; dropping it silently
+ * would be just as bad, hence the count.
+ */
+export function filterTradesByDateRange(
+  trades: ParsedTradeRow[],
+  range?: DateRange | null
+): { trades: ParsedTradeRow[]; excluded: number; undated: number } {
+  if (!hasDateRange(range) || !range) return { trades, excluded: 0, undated: 0 };
+
+  const kept: ParsedTradeRow[] = [];
+  let undated = 0;
+
+  for (const t of trades) {
+    const parsed = parseTrackerDate(t.contractDate);
+    if (!parsed) {
+      undated++;
+      continue;
+    }
+    if (isoInRange(parsed.toISOString().slice(0, 10), range)) kept.push(t);
+  }
+
+  return { trades: kept, excluded: trades.length - kept.length, undated };
+}
+
+/*
+ * There is deliberately NO placement-side date filter.
+ *
+ * One existed and was wrong. A placement settles days before its shares are traded, so
+ * a window holding the trade routinely missed the placement, and the unlisted options
+ * disappeared from a period that plainly contained them. The window reaches the option
+ * rows through the TRADES instead: an entitlement needs `buyQty > 0`, and that Buy Qty
+ * is aggregated from in-window trades only, so a parcel bought in the period earns its
+ * options and one bought outside it earns none.
+ */
+
 /**
  * Aggregates an array of parsed trade rows into ticker-level summary items.
  *
@@ -1948,11 +2010,20 @@ function selectClientPlacements(
       if (!byQty) return { entries: [], allocations: [], ambiguous: false, unresolvedYear: true };
       inPlay = byQty;
     }
-  } else if (inPlay.length > 1 && row.buyQty > 0 && row.buyQty < row.sellQty) {
-    // Same year, several parcels (`KNI (a)` + `KNI (b)`), and the ledger already
-    // records one of them as a real buy. Adding all of them would count that one
-    // twice, so only the parcels accounting for the shortfall are taken. No fit means
-    // no narrowing: every parcel is used, exactly as before, and flagged Partial Buy.
+  } else if (inPlay.length > 1) {
+    // The client's name sits on several placements of one stock — two tabs of a year,
+    // or two placements inside one reporting period. The ledger decides which: the
+    // parcels have to reconcile with its BUY and SELL quantities.
+    //
+    //   blank buy side -> the parcels should add up to the units sold. Both together
+    //                     often do, which is how a client in `KNI (a)` and `KNI (b)`
+    //                     gets both; one alone matching means only that one is theirs.
+    //   short buy side -> to the shortfall, the recorded buys being one of the parcels
+    //                     already arriving as a contract note. Adding all of them
+    //                     would count that one twice.
+    //
+    // No unique fit means no narrowing: every parcel is used, as before, and a
+    // short-buy row is still flagged Partial Buy for a human to check.
     inPlay = narrowToReconcilingParcels(inPlay, row) ?? inPlay;
   }
 
@@ -2472,11 +2543,15 @@ function filenamePart(value: string, maxLength = 48): string {
  *
  * A folder of `pnl-summary-calculated-2026-08-05.xlsx` files is unusable — nothing
  * says whose figures are inside, and one per client per day collides. So the account
- * number AND the holder's name both go in the name.
+ * number AND the holder's name both go in, for every account in scope, alongside the
+ * reporting period:
  *
- * Multiple accounts drop the names and keep the numbers: concatenating several
- * "Mr Shaishav Kumar Patel + Mrs Vidushi Patel" would blow past path limits. Beyond
- * three, even the numbers are summarised.
+ *   pnl-114716-Sri-Guru-Nanak-PTY-LTD-2026-01-01_to_2026-06-30.xlsx
+ *
+ * Several accounts each keep their number and name too, but a name is shortened and
+ * the whole thing is length-checked: three of "Mr Shaishav Kumar Patel + Mrs Vidushi
+ * Patel" would run past what Windows accepts as a path, so an over-long result falls
+ * back to numbers only. Beyond three accounts even the numbers are summarised.
  */
 export function buildPnlExportFilename(args: {
   /** Account numbers in scope — the selected one, or every one in the file. */
@@ -2485,11 +2560,17 @@ export function buildPnlExportFilename(args: {
   /** `YYYY-MM-DD`. */
   isoDate: string;
   extension: "xlsx" | "csv";
+  /** The reporting period, when one is set. Omitted means the lifetime view. */
+  range?: DateRange | null;
 }): string {
-  const { accountHolders, isoDate, extension } = args;
+  const { accountHolders, isoDate, extension, range } = args;
   const accounts = [...new Set((args.accounts || []).map((a) => String(a || "").trim()).filter(Boolean))];
 
-  const stamp = filenamePart(isoDate, 10);
+  // A period-scoped export stamped only with today's date is indistinguishable from a
+  // lifetime one, and the difference is the whole figure. The period wins the stamp.
+  const stamp = hasDateRange(range)
+    ? `${filenamePart(range?.from || "start", 10)}_to_${filenamePart(range?.to || isoDate, 10)}`
+    : filenamePart(isoDate, 10);
   const base = "pnl";
 
   if (accounts.length === 0) {
@@ -2506,7 +2587,22 @@ export function buildPnlExportFilename(args: {
   }
 
   if (accounts.length <= 3) {
-    return `${base}-${accounts.map((a) => filenamePart(a, 24)).join("-")}-${stamp}.${extension}`;
+    const numbersOnly = `${base}-${accounts.map((a) => filenamePart(a, 24)).join("-")}-${stamp}.${extension}`;
+
+    // Each account keeps its own name beside its number. Names are trimmed harder here
+    // than for a single account, since there are up to three of them.
+    const withNames = `${base}-${accounts
+      .map((a) => {
+        const ref = filenamePart(a, 24);
+        const holder = filenamePart(accountHolders[a] || "", 20);
+        return holder ? `${ref}-${holder}` : ref;
+      })
+      .join("-")}-${stamp}.${extension}`;
+
+    // 120 characters leaves room for a Downloads path inside Windows' 260-character
+    // limit. Past that the names are what goes, not the numbers: a number still
+    // identifies the account, where a truncated name identifies nothing.
+    return withNames.length <= 120 ? withNames : numbersOnly;
   }
 
   return `${base}-${accounts.length}-accounts-${stamp}.${extension}`;
@@ -2595,7 +2691,19 @@ export function mergeDbHoldingsIntoSummary(
     marketValue: number;
     /** `qty × avg_cost` from the snapshot. 0 for a free option. */
     costBase?: number;
-  }>
+  }>,
+  opts?: {
+    /**
+     * Whether a holding the trade file never mentions may invent its own row.
+     *
+     * FALSE while a reporting period is set. Those rows come from the holdings
+     * snapshot, which is "as of today" and has no date to test against a window — so
+     * a position the client happens to hold now appeared inside a period that saw no
+     * trade in it at all. Rows built from in-window trades are still valued off the
+     * snapshot; it is only inventing new ones that stops.
+     */
+    createMissingRows?: boolean;
+  }
 ): {
   summary: PnlSummaryItem[];
   mergedCount: number;
@@ -2669,6 +2777,8 @@ export function mergeDbHoldingsIntoSummary(
   // unrealised gain instead of an inflated one.
   // -------------------------------------------------------------------------
   for (const h of dbHoldings) {
+    if (opts?.createMissingRows === false) break;
+
     const code = String(h.ticker || "").trim().toUpperCase();
     if (!code) continue;
     if (!(h.qty > 0 || h.marketValue > 0)) continue;
@@ -2713,9 +2823,15 @@ export function mergeDbHoldingsIntoSummary(
 
   updatedSummary.sort(compareSummaryItems);
 
-  const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
-
-  return { summary: updatedSummary, mergedCount, partialExitCount, createdCount, totalPnl };
+  return {
+    summary: updatedSummary,
+    mergedCount,
+    partialExitCount,
+    createdCount,
+    // Skips rows whose buy side is unknown — their cells are blank, and a blank
+    // cannot be summed into the figure everyone reads.
+    totalPnl: sumPnl(updatedSummary),
+  };
 }
 
 // ---------------------------------------------------------------------------
