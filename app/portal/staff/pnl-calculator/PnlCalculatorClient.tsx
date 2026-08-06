@@ -29,6 +29,8 @@ import {
   summaryParentTicker,
   LIVE_SPOT_SOURCES,
   ASSUMED_UNLISTED_OPTION_TERM_YEARS,
+  isBuySideUnknown,
+  sumPnl,
   type ParseResult,
   type PnlSummaryItem,
   type PlacementTickerInfo,
@@ -222,6 +224,20 @@ export function PnlCalculatorClient() {
   };
 
   /**
+   * Explains tickers placed in more than one tracker year that the ledger's Contract
+   * Dates could not pin to one of them. Adding the years together is what produced a
+   * Buy Qty and a P&L the client never had, so those rows are blanked and painted red
+   * instead — this says how many and what to do about it.
+   */
+  const yearConflictHint = (unresolvedYearTickers?: string[]): string | undefined => {
+    if (!unresolvedYearTickers || unresolvedYearTickers.length === 0) return undefined;
+    const shown = unresolvedYearTickers.slice(0, 6).join(", ");
+    const more =
+      unresolvedYearTickers.length > 6 ? ` +${unresolvedYearTickers.length - 6} more` : "";
+    return `${unresolvedYearTickers.length} ticker(s) appear in more than one tracker year (${shown}${more}) and the trade Contract Dates match none of them. Those rows are shown blank and in red, and are left out of the totals — nothing was guessed. Fix the year in the tracker's Date Issued column, or check the trade file covers the right period.`;
+  };
+
+  /**
    * Why a row carries the note it does — the Comments cell's tooltip.
    *
    * For an unlisted option this is the only place the valuation is shown, so it
@@ -245,6 +261,9 @@ export function PnlCalculatorClient() {
       );
     }
     const parts: string[] = [];
+    if (item.placementYearUnresolved && item.placementYearNote) {
+      parts.push(item.placementYearNote);
+    }
     if (item.isPartialBuy) {
       parts.push(
         "Buy side was short — more units were sold than the ledger recorded buying, so the Placement Tracker allocation was added on top."
@@ -369,7 +388,7 @@ export function PnlCalculatorClient() {
           working = {
             ...working,
             summary: cleared,
-            totalPnl: Math.round(cleared.reduce((a, c) => a + c.pnlCalculated, 0) * 100) / 100,
+            totalPnl: sumPnl(cleared),
           };
         }
       }
@@ -398,7 +417,7 @@ export function PnlCalculatorClient() {
     const { summary: newSummary } = aggregateTradesToSummary(tradesToUse);
 
     let finalSummary = newSummary;
-    let finalTotalPnl = Math.round(newSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+    let finalTotalPnl = sumPnl(newSummary);
 
     if (parsedPlacementMap && parsedPlacementMap.size > 0) {
       const merged = mergePlacementTrackerIntoSummary(
@@ -467,10 +486,7 @@ export function PnlCalculatorClient() {
         text: `Enriched Placement Tracker data for ${describeClientHints(
           getClientHints()
         )}! Matched/merged ${stats?.mergedCount ?? 0} tickers.${partialBuyNote(stats?.partialBuyCount)}`,
-        hint:
-          [readNote, ambiguityHint(stats?.ambiguousTickers)]
-            .filter(Boolean)
-            .join(" ") || undefined,
+        hint: [readNote, mergeSkipHint(stats)].filter(Boolean).join(" ") || undefined,
       });
       setPlacementUrl("");
     });
@@ -485,7 +501,12 @@ export function PnlCalculatorClient() {
     files: UploadedPlacementFile[],
     baseRes?: ParseResult | null,
     clientOverride?: string
-  ): { mergedCount: number; partialBuyCount: number; ambiguousTickers: string[] } | null => {
+  ): {
+    mergedCount: number;
+    partialBuyCount: number;
+    ambiguousTickers: string[];
+    unresolvedYearTickers: string[];
+  } | null => {
     // Live reads throughout: the standing-tracker load takes ~12s, and a trade file
     // uploaded during it left this function looking at the mount-time `result` (null),
     // so the tracker silently never merged.
@@ -504,7 +525,7 @@ export function PnlCalculatorClient() {
 
     if (files.length === 0) {
       setParsedPlacementMap(null);
-      const freshTotalPnl = Math.round(baseSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+      const freshTotalPnl = sumPnl(baseSummary);
       const resetRes: ParseResult = {
         ...res,
         summary: baseSummary,
@@ -514,7 +535,7 @@ export function PnlCalculatorClient() {
       };
       setResult(resetRes);
       handleSyncDbHoldings(resetRes, activeAccount, null);
-      return { mergedCount: 0, partialBuyCount: 0, ambiguousTickers: [] };
+      return { mergedCount: 0, partialBuyCount: 0, ambiguousTickers: [], unresolvedYearTickers: [] };
     }
 
     const combinedMap = combinePlacementMaps(files);
@@ -540,8 +561,25 @@ export function PnlCalculatorClient() {
       mergedCount: merged.mergedCount,
       partialBuyCount: merged.partialBuyCount,
       ambiguousTickers: merged.ambiguousTickers,
+      unresolvedYearTickers: merged.unresolvedYearTickers,
     };
   };
+
+  /** Both "we left this alone" explanations, in one line for the notice bar. */
+  const mergeSkipHint = (stats?: {
+    ambiguousTickers: string[];
+    unresolvedYearTickers: string[];
+  } | null): string | undefined =>
+    [ambiguityHint(stats?.ambiguousTickers), yearConflictHint(stats?.unresolvedYearTickers)]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
+  /** A skipped ticker is a finding, not a success — either kind turns the bar red. */
+  const mergeHadSkips = (stats?: {
+    ambiguousTickers: string[];
+    unresolvedYearTickers: string[];
+  } | null): boolean =>
+    Boolean(stats?.ambiguousTickers.length) || Boolean(stats?.unresolvedYearTickers.length);
 
   /**
    * Loads the standing `PLACEMENT_TRACKER_URL` link(s) once per session.
@@ -635,7 +673,11 @@ export function PnlCalculatorClient() {
 
         for (const pFile of fileList) {
           const arrayBuffer = await pFile.arrayBuffer();
-          const placementMap = await parsePlacementTrackerBuffer(Buffer.from(arrayBuffer as any));
+          const placementMap = await parsePlacementTrackerBuffer(
+            Buffer.from(arrayBuffer as any),
+            // Dates the tracker when its sheets do not ("…Tracker 2025.xlsx").
+            pFile.name
+          );
           if (placementMap.size > 0) {
             newUploadedFiles.push({
               id: `${pFile.name}-${Date.now()}-${Math.random()}`,
@@ -661,13 +703,13 @@ export function PnlCalculatorClient() {
         const stats = reapplyPlacementMerges(updatedFileList);
 
         setPlacementMsg({
-          type: stats?.ambiguousTickers.length ? "error" : "success",
+          type: mergeHadSkips(stats) ? "error" : "success",
           text: `Merged ${newUploadedFiles.length} placement file(s) for ${describeClientHints(
             getClientHints()
           )} — filled ${stats?.mergedCount ?? 0} ticker(s).${partialBuyNote(
             stats?.partialBuyCount
           )} Total active placement files: ${updatedFileList.length}.`,
-          hint: ambiguityHint(stats?.ambiguousTickers),
+          hint: mergeSkipHint(stats),
         });
 
         if (placementFileInputRef.current) {
@@ -690,7 +732,7 @@ export function PnlCalculatorClient() {
 
     const stats = reapplyPlacementMerges(placementFiles, null, name);
     setPlacementMsg({
-      type: stats?.ambiguousTickers.length ? "error" : "success",
+      type: mergeHadSkips(stats) ? "error" : "success",
       text:
         name === AUTO_CLIENT
           ? `Account holder set to auto-detect from trade file names — filled ${
@@ -699,7 +741,7 @@ export function PnlCalculatorClient() {
           : `Using ${name}'s placement allocations — filled ${
               stats?.mergedCount ?? 0
             } ticker(s).${partialBuyNote(stats?.partialBuyCount)}`,
-      hint: ambiguityHint(stats?.ambiguousTickers),
+      hint: mergeSkipHint(stats),
     });
   };
 
@@ -1093,12 +1135,12 @@ export function PnlCalculatorClient() {
       return item;
     });
 
-    const newTotalPnl = updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0);
+    const newTotalPnl = sumPnl(updatedSummary);
 
     setResult({
       ...result,
       summary: updatedSummary,
-      totalPnl: Math.round(newTotalPnl * 100) / 100,
+      totalPnl: newTotalPnl,
       matchedTickers: updatedSummary.filter((s) => s.isMatched).length,
       optionTickers: updatedSummary.filter((s) => s.isOption).length,
     });
@@ -1135,15 +1177,25 @@ export function PnlCalculatorClient() {
   const equityRows = summaryList.filter((i) => !isOptionRow(i));
   const optionRows = summaryList.filter((i) => isOptionRow(i));
 
-  /** Equity and options are reported as separate books, then combined. */
-  const subtotalFor = (rows: PnlSummaryItem[]) => ({
-    count: rows.length,
-    buyQty: rows.reduce((s, i) => s + i.buyQty, 0),
-    sellQty: rows.reduce((s, i) => s + i.sellQty, 0),
-    buyPrice: rows.reduce((s, i) => s + i.buyPrice, 0),
-    sellPrice: rows.reduce((s, i) => s + i.sellPrice, 0),
-    pnl: rows.reduce((s, i) => s + i.pnlCalculated, 0),
-  });
+  /**
+   * Equity and options are reported as separate books, then combined.
+   *
+   * A row whose buy side is unknown is counted but not summed: its cells are blank,
+   * and adding a P&L the table refuses to display back into the subtotal would put
+   * the wrong number in the only figure most people read.
+   */
+  const subtotalFor = (rows: PnlSummaryItem[]) => {
+    const known = rows.filter((i) => !isBuySideUnknown(i));
+    return {
+      count: rows.length,
+      unknownCount: rows.length - known.length,
+      buyQty: known.reduce((s, i) => s + i.buyQty, 0),
+      sellQty: known.reduce((s, i) => s + i.sellQty, 0),
+      buyPrice: known.reduce((s, i) => s + i.buyPrice, 0),
+      sellPrice: known.reduce((s, i) => s + i.sellPrice, 0),
+      pnl: known.reduce((s, i) => s + i.pnlCalculated, 0),
+    };
+  };
 
   const equityTotals = subtotalFor(equityRows);
   const optionTotals = subtotalFor(optionRows);
@@ -1916,8 +1968,21 @@ export function PnlCalculatorClient() {
                         );
                       }
 
+                      // Nothing in the ledger and nothing usable in the tracker: the
+                      // buy side is UNKNOWN, not zero. Blank cells and a red row —
+                      // a zero here would read as "bought for nothing" and hand the
+                      // row a profit equal to its entire sale.
+                      const buyUnknown = isBuySideUnknown(item);
+
                       return (
-                        <tr key={item.ticker} className="hover:bg-paper-2/60 transition-colors">
+                        <tr
+                          key={item.ticker}
+                          className={
+                            buyUnknown
+                              ? "bg-loss-bg/60 border-l-4 border-l-loss-d transition-colors"
+                              : "hover:bg-paper-2/60 transition-colors"
+                          }
+                        >
                           <td className="py-3.5 px-4 font-bold text-navy">
                             <div className="flex items-center gap-2">
                               <span>{item.ticker}</span>
@@ -2007,38 +2072,56 @@ export function PnlCalculatorClient() {
                           <td className="py-3.5 px-4 text-mut truncate max-w-[200px]" title={item.company}>
                             {item.company}
                           </td>
-                          <td className="py-3.5 px-4 text-right font-mono text-navy">
-                            {fmtQty(item.buyQty)}
+                          <td
+                            className="py-3.5 px-4 text-right font-mono text-navy"
+                            title={buyUnknown ? item.placementYearNote : undefined}
+                          >
+                            {buyUnknown ? <span className="text-loss-d font-bold">—</span> : fmtQty(item.buyQty)}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono text-navy">
                             {fmtQty(item.sellQty)}
                           </td>
-                          <td className="py-3.5 px-4 text-right font-mono text-navy">
-                            {fmtCurrency(item.buyPrice)}
+                          <td
+                            className="py-3.5 px-4 text-right font-mono text-navy"
+                            title={buyUnknown ? item.placementYearNote : undefined}
+                          >
+                            {buyUnknown ? <span className="text-loss-d font-bold">—</span> : fmtCurrency(item.buyPrice)}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono text-navy">
                             {fmtCurrency(item.sellPrice)}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono font-bold">
-                            <span
-                              className={`inline-block px-2.5 py-1 rounded-lg ${
-                                item.pnlCalculated > 0
-                                  ? "bg-green-bg text-green-d"
-                                  : item.pnlCalculated < 0
-                                  ? "bg-loss-bg text-loss-d"
-                                  : "bg-paper-2 text-mut"
-                              }`}
-                            >
-                              {fmtCurrency(item.pnlCalculated)}
-                            </span>
+                            {buyUnknown ? (
+                              <span
+                                className="inline-block px-2.5 py-1 rounded-lg bg-loss-bg text-loss-d"
+                                title={item.placementYearNote}
+                              >
+                                —
+                              </span>
+                            ) : (
+                              <span
+                                className={`inline-block px-2.5 py-1 rounded-lg ${
+                                  item.pnlCalculated > 0
+                                    ? "bg-green-bg text-green-d"
+                                    : item.pnlCalculated < 0
+                                    ? "bg-loss-bg text-loss-d"
+                                    : "bg-paper-2 text-mut"
+                                }`}
+                              >
+                                {fmtCurrency(item.pnlCalculated)}
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4">
                             {item.comment && (
                               <span
                                 className={`text-3xs px-1.5 py-0.5 rounded border font-semibold whitespace-nowrap ${
-                                  // "Open" is a statement of fact, not something to
-                                  // look into — only the merges get the amber.
-                                  item.comment === "Open"
+                                  // Red for a row whose figures cannot be trusted at
+                                  // all; "Open" is a statement of fact and stays
+                                  // neutral; the merges get the amber in between.
+                                  item.placementYearUnresolved
+                                    ? "bg-loss-bg text-loss-d border-loss-d"
+                                    : item.comment === "Open"
                                     ? "bg-paper-2 text-mut border-paper-border"
                                     : "bg-amber-bg text-amber-d border-amber-200"
                                 }`}

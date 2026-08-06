@@ -138,7 +138,9 @@ export async function fetchPlacementTrackerUrlAction(
     const { parsePlacementTrackerBuffer, placementMapToArray } = await import(
       "@/lib/pnl-calculator"
     );
-    const placementMap = await parsePlacementTrackerBuffer(download.buffer);
+    // The link is passed in only so a tracker whose sheets carry no year can still
+    // be dated from "…Placement Tracker 2025.xlsx" in the URL.
+    const placementMap = await parsePlacementTrackerBuffer(download.buffer, download.filename || url);
 
     if (placementMap.size === 0) {
       return {
@@ -363,7 +365,7 @@ export async function parsePlacementTrackerFileAction(
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     const { parsePlacementTrackerBuffer, placementMapToArray } = await import("@/lib/pnl-calculator");
-    const placementMap = await parsePlacementTrackerBuffer(buffer);
+    const placementMap = await parsePlacementTrackerBuffer(buffer, file.name);
 
     if (placementMap.size === 0) {
       return {

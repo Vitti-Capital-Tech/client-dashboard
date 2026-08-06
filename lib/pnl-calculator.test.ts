@@ -19,6 +19,8 @@ import {
   buildUnlistedOptionRows,
   collectUnlistedOptionTickers,
   exportStatus,
+  isBuySideUnknown,
+  aggregateTradesToSummary,
   type PlacementTickerInfo,
 } from "./pnl-calculator.ts";
 import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
@@ -1101,13 +1103,15 @@ const placementFile = (
   ticker: string,
   clientName: string,
   roundShares: number,
-  actualDollar: number
+  actualDollar: number,
+  issueYear?: number
 ): { map: Map<string, PlacementTickerInfo> } => ({
   map: new Map<string, PlacementTickerInfo>([
     [
       ticker,
       {
         ticker,
+        issueYear,
         totalShares: roundShares,
         totalActualDollar: actualDollar,
         clientAllocations: [
@@ -1354,18 +1358,26 @@ test("splitTrackerUrls - quotes pasted into a hosting provider's env UI are stri
   );
 });
 
-test("combinePlacementMaps - repeated calls do not inflate the source workbooks", async () => {
-  // The 2025 and 2026 trackers both list ABE for the same client.
-  const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000);
-  const b = placementFile("ABE", "Zidiplus Pty Ltd", 66667, 2000);
+test("combinePlacementMaps - two years of the same ticker are never summed", async () => {
+  // The 2025 and 2026 trackers both list ABE for the same client. Adding the two
+  // parcels together gave the client a Buy Qty and a cost base they never had — the
+  // reported wrong P&L. They are two placements (or one listed twice); either way
+  // only the trade dates can say which belongs on the row.
+  const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000, 2025);
+  const b = placementFile("ABE", "Zidiplus Pty Ltd", 66667, 2000, 2026);
 
   const first = combinePlacementMaps([a, b]);
-  assert.equal(first.get("ABE")?.clientAllocations[0].roundShares, 166667);
-  assert.equal(first.get("ABE")?.clientAllocations[0].actualDollar, 5000);
+  const abe = first.get("ABE")!;
+
+  assert.equal(abe.candidates?.length, 2, "each year is kept as its own candidate");
+  assert.deepEqual(abe.candidates?.map((c) => c.issueYear), [2025, 2026]);
+  assert.deepEqual(abe.candidates?.map((c) => c.totalShares), [100000, 66667]);
+  assert.notEqual(abe.totalShares, 166667, "the years must never be added together");
+  assert.equal(abe.totalShares, 100000, "top-level describes the first candidate only");
 
   // The inputs must be untouched. Copying only the ARRAY left the allocation OBJECTS
-  // shared, so the `+=` above mutated the stored workbook — and this function runs on
-  // every re-merge, so the numbers grew on every upload.
+  // shared, so a merge mutated the stored workbook — and this runs on every re-merge,
+  // so the numbers grew on every upload.
   assert.equal(a.map.get("ABE")?.clientAllocations[0].roundShares, 100000);
   assert.equal(a.map.get("ABE")?.clientAllocations[0].actualDollar, 3000);
   assert.equal(b.map.get("ABE")?.clientAllocations[0].roundShares, 66667);
@@ -1373,15 +1385,26 @@ test("combinePlacementMaps - repeated calls do not inflate the source workbooks"
   // Re-merging the same inputs must give the same answer, however many times it runs.
   for (let i = 0; i < 4; i++) {
     const again = combinePlacementMaps([a, b]);
-    assert.equal(again.get("ABE")?.clientAllocations[0].roundShares, 166667, `run ${i + 2} drifted`);
-    assert.equal(again.get("ABE")?.clientAllocations[0].actualDollar, 5000);
-    assert.equal(again.get("ABE")?.totalShares, 166667);
+    assert.equal(again.get("ABE")?.totalShares, 100000, `run ${i + 2} drifted`);
+    assert.deepEqual(again.get("ABE")?.candidates?.map((c) => c.totalShares), [100000, 66667]);
   }
 });
 
-test("combinePlacementMaps - distinct clients and add-ons merge without doubling", async () => {
+test("combinePlacementMaps - two undated workbooks are kept apart, not collapsed", async () => {
+  // Neither file's year could be read. They cannot be compared, so they must not be
+  // treated as the same placement — that would silently drop one of them.
   const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000);
-  const b = placementFile("ABE", "Saturn Fund", 50000, 1500);
+  const b = placementFile("ABE", "Zidiplus Pty Ltd", 66667, 2000);
+
+  const abe = combinePlacementMaps([a, b]).get("ABE")!;
+  assert.equal(abe.candidates?.length, 2);
+  assert.deepEqual(abe.candidates?.map((c) => c.issueYear), [undefined, undefined]);
+});
+
+test("combinePlacementMaps - distinct clients and add-ons merge without doubling", async () => {
+  // ONE placement listed in both workbooks, each naming a different participant.
+  const a = placementFile("ABE", "Zidiplus Pty Ltd", 100000, 3000, 2025);
+  const b = placementFile("ABE", "Saturn Fund", 50000, 1500, 2025);
   // Only the second workbook carries the add-on spec.
   b.map.get("ABE")!.addOns = parseAddOnSpecs("1:2 @$0.10 Unlisted Exp 31/12/29");
 
@@ -1393,6 +1416,9 @@ test("combinePlacementMaps - distinct clients and add-ons merge without doubling
     abe.clientAllocations.map((x) => x.clientName).sort(),
     ["Saturn Fund", "Zidiplus Pty Ltd"]
   );
+  // One year, so no year question to answer — the row can be filled straight away.
+  assert.equal(abe.candidates, undefined);
+  assert.equal(abe.totalShares, 150000, "two participants of one placement do add up");
   assert.equal(abe.addOns?.length, 1);
 
   // Add-ons come from the first workbook that has them, never concatenated — two
@@ -1536,6 +1562,162 @@ const abePlacementMap = () => {
   });
   return m;
 };
+
+/**
+ * An ABE row with no recorded buys — the classic placement row — traded in `years`.
+ * Pass `undefined` for a ledger that carries no Contract Date at all.
+ */
+const abeSoldRow = (years: number[] | undefined, buyYears: number[] = []) => [
+  {
+    ticker: "ABE",
+    parentTicker: "ABE",
+    instrument: "EQUITY" as const,
+    company: "ABERDEEN",
+    buyQty: 0,
+    sellQty: 40000,
+    buyPrice: 0,
+    sellPrice: 12500,
+    totalBuyValue: 0,
+    totalSellValue: 12500,
+    pnlCalculated: 12500,
+    isMatched: false,
+    isOption: false,
+    hasOptionCode: false,
+    openQty: -40000,
+    tradeCount: 1,
+    tradeYears: years,
+    buyYears,
+  },
+];
+
+/** ABE placed in BOTH trackers: 40,000 shares in 2025 and 10,000 in 2026. */
+const abeTwoYearMap = () =>
+  combinePlacementMaps([
+    placementFile("ABE", "Mr Akshit Verma", 40000, 8000, 2025),
+    placementFile("ABE", "Mr Akshit Verma", 10000, 2500, 2026),
+  ]);
+
+test("PNL Calculator - a ticker in two trackers is filled from the year the client traded", async () => {
+  // The bug: both parcels were added, giving 50,000 shares for $10,500 — a Buy Qty
+  // and a cost base the client never had. The trade's Contract Date year decides.
+  const merged = mergePlacementTrackerIntoSummary(
+    abeSoldRow([2025]),
+    abeTwoYearMap(),
+    "Mr Akshit Verma"
+  );
+
+  const abe = merged.summary.find((s) => s.ticker === "ABE")!;
+  assert.equal(abe.buyQty, 40000, "the 2025 parcel, not both years");
+  assert.equal(abe.buyPrice, 8000);
+  assert.equal(abe.pnlCalculated, 4500);
+  assert.equal(abe.placementYearUnresolved, undefined);
+  assert.deepEqual(merged.unresolvedYearTickers, []);
+
+  // The other year picks the other parcel, from the same combined map.
+  const other = mergePlacementTrackerIntoSummary(
+    abeSoldRow([2026]),
+    abeTwoYearMap(),
+    "Mr Akshit Verma"
+  ).summary.find((s) => s.ticker === "ABE")!;
+  assert.equal(other.buyQty, 10000);
+  assert.equal(other.buyPrice, 2500);
+});
+
+test("PNL Calculator - BUY dates outrank sell dates when both are on the row", async () => {
+  // Bought in 2025, sold in 2026. A placement is a purchase, so 2025 is the year.
+  const abe = mergePlacementTrackerIntoSummary(
+    abeSoldRow([2025, 2026], [2025]),
+    abeTwoYearMap(),
+    "Mr Akshit Verma"
+  ).summary.find((s) => s.ticker === "ABE")!;
+
+  assert.equal(abe.buyQty, 40000);
+});
+
+test("PNL Calculator - an unmatched placement year is left blank and flagged red", async () => {
+  // Trades dated 2024; the tracker knows 2025 and 2026. Nothing here is fillable,
+  // and picking either parcel would invent a cost base.
+  const merged = mergePlacementTrackerIntoSummary(
+    abeSoldRow([2024]),
+    abeTwoYearMap(),
+    "Mr Akshit Verma"
+  );
+
+  const abe = merged.summary.find((s) => s.ticker === "ABE")!;
+  assert.equal(abe.placementYearUnresolved, true);
+  assert.equal(abe.buyQty, 0, "nothing was filled");
+  assert.equal(abe.buyPrice, 0);
+  assert.equal(abe.isEnriched, undefined);
+  assert.equal(abe.comment, "Check Placement Year");
+  assert.match(abe.placementYearNote ?? "", /2025 and 2026/);
+  assert.match(abe.placementYearNote ?? "", /2024/);
+  assert.deepEqual(merged.unresolvedYearTickers, ["ABE"]);
+
+  // The row's buy side is UNKNOWN, not zero — so its cells blank out, and the total
+  // skips it rather than booking the whole sale as profit.
+  assert.equal(isBuySideUnknown(abe), true);
+  assert.equal(merged.totalPnl, 0, "a row that shows blanks cannot be summed");
+  assert.equal(exportStatus(abe), "Buy Side Unknown");
+
+  // Both exports blank the buy side and the P&L rather than printing 0.
+  const csv = buildPnlExportCsvString(merged.summary);
+  const row = csv.split("\n").find((l) => l.startsWith("ABE,"))!;
+  const cells = row.split(",");
+  assert.equal(cells[4], "", "Buy Qty blank");
+  assert.equal(cells[6], "", "Buy Price blank");
+  assert.equal(cells[8], "", "PnL blank");
+  assert.equal(cells[5], "40000", "the sale really happened and is still shown");
+});
+
+test("PNL Calculator - no trade dates at all cannot resolve a two-year ticker", async () => {
+  // An older ledger with no Contract Date column: the question is unanswerable, so
+  // the row is flagged rather than filled from whichever year came first.
+  const merged = mergePlacementTrackerIntoSummary(
+    abeSoldRow(undefined),
+    abeTwoYearMap(),
+    "Mr Akshit Verma"
+  );
+  const abe = merged.summary.find((s) => s.ticker === "ABE")!;
+
+  assert.equal(abe.placementYearUnresolved, true);
+  assert.match(abe.placementYearNote ?? "", /none in the file/);
+});
+
+test("PNL Calculator - a ticker in ONE tracker fills without any year check", async () => {
+  // The year comparison exists only to separate two placements. A single one must
+  // keep working even when the ledger has no dates at all.
+  const abe = mergePlacementTrackerIntoSummary(
+    abeSoldRow(undefined),
+    abePlacementMap(),
+    "Mr Akshit Verma"
+  ).summary.find((s) => s.ticker === "ABE")!;
+
+  assert.equal(abe.buyQty, 40000);
+  assert.equal(abe.placementYearUnresolved, undefined);
+});
+
+test("aggregateTradesToSummary - Contract Date years are carried onto the row", async () => {
+  const trade = (type: "BUY" | "SELL", value: number, contractDate: string) => ({
+    ticker: "ABE",
+    company: "ABERDEEN",
+    type,
+    units: 1000,
+    avgPrice: value / 1000,
+    value,
+    contractDate,
+  });
+
+  const { summary } = aggregateTradesToSummary([
+    trade("BUY", 200, "03-03-2025"),
+    trade("SELL", 300, "2026-01-20"),
+    // An undated row must not invent a year.
+    trade("SELL", 0, ""),
+  ]);
+
+  const abe = summary.find((s) => s.ticker === "ABE")!;
+  assert.deepEqual(abe.buyYears, [2025], "day-first 03-03-2025");
+  assert.deepEqual(abe.tradeYears, [2025, 2026], "sorted, unique, both legs");
+});
 
 test("PNL Calculator - short buy side (0 < buyQty < sellQty) ADDS the placement allocation", async () => {
   // 10,000 units bought per the ledger but 50,000 sold — 40,000 were never

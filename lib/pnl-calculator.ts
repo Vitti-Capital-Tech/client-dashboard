@@ -75,6 +75,24 @@ export interface PlacementAddOn {
   listed: boolean;
 }
 
+/**
+ * ONE year's placement in a ticker that was placed in more than one.
+ *
+ * A ticker can appear in both the 2025 and the 2026 tracker — either as two genuinely
+ * different placements or as the same one carried forward. Neither may be summed, so
+ * the years are kept apart until the trade file says which one the client actually
+ * took part in (`mergePlacementTrackerIntoSummary`).
+ */
+export interface PlacementYearCandidate {
+  /** From the Overview's Date Issued, else the Overview sheet's own year. */
+  issueYear?: number;
+  /** ISO `YYYY-MM-DD`, when the sheet states one. */
+  issueDate?: string;
+  totalShares: number;
+  totalActualDollar: number;
+  clientAllocations: PlacementClientAllocation[];
+}
+
 export interface PlacementTickerInfo {
   ticker: string;
   company?: string;
@@ -83,6 +101,16 @@ export interface PlacementTickerInfo {
   totalShares: number;
   totalActualDollar: number;
   clientAllocations: PlacementClientAllocation[];
+  /** ISO `YYYY-MM-DD` from the Overview's Date Issued column. */
+  issueDate?: string;
+  /** Year of `issueDate`, falling back to the year in the Overview sheet's name. */
+  issueYear?: number;
+  /**
+   * Set ONLY when the loaded workbooks place this ticker in more than one year.
+   * The top-level totals then describe the first candidate alone and must not be
+   * used to fill a row — `mergePlacementTrackerIntoSummary` picks by trade year.
+   */
+  candidates?: PlacementYearCandidate[];
   /** Every grant parsed out of the Overview sheet's grant cell ("Add-Ons" in the
    *  2026 tracker, "Options" in the 2025 one), in cell order. */
   addOns?: PlacementAddOn[];
@@ -162,6 +190,30 @@ export interface PnlSummaryItem {
   openQty: number; // buyQty - sellQty
   tradeCount: number;
   clientAllocations?: PlacementClientAllocation[];
+  /** Calendar years of the ledger's Contract Date, BUY trades only. Sorted, unique. */
+  buyYears?: number[];
+  /** Same for every trade on the row, buy or sell — the fallback when there are no buys. */
+  tradeYears?: number[];
+  /**
+   * The ticker was placed in more than one tracker year and the trade dates did not
+   * single one out, so NOTHING was filled from the placement. Never merge silently
+   * here: summing the years is exactly what produced the wrong P&L.
+   */
+  placementYearUnresolved?: boolean;
+  /** Human-readable reason for `placementYearUnresolved`, shown on hover. */
+  placementYearNote?: string;
+}
+
+/**
+ * Whether a row's buy side is genuinely UNKNOWN rather than zero.
+ *
+ * Nothing in the ledger and nothing usable in the tracker: showing `0` would read as
+ * "bought for nothing" and hand the row a P&L equal to its whole sale proceeds. The
+ * table and both exports leave these cells blank and paint them red instead, and the
+ * Grand Total skips the row — a blank cannot be summed.
+ */
+export function isBuySideUnknown(item: PnlSummaryItem): boolean {
+  return Boolean(item.placementYearUnresolved) && item.buyQty === 0 && item.buyPrice === 0;
 }
 
 export interface ParseResult {
@@ -234,6 +286,9 @@ export function exportStatus(item: PnlSummaryItem): string {
   // were set from the same held quantity, so "Matched" would imply a trade
   // reconciliation that never happened. Where the figures came from is the useful fact.
   if (item.isDbOnly) return "DB Holding";
+  // Ahead of everything else: the row's figures are blank, so no status describing
+  // them can be true. `isMatched` is especially wrong here — 0 buys against 0 buys.
+  if (isBuySideUnknown(item)) return "Buy Side Unknown";
   if (item.isMatched) return "Matched";
   if (item.isUnlistedOption) return "Unlisted Option";
   if (isOptionRow(item)) return "Option";
@@ -715,6 +770,9 @@ function parsePnlSheetJsMatrix(buffer: Buffer): ParseResult | null {
  */
 export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary: PnlSummaryItem[]; totalPnl: number } {
   const tickerMap = new Map<string, PnlSummaryItem>();
+  // Contract Date years per row, kept aside so the item objects stay plain until the
+  // end. They are what tells two placements of the same ticker apart at merge time.
+  const yearsByKey = new Map<string, { buy: Set<number>; all: Set<number> }>();
 
   for (const t of rawTrades) {
     const rawCode = String(t.ticker || "").trim().toUpperCase();
@@ -749,6 +807,17 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
 
     item.tradeCount += 1;
 
+    const year = parseTrackerDate(t.contractDate)?.getUTCFullYear();
+    if (year) {
+      let years = yearsByKey.get(key);
+      if (!years) {
+        years = { buy: new Set(), all: new Set() };
+        yearsByKey.set(key, years);
+      }
+      years.all.add(year);
+      if (t.type === "BUY") years.buy.add(year);
+    }
+
     if (t.type === "BUY") {
       item.buyQty += t.units;
       item.totalBuyValue += t.value;
@@ -768,6 +837,7 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
     // Calculate PnL for all positions regardless of qty match
     const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
     const openQty = item.buyQty - item.sellQty;
+    const years = yearsByKey.get(item.ticker);
 
     return {
       ...item,
@@ -779,6 +849,8 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
       isMatched,
       isOption,
       openQty,
+      buyYears: years ? [...years.buy].sort((a, b) => a - b) : undefined,
+      tradeYears: years ? [...years.all].sort((a, b) => a - b) : undefined,
     };
   });
 
@@ -833,19 +905,31 @@ export async function buildPnlExportXlsxBuffer(
   const sortedSummary = [...summary].sort(compareSummaryItems);
 
   for (const item of sortedSummary) {
+    // An unknown buy side is left EMPTY, not zero: a zero here reads as "bought for
+    // nothing" and books the entire sale as profit. The row is painted red so it is
+    // impossible to scroll past.
+    const unknown = isBuySideUnknown(item);
+
     const row = ws.addRow({
       ticker: item.ticker,
       company: item.company,
       instrument: isOptionRow(item) ? "Option" : "Equity",
       underlying: summaryParentTicker(item),
-      buyQty: item.buyQty,
+      buyQty: unknown ? "" : item.buyQty,
       sellQty: item.sellQty,
-      buyPrice: item.buyPrice,
+      buyPrice: unknown ? "" : item.buyPrice,
       sellPrice: item.sellPrice,
-      pnlCalculated: item.pnlCalculated,
+      pnlCalculated: unknown ? "" : item.pnlCalculated,
       status: exportStatus(item),
       comment: item.comment ?? "",
     });
+
+    if (unknown) {
+      row.font = { color: { argb: "FF991B1B" }, bold: true };
+      row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFEE2E2" } };
+      if (item.placementYearNote) row.getCell("comment").note = item.placementYearNote;
+      continue;
+    }
 
     // PnL cell highlighting
     const pnlCell = row.getCell("pnlCalculated");
@@ -860,10 +944,12 @@ export async function buildPnlExportXlsxBuffer(
     }
   }
 
-  // Grand Total Row (sums all exported positions)
-  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+  // Grand Total Row. Rows with an unknown buy side are skipped whole: their cells are
+  // blank, and a blank cannot be summed into a figure people read as the answer.
+  const totalled = summary.filter((i) => !isBuySideUnknown(i));
+  const totalBuyPrice = totalled.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = totalled.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = totalled.reduce((s, i) => s + i.pnlCalculated, 0);
 
   const totalRow = ws.addRow({
     ticker: "Grand Total",
@@ -922,28 +1008,33 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
 
   const lines = [
     headers.join(","),
-    ...sortedSummary.map((item) =>
-      [
+    ...sortedSummary.map((item) => {
+      // Blank, not zero — see the xlsx builder. CSV has no colour, so the Comments
+      // column ("Check Placement Year") is what carries the warning here.
+      const unknown = isBuySideUnknown(item);
+
+      return [
         item.ticker,
         item.company,
         isOptionRow(item) ? "Option" : "Equity",
         summaryParentTicker(item),
-        item.buyQty,
+        unknown ? "" : item.buyQty,
         item.sellQty,
-        item.buyPrice.toFixed(2),
+        unknown ? "" : item.buyPrice.toFixed(2),
         item.sellPrice.toFixed(2),
-        item.pnlCalculated.toFixed(2),
+        unknown ? "" : item.pnlCalculated.toFixed(2),
         item.isEdited && !item.isMatched ? "Edited" : exportStatus(item),
-        item.comment ?? "",
+        unknown && item.placementYearNote ? item.placementYearNote : item.comment ?? "",
       ]
         .map(escapeCsv)
-        .join(",")
-    ),
+        .join(",");
+    }),
   ];
 
-  const totalBuyPrice = summary.reduce((s, i) => s + i.buyPrice, 0);
-  const totalSellPrice = summary.reduce((s, i) => s + i.sellPrice, 0);
-  const totalPnl = summary.reduce((s, i) => s + i.pnlCalculated, 0);
+  const totalled = summary.filter((i) => !isBuySideUnknown(i));
+  const totalBuyPrice = totalled.reduce((s, i) => s + i.buyPrice, 0);
+  const totalSellPrice = totalled.reduce((s, i) => s + i.sellPrice, 0);
+  const totalPnl = totalled.reduce((s, i) => s + i.pnlCalculated, 0);
 
   lines.push(
     [
@@ -1008,7 +1099,13 @@ const PLACEMENT_SHEET_ROW_CAP = 200;
  * indexing scheme, never by a hard-coded position.
  */
 export async function parsePlacementTrackerBuffer(
-  buffer: ArrayBuffer | Buffer
+  buffer: ArrayBuffer | Buffer,
+  /**
+   * File name or URL, used ONLY as a last-resort source of the tracker's year
+   * ("Placement Tracker 2025.xlsx"). Two workbooks that cannot be dated cannot be
+   * told apart, and a ticker in both then has to be reported instead of merged.
+   */
+  sourceName?: string
 ): Promise<Map<string, PlacementTickerInfo>> {
   const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as any);
 
@@ -1062,6 +1159,13 @@ export async function parsePlacementTrackerBuffer(
   ]);
 
   const addOnsByTicker = parseOverviewAddOns(buf);
+
+  // Which year's tracker this is, for tickers whose own row carries no date. The sheet
+  // names are the more reliable source (a file can be renamed or downloaded as
+  // "document.xlsx"), so the caller's name is only consulted after them.
+  const workbookYear =
+    workbook.SheetNames.map(yearFromText).find((y) => y !== undefined) ??
+    yearFromText(sourceName ?? "");
 
   for (const sheetName of workbook.SheetNames) {
     const rawSheetName = sheetName.trim();
@@ -1178,12 +1282,17 @@ export async function parsePlacementTrackerBuffer(
     }
 
     if (allocations.length > 0) {
+      const overview = addOnsByTicker.get(parentTicker);
       placementMap.set(parentTicker, {
         ticker: parentTicker,
         totalShares,
         totalActualDollar: Math.round(totalActualDollar * 100) / 100,
         clientAllocations: allocations,
-        addOns: addOnsByTicker.get(parentTicker),
+        addOns: overview?.addOns?.length ? overview.addOns : undefined,
+        issueDate: overview?.issueDate,
+        // Falls back to the workbook's own year so a tracker whose Overview has no
+        // usable date can still be told apart from the other year's tracker.
+        issueYear: overview?.issueYear ?? workbookYear,
       });
     }
   }
@@ -1193,15 +1302,17 @@ export async function parsePlacementTrackerBuffer(
   // entitlement is driven by the client's Buy Qty in the trade file, not by the
   // allocation rows, so it must survive with an empty allocation list — which the
   // `matchedAllocations.length > 0` guard in the merge treats as "nothing to fill".
-  for (const [ticker, addOns] of addOnsByTicker.entries()) {
+  for (const [ticker, overview] of addOnsByTicker.entries()) {
     if (placementMap.has(ticker)) continue;
-    if (!addOns.some((a) => !a.listed)) continue;
+    if (!overview.addOns.some((a) => !a.listed)) continue;
     placementMap.set(ticker, {
       ticker,
       totalShares: 0,
       totalActualDollar: 0,
       clientAllocations: [],
-      addOns,
+      addOns: overview.addOns,
+      issueDate: overview.issueDate,
+      issueYear: overview.issueYear ?? workbookYear,
     });
   }
 
@@ -1373,8 +1484,8 @@ function utcDate(year: number, month: number, day: number): Date | null {
  * Listed add-ons are parsed and kept too: `buildUnlistedOptionRows` filters them
  * out, and keeping them makes "why is there no row for X" answerable.
  */
-function parseOverviewAddOns(buffer: Buffer): Map<string, PlacementAddOn[]> {
-  const found = new Map<string, PlacementAddOn[]>();
+function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow> {
+  const found = new Map<string, OverviewRow>();
 
   let wb: XLSX.WorkBook;
   try {
@@ -1405,9 +1516,15 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, PlacementAddOn[]> {
     } catch {
       return;
     }
+    // "2025 Overview" dates every placement on the sheet, which is what identifies the
+    // year when a row's own Date Issued is blank. Without a year the ticker cannot be
+    // told apart from the same ticker in another tracker.
+    const sheetYear = yearFromText(sheetName);
+
     // First sheet to describe a ticker wins, matching the first-row-wins rule below.
-    for (const [ticker, specs] of readAddOnRows(rows)) {
-      if (!found.has(ticker)) found.set(ticker, specs);
+    for (const [ticker, row] of readAddOnRows(rows)) {
+      if (found.has(ticker)) continue;
+      found.set(ticker, { ...row, issueYear: row.issueYear ?? sheetYear });
     }
   };
 
@@ -1422,14 +1539,34 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, PlacementAddOn[]> {
   return found;
 }
 
+/** One Overview row's grants and the date that dates them. */
+interface OverviewRow {
+  addOns: PlacementAddOn[];
+  /** ISO `YYYY-MM-DD` from the row's settlement / issue date, when it has one. */
+  issueDate?: string;
+  issueYear?: number;
+}
+
+/** The first plausible placement year in a sheet name — "2025 Overview" -> 2025. */
+function yearFromText(text: string): number | undefined {
+  const m = text.match(/\b(20\d{2})\b/);
+  return m ? Number(m[1]) : undefined;
+}
+
 /** `GRV`, `GRV (b)` — a per-placement tab, not a summary sheet. */
 function looksLikeTickerTab(sheetName: string): boolean {
   return /^[A-Za-z0-9]{2,5}(\s*\(.*\))?$/.test(sheetName.trim());
 }
 
-/** Pulls `ticker -> grants` out of one already-read sheet. */
-function readAddOnRows(rows: unknown[][]): Map<string, PlacementAddOn[]> {
-  const found = new Map<string, PlacementAddOn[]>();
+/**
+ * Pulls `ticker -> { grants, date }` out of one already-read sheet.
+ *
+ * The date is read for EVERY row carrying a ticker, not just the ones with grants:
+ * it is what tells two placements of the same ticker apart across tracker years, and
+ * a ticker with no add-ons still needs that.
+ */
+function readAddOnRows(rows: unknown[][]): Map<string, OverviewRow> {
+  const found = new Map<string, OverviewRow>();
 
   let headerRowIdx = -1;
   let colTicker = -1;
@@ -1515,11 +1652,10 @@ function readAddOnRows(rows: unknown[][]): Map<string, PlacementAddOn[]> {
     const cells = rows[r];
     if (!Array.isArray(cells)) continue;
 
-    // Grants that name no expiry are dated off this; the rest ignore it entirely.
+    // Grants that name no expiry are dated off this, and it dates the placement.
     const settlementDate = colDate > -1 ? parseTrackerDate(cells[colDate]) : null;
 
     const specs = mergeAddOnSpecs(addOnCols.map((c) => parseAddOnSpecs(cells[c], settlementDate)));
-    if (specs.length === 0) continue;
 
     // Sheet names carry suffixes the Overview does not ("FIN (b)" vs "FIN"), so
     // normalise to the bare parent code the P&L table groups on.
@@ -1527,9 +1663,20 @@ function readAddOnRows(rows: unknown[][]): Map<string, PlacementAddOn[]> {
     const ticker = getParentTicker(rawTicker.split(/\s|\(/)[0].toUpperCase());
     if (!ticker || ticker.length < 2) continue;
 
+    // Only a real ticker COLUMN makes a row without grants worth keeping. Falling back
+    // to column 2 is a guess that is safe next to a parsed grant and not on its own.
+    if (specs.length === 0 && (colTicker === -1 || !settlementDate)) continue;
+
     // First row wins: a ticker placed twice in a year keeps its earliest add-ons
     // rather than silently adopting the later row's strikes.
-    if (!found.has(ticker)) found.set(ticker, specs);
+    if (found.has(ticker)) continue;
+
+    const isoDate = settlementDate ? settlementDate.toISOString().slice(0, 10) : undefined;
+    found.set(ticker, {
+      addOns: specs,
+      issueDate: isoDate,
+      issueYear: settlementDate ? settlementDate.getUTCFullYear() : undefined,
+    });
   }
 
   return found;
@@ -1590,6 +1737,8 @@ export function isClientMatch(clientName: string, fileStem: string): boolean {
  */
 function applyDerivedComment(item: PnlSummaryItem): void {
   const notes: string[] = [];
+  // First, because it is the one note that says the row's figures are NOT to be used.
+  if (item.placementYearUnresolved) notes.push("Check Placement Year");
   if (item.isPartialBuy) notes.push("Partial Buy");
   if (item.isPartialExit) notes.push("Partial Exit");
   // "DB Holding" already implies an open position valued off the snapshot, so it
@@ -1597,6 +1746,64 @@ function applyDerivedComment(item: PnlSummaryItem): void {
   else if (item.isDbOnly) notes.push("DB Holding");
   else if (item.isDbOpenValued) notes.push("Open");
   if (notes.length > 0) item.comment = notes.join(" · ");
+}
+
+/**
+ * Picks WHICH year's placement belongs on a summary row, or `null` if it cannot be
+ * told — never a guess, and never the sum of the years.
+ *
+ * One candidate is the ordinary case and is used as-is; the year check exists only to
+ * separate placements that would otherwise be stacked on one row.
+ *
+ * With several, the ledger's **Contract Date** decides: a placement issued in 2025 is
+ * the one behind trades dated 2025. BUY years are preferred, since a placement is a
+ * purchase; a row with no recorded buys at all (the classic placement row — free or
+ * unnoted parcels never produce a contract note) falls back to every trade year on the
+ * row, because the sale is then the only date the ledger offers.
+ *
+ * Anything other than exactly one match returns `null`:
+ *  - no trade dates at all — the ledger cannot answer the question;
+ *  - no year matches — the tracker and the trades disagree, which a human should see;
+ *  - several years match — the client traded in both years, so both parcels are
+ *    plausible and picking one would be a coin toss.
+ */
+function chooseYearCandidate(
+  info: PlacementTickerInfo,
+  row: PnlSummaryItem
+): PlacementYearCandidate | null {
+  if (!info.candidates || info.candidates.length <= 1) {
+    return info.candidates?.[0] ?? {
+      issueYear: info.issueYear,
+      issueDate: info.issueDate,
+      totalShares: info.totalShares,
+      totalActualDollar: info.totalActualDollar,
+      clientAllocations: info.clientAllocations,
+    };
+  }
+
+  const years = rowTradeYears(row);
+  if (years.length === 0) return null;
+
+  const matches = info.candidates.filter((c) => c.issueYear != null && years.includes(c.issueYear));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+/** The years to compare a placement against: buys if there are any, else all trades. */
+function rowTradeYears(row: PnlSummaryItem): number[] {
+  if (row.buyYears?.length) return row.buyYears;
+  return row.tradeYears ?? [];
+}
+
+/** Why a ticker was left blank, in one line the desk can act on. */
+function describeYearMismatch(info: PlacementTickerInfo, row: PnlSummaryItem): string {
+  const placed = (info.candidates ?? [])
+    .map((c) => (c.issueYear != null ? String(c.issueYear) : "undated"))
+    .join(" and ");
+  const years = rowTradeYears(row);
+  const traded = years.length ? years.join(", ") : "none in the file";
+  const basis = row.buyYears?.length ? "buy" : "trade";
+
+  return `Placed in ${placed}; ${basis} dates ${traded}. Nothing was filled — resolve the year in the tracker or the trade file.`;
 }
 
 /**
@@ -1635,11 +1842,14 @@ export function mergePlacementTrackerIntoSummary(
   partialBuyCount: number;
   totalPnl: number;
   ambiguousTickers: string[];
+  /** Tickers placed in several years that the trade dates could not resolve. */
+  unresolvedYearTickers: string[];
 } {
   const updatedSummary = summary.map((item) => ({ ...item }));
   let mergedCount = 0;
   let partialBuyCount = 0;
   const ambiguousTickers: string[] = [];
+  const unresolvedYearTickers: string[] = [];
 
   const hints = (Array.isArray(clientHints) ? clientHints : [clientHints])
     .map((h) => (h || "").trim())
@@ -1654,18 +1864,33 @@ export function mergePlacementTrackerIntoSummary(
     );
 
     if (existing) {
+      // WHICH YEAR'S placement, before which client's allocation. A ticker in two
+      // trackers has two parcels and at most one of them belongs on this row.
+      const chosen = chooseYearCandidate(info, existing);
+
+      if (!chosen) {
+        // Nothing defensible to fill with. The row is left alone and flagged, so the
+        // buy side reads blank-and-red rather than as a confident zero or, worse, as
+        // both years added together.
+        existing.placementYearUnresolved = true;
+        existing.placementYearNote = describeYearMismatch(info, existing);
+        applyDerivedComment(existing);
+        unresolvedYearTickers.push(parentTicker);
+        continue;
+      }
+
       // Keep only the allocation rows belonging to the account holder(s) in play.
       let matchedAllocations = hints.length
-        ? info.clientAllocations.filter((alloc) =>
+        ? chosen.clientAllocations.filter((alloc) =>
             hints.some((hint) => isClientMatch(alloc.clientName, hint))
           )
         : [];
 
       if (matchedAllocations.length === 0) {
-        if (info.clientAllocations.length === 1) {
+        if (chosen.clientAllocations.length === 1) {
           // Only one participant — no ambiguity about whose allocation this is.
-          matchedAllocations = info.clientAllocations;
-        } else if (info.clientAllocations.length > 1) {
+          matchedAllocations = chosen.clientAllocations;
+        } else if (chosen.clientAllocations.length > 1) {
           ambiguousTickers.push(parentTicker);
         }
       }
@@ -1723,9 +1948,26 @@ export function mergePlacementTrackerIntoSummary(
 
   updatedSummary.sort(compareSummaryItems);
 
-  const totalPnl = Math.round(updatedSummary.reduce((acc, curr) => acc + curr.pnlCalculated, 0) * 100) / 100;
+  return {
+    summary: updatedSummary,
+    mergedCount,
+    partialBuyCount,
+    totalPnl: sumPnl(updatedSummary),
+    ambiguousTickers,
+    unresolvedYearTickers,
+  };
+}
 
-  return { summary: updatedSummary, mergedCount, partialBuyCount, totalPnl, ambiguousTickers };
+/**
+ * The P&L total, skipping rows whose buy side is unknown.
+ *
+ * Such a row shows blanks, not figures, and its `pnlCalculated` is `sellPrice` alone —
+ * the whole sale booked as profit because nothing is recorded against it. Summing that
+ * would put a number the table refuses to display into the one figure people read.
+ */
+export function sumPnl(summary: PnlSummaryItem[]): number {
+  const total = summary.reduce((acc, item) => (isBuySideUnknown(item) ? acc : acc + item.pnlCalculated), 0);
+  return Math.round(total * 100) / 100;
 }
 
 /**
@@ -1784,45 +2026,107 @@ export function splitTrackerUrls(raw: string): { urls: string[]; rejected: strin
  *
  * Add-ons are taken from the first workbook that has them rather than concatenated —
  * two workbooks listing the same placement would otherwise double every tranche.
+ *
+ * **Allocations across workbooks are never summed.** They used to be, and a ticker
+ * placed in both the 2025 and the 2026 tracker came out with both parcels stacked on
+ * one row — a Buy Qty and cost the client never had, and a P&L wrong by a whole
+ * placement. The two cases behind it are:
+ *
+ *  - the SAME placement carried forward into the newer tracker — counting it twice is
+ *    plainly wrong;
+ *  - two DIFFERENT placements a year apart — real, but only one of them is what the
+ *    trade file in front of us is about.
+ *
+ * Neither is summable here, so each year is kept as its own `candidate` and the choice
+ * is deferred to `mergePlacementTrackerIntoSummary`, which can compare the placement's
+ * year against the ledger's Contract Date. Within ONE year the first workbook wins,
+ * exactly as add-ons do — a repeat is a duplicate, not a second parcel.
+ *
+ * A workbook whose year could not be read is keyed by its position instead, so two
+ * undated files still produce two candidates and get reported rather than silently
+ * collapsing into one.
  */
 export function combinePlacementMaps(
   files: Array<{ map: Map<string, PlacementTickerInfo> }>
 ): Map<string, PlacementTickerInfo> {
-  const combined = new Map<string, PlacementTickerInfo>();
+  // ticker -> year key -> that year's placement. Insertion order is file order.
+  const byTicker = new Map<string, Map<string, PlacementYearCandidate>>();
+  const meta = new Map<string, { ticker: string; company?: string; addOns?: PlacementAddOn[] }>();
 
-  for (const f of files) {
+  files.forEach((f, fileIdx) => {
     for (const [ticker, info] of f.map.entries()) {
-      const existing = combined.get(ticker);
+      // An undated workbook cannot be compared with any other, so it is kept apart
+      // rather than being assumed to be the same placement.
+      const yearKey = info.issueYear != null ? `y${info.issueYear}` : `f${fileIdx}`;
 
-      if (!existing) {
-        combined.set(ticker, {
-          ticker: info.ticker,
-          company: info.company,
+      let years = byTicker.get(ticker);
+      if (!years) {
+        years = new Map();
+        byTicker.set(ticker, years);
+      }
+
+      // DEEP copy: sharing allocation objects with the caller's stored maps let a
+      // later merge mutate the source, which is what once made a ticker's Buy Qty
+      // grow on every re-upload.
+      const candidate = years.get(yearKey);
+      if (!candidate) {
+        years.set(yearKey, {
+          issueYear: info.issueYear,
+          issueDate: info.issueDate,
           totalShares: info.totalShares,
           totalActualDollar: info.totalActualDollar,
           clientAllocations: info.clientAllocations.map((a) => ({ ...a })),
+        });
+      } else {
+        // Same placement seen again in another workbook. A client already listed keeps
+        // the first workbook's figures — repeating a row does not make it a second
+        // parcel — while a client only the later workbook names is added, since the
+        // two files can carry different slices of the same participant list.
+        for (const alloc of info.clientAllocations) {
+          if (candidate.clientAllocations.some((a) => a.clientName === alloc.clientName)) continue;
+          candidate.clientAllocations.push({ ...alloc });
+        }
+        candidate.totalShares = candidate.clientAllocations.reduce((s, a) => s + a.roundShares, 0);
+        candidate.totalActualDollar =
+          Math.round(candidate.clientAllocations.reduce((s, a) => s + a.actualDollar, 0) * 100) / 100;
+        candidate.issueDate ??= info.issueDate;
+      }
+
+      const m = meta.get(ticker);
+      if (!m) {
+        meta.set(ticker, {
+          ticker: info.ticker,
+          company: info.company,
           addOns: info.addOns ? info.addOns.map((a) => ({ ...a })) : undefined,
         });
-        continue;
-      }
-
-      existing.totalShares += info.totalShares;
-      existing.totalActualDollar += info.totalActualDollar;
-
-      if (!existing.addOns?.length && info.addOns?.length) {
-        existing.addOns = info.addOns.map((a) => ({ ...a }));
-      }
-
-      for (const alloc of info.clientAllocations) {
-        const found = existing.clientAllocations.find((a) => a.clientName === alloc.clientName);
-        if (found) {
-          found.roundShares += alloc.roundShares;
-          found.actualDollar += alloc.actualDollar;
-        } else {
-          existing.clientAllocations.push({ ...alloc });
-        }
+      } else {
+        if (!m.company && info.company) m.company = info.company;
+        if (!m.addOns?.length && info.addOns?.length) m.addOns = info.addOns.map((a) => ({ ...a }));
       }
     }
+  });
+
+  const combined = new Map<string, PlacementTickerInfo>();
+
+  for (const [ticker, years] of byTicker.entries()) {
+    const candidates = [...years.values()];
+    const first = candidates[0];
+    const m = meta.get(ticker)!;
+
+    combined.set(ticker, {
+      ticker: m.ticker,
+      company: m.company,
+      addOns: m.addOns,
+      issueDate: first.issueDate,
+      issueYear: first.issueYear,
+      // With one candidate these ARE the placement. With several they describe the
+      // first year only and must not be used to fill anything — hence `candidates`,
+      // which every consumer of this map has to honour.
+      totalShares: first.totalShares,
+      totalActualDollar: first.totalActualDollar,
+      clientAllocations: first.clientAllocations.map((a) => ({ ...a })),
+      candidates: candidates.length > 1 ? candidates : undefined,
+    });
   }
 
   return combined;
@@ -1941,7 +2245,13 @@ export function collectPlacementClientNames(
 ): string[] {
   const seen = new Map<string, string>();
   for (const info of placementData.values()) {
-    for (const alloc of info.clientAllocations) {
+    // Every year's participants, not just the first candidate's: the dropdown exists
+    // to name a holder, and one who only took part in the other year still counts.
+    const lists = info.candidates?.length
+      ? info.candidates.map((c) => c.clientAllocations)
+      : [info.clientAllocations];
+
+    for (const alloc of lists.flat()) {
       const name = (alloc.clientName || "").trim();
       if (!name) continue;
       const key = name.toLowerCase().replace(/[^a-z0-9]/g, "");
