@@ -91,6 +91,15 @@ export interface PlacementYearCandidate {
   totalShares: number;
   totalActualDollar: number;
   clientAllocations: PlacementClientAllocation[];
+  /**
+   * THIS year's grants, and only this year's.
+   *
+   * A ticker placed twice often carries options in one year and none in the other:
+   * ACM's 2025 row grants `1:2@0.1 Unlisted` while its 2026 row's Add-Ons cell is
+   * empty. Taking add-ons from "the first workbook that has them", as the merge once
+   * did, minted an option position off a placement the client never took part in.
+   */
+  addOns?: PlacementAddOn[];
 }
 
 export interface PlacementTickerInfo {
@@ -1778,6 +1787,7 @@ function chooseYearCandidate(
       totalShares: info.totalShares,
       totalActualDollar: info.totalActualDollar,
       clientAllocations: info.clientAllocations,
+      addOns: info.addOns,
     };
   }
 
@@ -2076,6 +2086,7 @@ export function combinePlacementMaps(
           totalShares: info.totalShares,
           totalActualDollar: info.totalActualDollar,
           clientAllocations: info.clientAllocations.map((a) => ({ ...a })),
+          addOns: info.addOns ? info.addOns.map((a) => ({ ...a })) : undefined,
         });
       } else {
         // Same placement seen again in another workbook. A client already listed keeps
@@ -2090,18 +2101,18 @@ export function combinePlacementMaps(
         candidate.totalActualDollar =
           Math.round(candidate.clientAllocations.reduce((s, a) => s + a.actualDollar, 0) * 100) / 100;
         candidate.issueDate ??= info.issueDate;
+        // Only WITHIN one year does "the first workbook that has them" apply — the
+        // same placement described twice, not a second grant.
+        if (!candidate.addOns?.length && info.addOns?.length) {
+          candidate.addOns = info.addOns.map((a) => ({ ...a }));
+        }
       }
 
       const m = meta.get(ticker);
       if (!m) {
-        meta.set(ticker, {
-          ticker: info.ticker,
-          company: info.company,
-          addOns: info.addOns ? info.addOns.map((a) => ({ ...a })) : undefined,
-        });
-      } else {
-        if (!m.company && info.company) m.company = info.company;
-        if (!m.addOns?.length && info.addOns?.length) m.addOns = info.addOns.map((a) => ({ ...a }));
+        meta.set(ticker, { ticker: info.ticker, company: info.company });
+      } else if (!m.company && info.company) {
+        m.company = info.company;
       }
     }
   });
@@ -2116,15 +2127,17 @@ export function combinePlacementMaps(
     combined.set(ticker, {
       ticker: m.ticker,
       company: m.company,
-      addOns: m.addOns,
       issueDate: first.issueDate,
       issueYear: first.issueYear,
       // With one candidate these ARE the placement. With several they describe the
       // first year only and must not be used to fill anything — hence `candidates`,
-      // which every consumer of this map has to honour.
+      // which every consumer of this map has to honour. `addOns` included: taking
+      // them from whichever year happened to have some is what minted an option
+      // position off a placement the client was never in.
       totalShares: first.totalShares,
       totalActualDollar: first.totalActualDollar,
       clientAllocations: first.clientAllocations.map((a) => ({ ...a })),
+      addOns: first.addOns ? first.addOns.map((a) => ({ ...a })) : undefined,
       candidates: candidates.length > 1 ? candidates : undefined,
     });
   }
@@ -2632,6 +2645,22 @@ function isoFromDayFirst(dd: string, mm: string, yy: string): string | null {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+/**
+ * The unlisted grants that belong to the placement THIS row actually took part in.
+ *
+ * Grants are a property of one year's placement, not of the ticker. ACM was placed in
+ * June 2025 with `1:2@0.1 Unlisted` attached and again in January 2026 with an empty
+ * Add-Ons cell; the client took the 2026 parcel, and reading the grants off "whichever
+ * year had some" minted 23,333 options out of a placement they were never in.
+ *
+ * Returns nothing when the year cannot be resolved — the row is already blank and red,
+ * and an option position derived from an unknown parcel would be no better founded.
+ */
+function unlistedAddOnsFor(info: PlacementTickerInfo, equityRow: PnlSummaryItem): PlacementAddOn[] {
+  const chosen = chooseYearCandidate(info, equityRow);
+  return (chosen?.addOns ?? []).filter((a) => !a.listed);
+}
+
 /** The ASX codes whose spot price an unlisted-option valuation needs. */
 export function collectUnlistedOptionTickers(
   summary: PnlSummaryItem[],
@@ -2639,11 +2668,14 @@ export function collectUnlistedOptionTickers(
 ): string[] {
   const wanted = new Set<string>();
   for (const [, info] of placementData.entries()) {
-    if (!info.addOns?.some((a) => !a.listed)) continue;
     const parent = getParentTicker(info.ticker);
     // Only names the client actually holds shares in earn an entitlement.
     const equityRow = summary.find((s) => summaryParentTicker(s) === parent && !isOptionRow(s));
-    if (equityRow && equityRow.buyQty > 0) wanted.add(parent);
+    if (!equityRow || equityRow.buyQty <= 0) continue;
+    // The SAME year the row was filled from, so this list cannot disagree with the
+    // rows `buildUnlistedOptionRows` goes on to create.
+    if (!unlistedAddOnsFor(info, equityRow).length) continue;
+    wanted.add(parent);
   }
   return [...wanted].sort();
 }
@@ -2681,13 +2713,15 @@ export function buildUnlistedOptionRows(
   let addedCount = 0;
 
   for (const [, info] of placementData.entries()) {
-    const unlistedAddOns = (info.addOns ?? []).filter((a) => !a.listed);
-    if (unlistedAddOns.length === 0) continue;
-
     const parent = getParentTicker(info.ticker);
     const equityRow = rows.find((s) => summaryParentTicker(s) === parent && !isOptionRow(s));
 
     if (!equityRow || equityRow.buyQty <= 0) continue;
+
+    // Only the chosen year's grants. The shares in `buyQty` came from ONE placement,
+    // so the entitlement they earn has to come from that same one.
+    const unlistedAddOns = unlistedAddOnsFor(info, equityRow);
+    if (unlistedAddOns.length === 0) continue;
 
     const spotInfo = spotPrices.get(parent);
     const spot = spotInfo?.price ?? 0;

@@ -22,6 +22,7 @@ import {
   isBuySideUnknown,
   aggregateTradesToSummary,
   type PlacementTickerInfo,
+  type PnlSummaryItem,
 } from "./pnl-calculator.ts";
 import { blackScholesCall, UNLISTED_OPTION_ASSUMPTIONS } from "./black-scholes.ts";
 
@@ -1694,6 +1695,63 @@ test("PNL Calculator - a ticker in ONE tracker fills without any year check", as
 
   assert.equal(abe.buyQty, 40000);
   assert.equal(abe.placementYearUnresolved, undefined);
+});
+
+test("buildUnlistedOptionRows - grants come from the year the client was actually in", async () => {
+  // Verbatim from the real trackers: ACM was placed in June 2025 with
+  // "1:2@0.1 Unlisted" attached, and again in January 2026 with an EMPTY Add-Ons
+  // cell. The client took the 2026 parcel (ACMXX bought 04-02-2026). Reading the
+  // grants off whichever year happened to have some minted 23,333 options out of a
+  // placement they were never in.
+  const y2025 = placementFile("ACM", "Mr Akshit Verma", 40000, 3000, 2025);
+  y2025.map.get("ACM")!.addOns = parseAddOnSpecs("1:2@0.1 Unlisted", new Date(Date.UTC(2025, 5, 17)));
+  const y2026 = placementFile("ACM", "Mr Akshit Verma", 46667, 3500, 2026);
+
+  const placement = combinePlacementMaps([y2025, y2026]);
+  assert.equal(placement.get("ACM")?.candidates?.length, 2);
+  assert.equal(placement.get("ACM")?.candidates?.[0].addOns?.length, 1, "2025 carries the grant");
+  assert.equal(placement.get("ACM")?.candidates?.[1].addOns, undefined, "2026 carries none");
+
+  const acmRow = (buyYears: number[]): PnlSummaryItem[] => [
+    {
+      ticker: "ACM",
+      parentTicker: "ACM",
+      instrument: "EQUITY",
+      company: "AUS CRITICAL MINERAL",
+      buyQty: 46667,
+      sellQty: 46667,
+      buyPrice: 3500,
+      sellPrice: 3733,
+      totalBuyValue: 3500,
+      totalSellValue: 3733,
+      pnlCalculated: 233,
+      isMatched: true,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 0,
+      tradeCount: 2,
+      buyYears,
+      tradeYears: buyYears,
+    },
+  ];
+
+  const spots = new Map([["ACM", { price: 0.08, source: "yahoo" as const }]]);
+  const asOf = new Date("2026-08-06T00:00:00Z");
+
+  // 2026 trades -> the 2026 placement -> no grant, so no row and no spot to fetch.
+  const built2026 = buildUnlistedOptionRows(acmRow([2026]), placement, spots, asOf);
+  assert.equal(built2026.addedCount, 0, "the 2026 placement grants nothing");
+  assert.equal(built2026.summary.some((s) => s.isUnlistedOption), false);
+  assert.deepEqual(collectUnlistedOptionTickers(acmRow([2026]), placement), []);
+
+  // The same combined map DOES grant options to a client who took the 2025 parcel.
+  const built2025 = buildUnlistedOptionRows(acmRow([2025]), placement, spots, asOf);
+  assert.equal(built2025.addedCount, 1);
+  assert.equal(built2025.summary.find((s) => s.isUnlistedOption)?.sellQty, 23333);
+  assert.deepEqual(collectUnlistedOptionTickers(acmRow([2025]), placement), ["ACM"]);
+
+  // Unresolvable year -> no grant either; the equity row is already blank and red.
+  assert.equal(buildUnlistedOptionRows(acmRow([2024]), placement, spots, asOf).addedCount, 0);
 });
 
 test("aggregateTradesToSummary - Contract Date years are carried onto the row", async () => {
