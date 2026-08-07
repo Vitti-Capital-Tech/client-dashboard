@@ -864,6 +864,21 @@ export function filterTradesByDateRange(
   return { trades: kept, excluded: trades.length - kept.length, undated };
 }
 
+/**
+ * The 3-char underlyings a set of trades touches — GEDO and GEDXX both count as GED.
+ *
+ * This is the "in-window evidence" a dateless holdings snapshot gets anchored to; see
+ * `createMissingRowsFor` on `mergeDbHoldingsIntoSummary`.
+ */
+export function tradedParentTickers(trades: ParsedTradeRow[]): Set<string> {
+  const parents = new Set<string>();
+  for (const t of trades) {
+    const code = String(t.ticker || "").trim().toUpperCase();
+    if (code) parents.add(getParentTicker(code));
+  }
+  return parents;
+}
+
 /*
  * Keeps the placements struck INSIDE the reporting period — the desk's rule: a period's
  * unlisted options are the ones its own placements granted.
@@ -2789,15 +2804,28 @@ export function mergeDbHoldingsIntoSummary(
   }>,
   opts?: {
     /**
-     * Whether a holding the trade file never mentions may invent its own row.
+     * Which underlyings a holding the trade file never mentions may invent a row for,
+     * as 3-char parent codes.
      *
-     * FALSE while a reporting period is set. Those rows come from the holdings
-     * snapshot, which is "as of today" and has no date to test against a window — so
-     * a position the client happens to hold now appeared inside a period that saw no
-     * trade in it at all. Rows built from in-window trades are still valued off the
-     * snapshot; it is only inventing new ones that stops.
+     * OMITTED in the lifetime view: any holding may, because there is no period for it
+     * to land on the wrong side of.
+     *
+     * A SET while a reporting period is set, and the set is the whole point. The
+     * snapshot is "as of today" and carries no date, so on its own it cannot say
+     * whether a position belongs inside the window — letting every holding through put
+     * positions the client merely holds NOW into periods whose ledger shows no trade in
+     * them. Refusing all of them instead deleted the rows that only ever exist in the
+     * snapshot: a free attaching option is never bought, so no contract note creates
+     * it, and GEDO/LITOC disappeared from every windowed view.
+     *
+     * So the gate is the underlyings the IN-WINDOW trades touch. GED traded inside the
+     * period vouches for the GEDO held against it; a period that never touched GED gets
+     * neither. The dateless snapshot is placed by the ledger's dates instead of its own.
+     *
+     * Rows that already exist from in-window trades are valued off the snapshot either
+     * way — this only gates inventing new ones.
      */
-    createMissingRows?: boolean;
+    createMissingRowsFor?: ReadonlySet<string>;
   }
 ): {
   summary: PnlSummaryItem[];
@@ -2872,11 +2900,14 @@ export function mergeDbHoldingsIntoSummary(
   // unrealised gain instead of an inflated one.
   // -------------------------------------------------------------------------
   for (const h of dbHoldings) {
-    if (opts?.createMissingRows === false) break;
-
     const code = String(h.ticker || "").trim().toUpperCase();
     if (!code) continue;
     if (!(h.qty > 0 || h.marketValue > 0)) continue;
+
+    const parent = String(h.parentTicker || getParentTicker(code)).trim().toUpperCase();
+    // While a period is set, the snapshot may only recover positions whose underlying
+    // the period's own trades touched — the ledger dates what the snapshot cannot.
+    if (opts?.createMissingRowsFor && !opts.createMissingRowsFor.has(parent)) continue;
 
     // Same predicate as the fill pass, so a holding already merged into a row is
     // never given a second, duplicate row.
@@ -2889,7 +2920,7 @@ export function mergeDbHoldingsIntoSummary(
 
     updatedSummary.push({
       ticker: code,
-      parentTicker: h.parentTicker || getParentTicker(code),
+      parentTicker: parent,
       instrument: isOption ? "OPTION" : "EQUITY",
       company: h.companyName || code,
       // Units held stand in for both legs: bought at the snapshot's cost base,

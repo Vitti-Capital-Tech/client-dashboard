@@ -23,7 +23,7 @@ import {
   aggregateTradesToSummary,
   filterTradesByDateRange,
   filterPlacementsByDateRange,
-
+  tradedParentTickers,
   hasDateRange,
   type PlacementTickerInfo,
   type PnlSummaryItem,
@@ -2443,8 +2443,10 @@ test("mergeDbHoldingsIntoSummary - a period does not import holdings the ledger 
   assert.equal(lifetime.createdCount, 1);
   assert.ok(lifetime.summary.some((s) => s.ticker === "PLS"));
 
-  // With a period set, it must not appear — no trade in the period produced it.
-  const windowed = mergeDbHoldingsIntoSummary(summary, holdings, { createMissingRows: false });
+  // With a period set, it must not appear — the period's trades never touched PLS.
+  const windowed = mergeDbHoldingsIntoSummary(summary, holdings, {
+    createMissingRowsFor: new Set(["GRV"]),
+  });
   assert.equal(windowed.createdCount, 0);
   assert.equal(windowed.summary.some((s) => s.ticker === "PLS"), false);
 
@@ -2455,10 +2457,57 @@ test("mergeDbHoldingsIntoSummary - a period does not import holdings the ledger 
   const valued = mergeDbHoldingsIntoSummary(
     open,
     [{ ticker: "GRV", parentTicker: "GRV", qty: 1000, marketValue: 150, costBase: 100 }],
-    { createMissingRows: false }
+    { createMissingRowsFor: new Set(["GRV"]) }
   );
   assert.equal(valued.mergedCount, 1);
   assert.equal(valued.summary.find((s) => s.ticker === "GRV")?.sellPrice, 150);
+});
+
+test("mergeDbHoldingsIntoSummary - a period keeps the options its own trades vouch for", async () => {
+  // The regression the anchor set fixes: GEDO and LITOC exist ONLY in the holdings
+  // snapshot — free attaching options are never bought, so no contract note creates a
+  // row — and refusing every snapshot-only row deleted them from every windowed view.
+  const trades = [
+    { ticker: "GED", company: "GENESIS", type: "BUY" as const, units: 10000, avgPrice: 0.2, value: 2000, contractDate: "04-02-2026" },
+    { ticker: "LIT", company: "LITHIUM", type: "BUY" as const, units: 5000, avgPrice: 0.5, value: 2500, contractDate: "20-01-2026" },
+  ];
+  const holdings = [
+    // Free attaching options: cost base 0, no trade of their own anywhere.
+    { ticker: "GEDO", parentTicker: "GED", companyName: "GENESIS OPT", qty: 5000, marketValue: 400, costBase: 0 },
+    { ticker: "LITOC", parentTicker: "LIT", companyName: "LITHIUM OPT", qty: 2500, marketValue: 300, costBase: 0 },
+    // Held today, but the period's ledger never touched PLS.
+    { ticker: "PLS", parentTicker: "PLS", companyName: "PILBARA MIN", qty: 5000, marketValue: 12000, costBase: 9000 },
+  ];
+
+  // A window holding both parent trades: their options come back, PLS stays out.
+  const january = filterTradesByDateRange(trades, { from: "2026-01-01", to: "2026-02-28" });
+  const both = mergeDbHoldingsIntoSummary(
+    aggregateTradesToSummary(january.trades).summary,
+    holdings,
+    { createMissingRowsFor: tradedParentTickers(january.trades) }
+  );
+  assert.equal(both.createdCount, 2);
+  assert.ok(both.summary.some((s) => s.ticker === "GEDO"));
+  assert.ok(both.summary.some((s) => s.ticker === "LITOC"));
+  assert.equal(both.summary.some((s) => s.ticker === "PLS"), false);
+
+  // The whole option value is gain — nothing was ever paid for it.
+  assert.equal(both.summary.find((s) => s.ticker === "GEDO")?.pnlCalculated, 400);
+
+  // Narrow the window to February: LIT was not traded in it, so LITOC has nothing in
+  // the period vouching for it and drops out while GEDO stays.
+  const february = filterTradesByDateRange(trades, { from: "2026-02-01", to: "2026-02-28" });
+  const feb = mergeDbHoldingsIntoSummary(
+    aggregateTradesToSummary(february.trades).summary,
+    holdings,
+    { createMissingRowsFor: tradedParentTickers(february.trades) }
+  );
+  assert.ok(feb.summary.some((s) => s.ticker === "GEDO"));
+  assert.equal(feb.summary.some((s) => s.ticker === "LITOC"), false);
+
+  // Lifetime view is unchanged — every snapshot-only position is still recovered.
+  const lifetime = mergeDbHoldingsIntoSummary(aggregateTradesToSummary(trades).summary, holdings);
+  assert.equal(lifetime.createdCount, 3);
 });
 
 test("buildPnlExportFilename - a period-scoped export says so in its name", async () => {

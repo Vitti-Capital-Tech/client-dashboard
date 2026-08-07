@@ -34,6 +34,7 @@ import {
   filterTradesByDateRange,
   filterPlacementsByDateRange,
   hasDateRange,
+  tradedParentTickers,
   type DateRange,
   type ParseResult,
   type ParsedTradeRow,
@@ -371,13 +372,23 @@ export function PnlCalculatorClient() {
       const dbRes = await fetchDatabaseHoldingsAction(targetAccountsScope);
       if (dbRes.ok && dbRes.holdings.length > 0) {
         // A holdings snapshot is "as of today" and carries no date to test against a
-        // reporting period, so while one is set it may not invent rows: a position the
-        // client merely holds now would otherwise appear inside a period whose ledger
-        // shows no trade in it. Rows built from in-window trades are still valued off
-        // the snapshot, which is the only price available for an open parcel.
+        // reporting period, so while one is set it may not invent rows freely: a
+        // position the client merely holds now would otherwise appear inside a period
+        // whose ledger shows no trade in it.
+        //
+        // It may still invent a row for an underlying the period's OWN trades touched.
+        // That is what brings back the positions which exist nowhere but the snapshot —
+        // free attaching options like GEDO and LITOC are never bought, so no contract
+        // note creates them, and a flat refusal dropped them from every windowed view.
+        // GED traded in the window vouches for the GEDO held against it.
+        //
+        // Rows built from in-window trades are valued off the snapshot either way,
+        // which is the only price available for an open parcel.
         const windowed = hasDateRange(activeDateRange());
         const merged = mergeDbHoldingsIntoSummary(working.summary, dbRes.holdings, {
-          createMissingRows: !windowed,
+          createMissingRowsFor: windowed
+            ? tradedParentTickers(tradesInScope(res.rawTrades, accToUse).trades)
+            : undefined,
         });
         working = { ...working, summary: merged.summary, totalPnl: merged.totalPnl };
         notes.push(
@@ -391,7 +402,7 @@ export function PnlCalculatorClient() {
               ? ` Added ${merged.createdCount} row(s) for holdings the trade file never mentioned (mostly free placement options, which have no contract note) — their cost basis comes from the snapshot, so they are tagged "DB Holding".`
               : "") +
             (windowed
-              ? " Holdings the trade file never mentions are NOT added while a reporting period is set — the snapshot has no date to place them in it."
+              ? " While a reporting period is set, a holding the trade file never mentions is only added when the period's own trades touched the same underlying (GED traded in the window brings back the GEDO held against it) — the snapshot has no date of its own to place the rest in the period."
               : "")
         );
       }
