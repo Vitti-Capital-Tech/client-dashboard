@@ -50,9 +50,9 @@ SELECT cron.schedule(
   '0 0 * * 1-5',
   $$
   SELECT net.http_post(
-    url     := 'https://client.vitticapital.ai/api/ingest/morning',
+    url     := '<APP_URL>/api/ingest/morning',
     headers := jsonb_build_object(
-                 'Authorization', 'Bearer z3g5cEzf-sWraIU_kGrXtOHu9S_s603hBRHxg2zPR4g',
+                 'Authorization', 'Bearer <CRON_SECRET>',
                  'Content-Type',  'application/json'
                ),
     body    := '{}'::jsonb,
@@ -73,9 +73,9 @@ SELECT cron.schedule(
   '0 1 * * 1-5',
   $$
   SELECT net.http_post(
-    url     := 'https://client.vitticapital.ai/api/ingest/morning',
+    url     := '<APP_URL>/api/ingest/morning',
     headers := jsonb_build_object(
-                 'Authorization', 'Bearer z3g5cEzf-sWraIU_kGrXtOHu9S_s603hBRHxg2zPR4g',
+                 'Authorization', 'Bearer <CRON_SECRET>',
                  'Content-Type',  'application/json'
                ),
     body    := '{}'::jsonb,
