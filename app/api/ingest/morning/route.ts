@@ -23,9 +23,27 @@ import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
  */
 
 export const dynamic = "force-dynamic";
-// The Placement Tracker parse alone can take ~48s on a cold cache, before any
-// import or recompute. The default serverless timeout would cut that off.
-export const maxDuration = 300;
+
+/**
+ * 60s, because that is the Hobby-plan ceiling — asking for more is not honoured
+ * and only hides the real limit.
+ *
+ * It is a tight fit and worth watching. A cold run pays ~17s to download and
+ * parse the Placement Tracker workbooks before it does anything, then imports,
+ * then recomputes every account the holdings file touched — which is all of
+ * them, every day, since a snapshot covers the whole book.
+ *
+ * If a run is cut off, nothing is corrupted: the importers are idempotent, no
+ * `ingest_runs` row is written so the watermark does not advance, and the next
+ * schedule re-reads the same mail. But it will never finish either, and the
+ * symptom is silence — `cron.job_run_details` shows a successful POST while
+ * `ingest_runs` stays empty. That specific pair is what to look for.
+ *
+ * The fix, if it comes to that, is to stop re-parsing unchanged workbooks every
+ * morning: cache the parsed trackers in Postgres and have the recompute read
+ * them. That removes the ~17s entirely.
+ */
+export const maxDuration = 60;
 
 export async function GET(request: Request) {
   if (!authorisedCronRequest(request)) {
