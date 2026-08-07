@@ -1035,6 +1035,17 @@ export async function buildPnlExportXlsxBuffer(
 
   const MONEY_FMT = "$#,##0.00;($#,##0.00);\"-\"";
   const QTY_FMT = "#,##0";
+  // The P&L column carries a SIGN, not an accounting bracket: a loss reads -$1,234.56.
+  // Zero prints as $0.00 rather than the "-" the other money columns use, which in a
+  // column of minus signs would read as a negative rather than as nothing.
+  const PNL_FMT = "$#,##0.00;-$#,##0.00;$0.00";
+  const GREEN = "FF166534";
+  const RED = "FF991B1B";
+  /** Green above zero, red below, plain at zero — the whole rule, rows and total alike. */
+  const pnlFont = (value: number) => ({
+    bold: true,
+    color: { argb: value > 0 ? GREEN : value < 0 ? RED : "FF334155" },
+  });
 
   ws.columns = [
     { header: "Ticker", key: "ticker", width: 14 },
@@ -1045,7 +1056,7 @@ export async function buildPnlExportXlsxBuffer(
     { header: "Sell Qty (Sum)", key: "sellQty", width: 16, style: { numFmt: QTY_FMT } },
     { header: "Buy Price (Sum)", key: "buyPrice", width: 18, style: { numFmt: MONEY_FMT } },
     { header: "Sell Price (Sum)", key: "sellPrice", width: 18, style: { numFmt: MONEY_FMT } },
-    { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: MONEY_FMT } },
+    { header: "PnL Calculated", key: "pnlCalculated", width: 18, style: { numFmt: PNL_FMT } },
     { header: "Status", key: "status", width: 16 },
     { header: "Comments", key: "comment", width: 18 },
   ];
@@ -1089,17 +1100,10 @@ export async function buildPnlExportXlsxBuffer(
       continue;
     }
 
-    // PnL cell highlighting
-    const pnlCell = row.getCell("pnlCalculated");
-    if (item.isMatched) {
-      if (item.pnlCalculated > 0) {
-        pnlCell.font = { color: { argb: "FF166534" }, bold: true }; // Green
-      } else if (item.pnlCalculated < 0) {
-        pnlCell.font = { color: { argb: "FF991B1B" }, bold: true }; // Red
-      }
-    } else {
-      pnlCell.font = { color: { argb: "FF6B7280" }, italic: true };
-    }
+    // PnL cell: green for a gain, red for a loss, whatever else the row is. It used to
+    // be coloured only when the row was `isMatched` and greyed out otherwise, so most
+    // of the column read as disabled — the sign is the thing people scan for.
+    row.getCell("pnlCalculated").font = pnlFont(item.pnlCalculated);
   }
 
   // Grand Total Row. Rows with an unknown buy side are skipped whole: their cells are
@@ -1132,6 +1136,10 @@ export async function buildPnlExportXlsxBuffer(
   totalRow.eachCell((c) => {
     c.border = { top: { style: "thin" }, bottom: { style: "double" } };
   });
+
+  // Set AFTER the row-wide bold, which would otherwise overwrite it: the total is the
+  // one figure everybody reads, so it follows the same green/red rule as the rows.
+  totalRow.getCell("pnlCalculated").font = pnlFont(totalPnl);
 
   return Buffer.from(await wb.xlsx.writeBuffer() as any);
 }

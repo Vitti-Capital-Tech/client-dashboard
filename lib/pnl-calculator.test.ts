@@ -3227,6 +3227,58 @@ test("buildUnlistedOptionRows - an unpriced name is reported once, not per tranc
   assert.equal(built.summary.filter((s) => s.isUnlistedOption).every((r) => r.sellPrice === 0), true);
 });
 
+test("xlsx export - P&L is green above zero and red below, total included", async () => {
+  const row = (ticker: string, pnl: number, isMatched: boolean): PnlSummaryItem => ({
+    ticker,
+    parentTicker: ticker,
+    instrument: "EQUITY",
+    company: `${ticker} LTD`,
+    buyQty: 1000,
+    sellQty: isMatched ? 1000 : 400,
+    buyPrice: 1000,
+    sellPrice: 1000 + pnl,
+    totalBuyValue: 1000,
+    totalSellValue: 1000 + pnl,
+    pnlCalculated: pnl,
+    isMatched,
+    isOption: false,
+    hasOptionCode: false,
+    openQty: isMatched ? 0 : 600,
+    tradeCount: 2,
+  });
+
+  // A LOSS overall, so the Grand Total must be red too.
+  const summary = [row("AAA", 500, true), row("BBB", -900, false), row("CCC", 0, true)];
+
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await buildPnlExportXlsxBuffer(summary)) as any);
+  const ws = wb.worksheets[0];
+
+  const GREEN = "FF166534";
+  const RED = "FF991B1B";
+  const pnlCol = 9;
+  const colourOf = (rowNo: number) => (ws.getRow(rowNo).getCell(pnlCol).font as any)?.color?.argb;
+
+  // Rows are sorted by ticker: 2 = AAA, 3 = BBB, 4 = CCC, 5 = Grand Total.
+  assert.equal(ws.getRow(2).getCell(pnlCol).value, 500);
+  assert.equal(colourOf(2), GREEN, "a gain is green");
+  assert.equal(colourOf(3), RED, "a loss is red — even though the row is unmatched");
+  assert.notEqual(colourOf(4), GREEN, "zero is neither");
+  assert.notEqual(colourOf(4), RED);
+
+  const total = ws.getRow(5);
+  assert.equal(total.getCell(1).value, "Grand Total");
+  assert.equal(total.getCell(pnlCol).value, -400);
+  assert.equal(colourOf(5), RED, "the total follows the same rule");
+  assert.equal((total.getCell(pnlCol).font as any)?.bold, true, "and stays bold");
+
+  // A loss reads -$900.00, not the accounting brackets the other money columns use.
+  const fmt = String(ws.getRow(3).getCell(pnlCol).numFmt);
+  assert.ok(fmt.includes("-$#,##0.00"), fmt);
+  assert.equal(fmt.includes("("), false, fmt);
+});
+
 test("Exports carry no Open Qty column, and a granted option leaks no negative", async () => {
   const built = buildUnlistedOptionRows(
     grvEquityRow(10000),
