@@ -847,6 +847,181 @@ export type Database = {
           },
         ]
       }
+      pnl_runs: {
+        Row: {
+          account_id: string
+          batch_id: string | null
+          client_id: string
+          computed_at: string
+          engine_version: string
+          id: string
+          row_count: number
+          sources: Json | null
+          total_pnl: number
+          trigger: string
+          warnings: string[]
+        }
+        Insert: {
+          account_id: string
+          batch_id?: string | null
+          client_id: string
+          computed_at?: string
+          engine_version?: string
+          id?: string
+          row_count?: number
+          sources?: Json | null
+          total_pnl?: number
+          trigger?: string
+          warnings?: string[]
+        }
+        Update: {
+          account_id?: string
+          batch_id?: string | null
+          client_id?: string
+          computed_at?: string
+          engine_version?: string
+          id?: string
+          row_count?: number
+          sources?: Json | null
+          total_pnl?: number
+          trigger?: string
+          warnings?: string[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pnl_runs_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pnl_runs_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      pnl_summary: {
+        Row: {
+          account_id: string
+          buy_price: number
+          buy_qty: number
+          buy_side_unknown: boolean
+          client_id: string
+          comment: string | null
+          company: string
+          computed_at: string
+          instrument: string | null
+          is_db_market_valued: boolean
+          is_db_only: boolean
+          is_db_open_valued: boolean
+          is_enriched: boolean
+          is_matched: boolean
+          is_option: boolean
+          is_partial_buy: boolean
+          is_partial_exit: boolean
+          is_unlisted_option: boolean
+          open_qty: number
+          parent_ticker: string | null
+          placement_year_note: string | null
+          placement_year_unresolved: boolean
+          pnl: number
+          run_id: string | null
+          sell_price: number
+          sell_qty: number
+          ticker: string
+          trade_count: number
+          unlisted_option: Json | null
+        }
+        Insert: {
+          account_id: string
+          buy_price?: number
+          buy_qty?: number
+          buy_side_unknown?: boolean
+          client_id: string
+          comment?: string | null
+          company?: string
+          computed_at?: string
+          instrument?: string | null
+          is_db_market_valued?: boolean
+          is_db_only?: boolean
+          is_db_open_valued?: boolean
+          is_enriched?: boolean
+          is_matched?: boolean
+          is_option?: boolean
+          is_partial_buy?: boolean
+          is_partial_exit?: boolean
+          is_unlisted_option?: boolean
+          open_qty?: number
+          parent_ticker?: string | null
+          placement_year_note?: string | null
+          placement_year_unresolved?: boolean
+          pnl?: number
+          run_id?: string | null
+          sell_price?: number
+          sell_qty?: number
+          ticker: string
+          trade_count?: number
+          unlisted_option?: Json | null
+        }
+        Update: {
+          account_id?: string
+          buy_price?: number
+          buy_qty?: number
+          buy_side_unknown?: boolean
+          client_id?: string
+          comment?: string | null
+          company?: string
+          computed_at?: string
+          instrument?: string | null
+          is_db_market_valued?: boolean
+          is_db_only?: boolean
+          is_db_open_valued?: boolean
+          is_enriched?: boolean
+          is_matched?: boolean
+          is_option?: boolean
+          is_partial_buy?: boolean
+          is_partial_exit?: boolean
+          is_unlisted_option?: boolean
+          open_qty?: number
+          parent_ticker?: string | null
+          placement_year_note?: string | null
+          placement_year_unresolved?: boolean
+          pnl?: number
+          run_id?: string | null
+          sell_price?: number
+          sell_qty?: number
+          ticker?: string
+          trade_count?: number
+          unlisted_option?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pnl_summary_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pnl_summary_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pnl_summary_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "pnl_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       realized_pnl: {
         Row: {
           account_id: string

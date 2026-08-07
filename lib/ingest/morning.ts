@@ -1,0 +1,438 @@
+import { createHash } from "node:crypto";
+import { detectCsvKind, ImportError, type AdminDb } from "../import/runner.ts";
+import { runHoldingsImport } from "../import/run-holdings.ts";
+import { runTradeImport } from "../import/run-trades.ts";
+import type { fetchBrokerAttachments, BrokerAttachment } from "./graph-mail.ts";
+import type { recomputeAccounts } from "../pnl/batch.ts";
+
+// Only the pure importers are imported eagerly. The service-role client, the
+// Graph mailbox and the P&L batch are pulled in ON DEMAND, inside the run:
+//
+//   • they are the modules carrying secrets, network access and ExcelJS, and
+//     nothing should load a ~1 MB spreadsheet library to decide it has no mail;
+//   • it keeps this module free of `server-only`, so the orchestration can be
+//     tested without a Next runtime — which is how the guardrail below, the one
+//     thing standing between a truncated export and an emptied book, is covered
+//     by tests at all.
+
+/**
+ * The morning ingest: read the broker's mail, import what it carries, and
+ * rebuild the P&L for whatever it touched.
+ *
+ * Sequenced deliberately:
+ *
+ *   1. holdings before trades — the snapshot CREATES the accounts, and a trade
+ *      for an unknown account is refused outright rather than guessed at;
+ *   2. all imports before any recompute — so the P&L is computed once, from a
+ *      settled database, rather than twice from a half-applied one.
+ *
+ * Safe to run more than once. Attachments dedupe on Graph's own ids, and both
+ * importers are idempotent, so the DST-proof habit of scheduling several
+ * wake-ups costs nothing.
+ */
+
+export type IngestOutcome =
+  | "imported"
+  | "quarantined"
+  | "unrecognised"
+  | "failed"
+  | "duplicate";
+
+export type AttachmentReport = {
+  filename: string;
+  kind: string;
+  outcome: IngestOutcome;
+  rows?: number;
+  accountRefs: string[];
+  error?: string;
+};
+
+export type IngestReport = {
+  runId: string | null;
+  ok: boolean;
+  messagesSeen: number;
+  attachments: AttachmentReport[];
+  accountsRecomputed: number;
+  notes: string[];
+  error?: string;
+};
+
+/**
+ * How much of the existing book a holdings snapshot must still mention before
+ * it is allowed to apply.
+ *
+ * The import is a FULL REPLACE: every account in the file has its positions
+ * deleted and rewritten. A truncated export — the broker's job half-finished,
+ * a filtered view mailed by mistake — would therefore wipe the accounts it
+ * omits. Clients do close accounts, so some shrinkage is legitimate; a tenth of
+ * the book vanishing overnight is not.
+ */
+const MIN_ACCOUNT_COVERAGE = 0.9;
+
+const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
+
+/** Attachments this mailbox has already been through, by Graph's own ids. */
+async function alreadySeen(db: AdminDb, atts: BrokerAttachment[]): Promise<Set<string>> {
+  if (atts.length === 0) return new Set();
+
+  const { data, error } = await db
+    .from("ingest_attachments")
+    .select("message_id, attachment_id")
+    .in("message_id", [...new Set(atts.map((a) => a.messageId))]);
+  if (error) throw error;
+
+  return new Set(
+    ((data ?? []) as unknown as { message_id: string; attachment_id: string }[]).map(
+      (r) => `${r.message_id}:${r.attachment_id}`,
+    ),
+  );
+}
+
+/** Where the last successful run got to. */
+async function lastWatermark(db: AdminDb): Promise<Date | null> {
+  const { data, error } = await db
+    .from("ingest_runs")
+    .select("watermark")
+    .eq("status", "ok")
+    .order("started_at", { ascending: false })
+    .limit(1);
+  if (error) throw error;
+
+  const raw = ((data ?? []) as unknown as { watermark: string | null }[])[0]?.watermark;
+  return raw ? new Date(raw) : null;
+}
+
+/**
+ * Would applying this snapshot quietly empty part of the book?
+ *
+ * Compares the file's account numbers against the accounts that currently hold
+ * positions. Returns null when it is safe, or the reason to quarantine.
+ */
+async function coverageRefusal(
+  db: AdminDb,
+  fileRefs: string[],
+): Promise<string | null> {
+  const { data, error } = await db
+    .from("positions")
+    .select("accounts(external_ref)");
+  if (error) throw error;
+
+  const existing = new Set(
+    ((data ?? []) as unknown as { accounts: { external_ref: string | null } | null }[])
+      .map((p) => p.accounts?.external_ref)
+      .filter((r): r is string => Boolean(r)),
+  );
+
+  // Nothing held yet — this is the first snapshot, and there is nothing it
+  // could destroy.
+  if (existing.size === 0) return null;
+
+  const covered = [...existing].filter((r) => fileRefs.includes(r)).length;
+  const coverage = covered / existing.size;
+  if (coverage >= MIN_ACCOUNT_COVERAGE) return null;
+
+  const missing = [...existing].filter((r) => !fileRefs.includes(r));
+  return (
+    `Snapshot covers ${covered} of ${existing.size} accounts that currently hold ` +
+    `positions (${(coverage * 100).toFixed(0)}%, below the ${MIN_ACCOUNT_COVERAGE * 100}% ` +
+    `floor). Applying it would delete the positions of ${missing.length} account(s), ` +
+    `starting with ${missing.slice(0, 5).join(", ")}. Import it by hand if it is genuine.`
+  );
+}
+
+/**
+ * Seams for the tests.
+ *
+ * Production passes nothing and gets the real service-role client, the real
+ * mailbox and the real recompute. The tests pass all three, because what is
+ * worth covering here — does the guardrail refuse a truncated snapshot, are
+ * holdings applied before trades, is an already-seen attachment skipped — needs
+ * no network and no database to be true.
+ */
+export type IngestDeps = {
+  db?: AdminDb;
+  fetchAttachments?: typeof fetchBrokerAttachments;
+  recompute?: typeof recomputeAccounts;
+};
+
+export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestReport> {
+  const db = deps.db ?? (await import("../supabase/admin.ts")).createAdminClient();
+  const fetchAttachments =
+    deps.fetchAttachments ?? (await import("./graph-mail.ts")).fetchBrokerAttachments;
+  const recompute = deps.recompute ?? (await import("../pnl/batch.ts")).recomputeAccounts;
+  const startedAt = new Date();
+
+  const notes: string[] = [];
+  const reports: AttachmentReport[] = [];
+  const touchedAccountIds = new Set<string>();
+
+  let runId: string | null = null;
+
+  try {
+    const since = await lastWatermark(db);
+    notes.push(
+      since ? `Reading mail received after ${since.toISOString()}.` : "First run — no watermark.",
+    );
+
+    const mail = await fetchAttachments(since);
+    if (!mail.ok) {
+      runId = await recordRun(db, {
+        startedAt,
+        watermark: since,
+        messagesSeen: 0,
+        reports: [],
+        notes,
+        status: "failed",
+        error: mail.error ?? "Mail fetch failed.",
+        pnlBatchId: null,
+      });
+      return {
+        runId,
+        ok: false,
+        messagesSeen: 0,
+        attachments: [],
+        accountsRecomputed: 0,
+        notes,
+        error: mail.error,
+      };
+    }
+
+    const seen = await alreadySeen(db, mail.attachments);
+    const fresh = mail.attachments.filter(
+      (a) => !seen.has(`${a.messageId}:${a.attachmentId}`),
+    );
+
+    if (fresh.length < mail.attachments.length) {
+      notes.push(
+        `${mail.attachments.length - fresh.length} attachment(s) already processed — skipped.`,
+      );
+    }
+
+    // Holdings first: the snapshot creates the accounts the ledger needs.
+    const ordered = [
+      ...fresh.filter((a) => detectCsvKind(a.content) === "holdings"),
+      ...fresh.filter((a) => detectCsvKind(a.content) !== "holdings"),
+    ];
+
+    for (const att of ordered) {
+      const kind = detectCsvKind(att.content);
+      const report = await processOne(db, att, kind);
+      reports.push(report);
+
+      await recordAttachment(db, att, kind, report);
+
+      if (report.outcome === "imported" && report.accountRefs.length > 0) {
+        for (const id of await accountIdsFor(db, report.accountRefs)) {
+          touchedAccountIds.add(id);
+        }
+      }
+    }
+
+    // One recompute for everything the morning touched — the Placement Trackers
+    // are parsed once for the whole batch, not once per file or per account.
+    let pnlBatchId: string | null = null;
+    if (touchedAccountIds.size > 0) {
+      const batch = await recompute([...touchedAccountIds], { trigger: "ingest" });
+      pnlBatchId = batch.batchId;
+      notes.push(
+        `Recomputed P&L for ${batch.results.length} account(s)` +
+          (batch.placementTickers === null
+            ? " — NO Placement Tracker was readable, so placement buy sides and unlisted option rows are missing from this run."
+            : ` against ${batch.placementTickers} placement ticker(s).`),
+      );
+      if (batch.failures.length > 0) {
+        notes.push(`${batch.failures.length} account(s) failed to recompute.`);
+      }
+    } else if (reports.length === 0) {
+      notes.push("No new broker mail.");
+    }
+
+    const failed = reports.filter(
+      (r) => r.outcome === "failed" || r.outcome === "quarantined",
+    ).length;
+    const status = failed > 0 ? "partial" : "ok";
+
+    // The watermark only advances on a CLEAN run. A quarantined or failed file
+    // must be re-offered tomorrow rather than silently skipped past.
+    const watermark =
+      status === "ok" && mail.attachments.length > 0
+        ? new Date(mail.attachments[mail.attachments.length - 1].receivedAt)
+        : since;
+
+    runId = await recordRun(db, {
+      startedAt,
+      watermark,
+      messagesSeen: mail.messagesSeen,
+      reports,
+      notes,
+      status,
+      error: null,
+      pnlBatchId,
+    });
+
+    return {
+      runId,
+      ok: status === "ok",
+      messagesSeen: mail.messagesSeen,
+      attachments: reports,
+      accountsRecomputed: touchedAccountIds.size,
+      notes,
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Morning ingest failed:", err);
+
+    runId = await recordRun(db, {
+      startedAt,
+      watermark: null,
+      messagesSeen: 0,
+      reports,
+      notes,
+      status: "failed",
+      error: message,
+      pnlBatchId: null,
+    }).catch(() => null);
+
+    return {
+      runId,
+      ok: false,
+      messagesSeen: 0,
+      attachments: reports,
+      accountsRecomputed: 0,
+      notes,
+      error: message,
+    };
+  }
+}
+
+/** Import one attachment, or explain why it was not imported. */
+async function processOne(
+  db: AdminDb,
+  att: BrokerAttachment,
+  kind: string,
+): Promise<AttachmentReport> {
+  const base = { filename: att.filename, kind, accountRefs: [] as string[] };
+
+  if (kind === "unknown") {
+    return {
+      ...base,
+      outcome: "unrecognised",
+      error:
+        "Headers match neither the holdings snapshot nor the trade ledger. " +
+        "Nothing was attempted — running the wrong importer on this would be worse.",
+    };
+  }
+
+  try {
+    if (kind === "holdings") {
+      // Parse first without writing, so the guardrail sees the file's real
+      // account list before a single position is deleted.
+      const preview = await runHoldingsImport(db, att.content, { dryRun: true });
+      const refusal = await coverageRefusal(db, preview.touched.accountRefs);
+      if (refusal) {
+        return {
+          ...base,
+          outcome: "quarantined",
+          rows: preview.parsed.holdings,
+          accountRefs: preview.touched.accountRefs,
+          error: refusal,
+        };
+      }
+
+      const res = await runHoldingsImport(db, att.content);
+      return {
+        ...base,
+        outcome: "imported",
+        rows: res.parsed.holdings,
+        accountRefs: res.touched.accountRefs,
+      };
+    }
+
+    const res = await runTradeImport(db, att.content, { sourceFile: att.filename });
+    return {
+      ...base,
+      outcome: "imported",
+      rows: res.parsed.trades,
+      accountRefs: res.touched.accountRefs,
+    };
+  } catch (err) {
+    const detail =
+      err instanceof ImportError
+        ? `${err.message}${err.details.length ? ` (${err.details.join(", ")})` : ""}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ...base, outcome: "failed", error: detail };
+  }
+}
+
+async function accountIdsFor(db: AdminDb, refs: string[]): Promise<string[]> {
+  if (refs.length === 0) return [];
+  const { data, error } = await db
+    .from("accounts")
+    .select("id")
+    .in("external_ref", refs);
+  if (error) throw error;
+  return ((data ?? []) as unknown as { id: string }[]).map((a) => a.id);
+}
+
+async function recordAttachment(
+  db: AdminDb,
+  att: BrokerAttachment,
+  kind: string,
+  report: AttachmentReport,
+): Promise<void> {
+  const { error } = await db.from("ingest_attachments").upsert(
+    {
+      message_id: att.messageId,
+      attachment_id: att.attachmentId,
+      received_at: att.receivedAt,
+      sender: att.sender,
+      subject: att.subject,
+      filename: att.filename,
+      size_bytes: att.sizeBytes,
+      sha256: sha256(att.content),
+      kind,
+      outcome: report.outcome,
+      rows_parsed: report.rows ?? null,
+      error: report.error ?? null,
+      account_refs: report.accountRefs,
+    },
+    { onConflict: "message_id,attachment_id" },
+  );
+  if (error) throw error;
+}
+
+async function recordRun(
+  db: AdminDb,
+  args: {
+    startedAt: Date;
+    watermark: Date | null;
+    messagesSeen: number;
+    reports: AttachmentReport[];
+    notes: string[];
+    status: string;
+    error: string | null;
+    pnlBatchId: string | null;
+  },
+): Promise<string | null> {
+  const { data, error } = await db
+    .from("ingest_runs")
+    .insert({
+      started_at: args.startedAt.toISOString(),
+      finished_at: new Date().toISOString(),
+      watermark: args.watermark?.toISOString() ?? null,
+      messages_seen: args.messagesSeen,
+      attachments: args.reports.length,
+      imported: args.reports.filter((r) => r.outcome === "imported").length,
+      quarantined: args.reports.filter((r) => r.outcome === "quarantined").length,
+      status: args.status,
+      error: args.error,
+      notes: args.notes,
+      pnl_batch_id: args.pnlBatchId,
+    })
+    .select("id");
+  if (error) throw error;
+
+  return ((data ?? []) as unknown as { id: string }[])[0]?.id ?? null;
+}

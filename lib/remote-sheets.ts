@@ -158,7 +158,10 @@ async function getGoogleAccessToken(): Promise<string | null> {
 }
 
 /** Mints an app-only Microsoft Graph token via the client credentials grant. */
-async function getMicrosoftAccessToken(): Promise<string | null> {
+// Exported so the morning mail ingest reads the SAME credentials through the
+// SAME token cache. A second copy would double the token requests and, worse,
+// let the two drift apart about which app registration is in use.
+export async function getMicrosoftAccessToken(): Promise<string | null> {
   const creds = microsoftCreds();
   if (!creds) return null;
 

@@ -20,15 +20,16 @@ import {
   type RealizedRow,
 } from "@/lib/data/compute";
 import {
-  buildPnlSummary,
   buildPnlSummaryCsv,
   grandTotal,
   pnlSummaryFilename,
   SUMMARY_HEADERS,
-  type HeldPosition,
   type PnlOverride,
 } from "@/lib/export/order-history";
+import { storedToSummaryRows } from "@/lib/export/stored-pnl";
+import type { StoredPnlRow, PnlRunRow } from "@/lib/data/pnl";
 import { buildPnlSummaryXlsx } from "@/app/actions/exports";
+import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
 import { PnlRow } from "./PnlRow";
 import { RealizedPnlChart } from "./RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
@@ -42,6 +43,22 @@ const money2 = (n: number): string =>
   n.toLocaleString("en-AU", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
+  });
+
+/**
+ * `2026-08-07T22:14:03Z` → `7 Aug 2026, 8:14 am`, in the reader's own timezone.
+ *
+ * Local time on purpose: this says how stale a figure is, and "is that before or
+ * after this morning's import?" is a question people answer in the time on their
+ * own wall, not in UTC.
+ */
+const stamp = (iso: string): string =>
+  new Date(iso).toLocaleString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   });
 
 function s708Label(iso: string | null): string {
@@ -113,6 +130,8 @@ export function ClientDetailClient({
   trades,
   realized,
   overrides,
+  storedPnl,
+  pnlRuns,
 }: {
   client: ClientRow;
   accounts: AccountRow[];
@@ -124,6 +143,8 @@ export function ClientDetailClient({
   trades: TradeRow[];
   realized: RealizedRow[];
   overrides: PnlOverrideRow[];
+  storedPnl: StoredPnlRow[];
+  pnlRuns: PnlRunRow[];
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<
@@ -168,73 +189,44 @@ export function ClientDetailClient({
     0,
   );
 
-  // Group the ledger by parent ticker. This feeds the P&L summary that the
-  // table and both exports render — one company per row.
-  const tradeGroups = (() => {
-    const byParent = new Map<string, { name: string; trades: TradeRow[] }>();
-    for (const t of visibleTrades) {
-      const g = byParent.get(t.parent);
-      if (g) g.trades.push(t);
-      else byParent.set(t.parent, { name: t.name, trades: [t] });
-    }
-
-    return [...byParent.entries()]
-      .map(([parent, g]) => ({
-        parent,
-        name: g.name,
-        // Oldest first within a company: the buy that established the cost
-        // basis should be read before the sale that closed it.
-        trades: [...g.trades].sort((a, b) =>
-          a.tradeDate === b.tradeDate
-            ? a.cnote.localeCompare(b.cnote)
-            : a.tradeDate.localeCompare(b.tradeDate),
-        ),
-        realized: realizedMap.get(parent) ?? null,
-      }))
-      .sort((a, b) => {
-        // Companies with a realised result lead, ranked exactly as the chart
-        // ranks them. Still-open positions follow, most recent first.
-        const ar = a.realized?.unitsSold ? a.realized.realizedPl : null;
-        const br = b.realized?.unitsSold ? b.realized.realizedPl : null;
-        if (ar !== null && br !== null) return br - ar;
-        if (ar !== null) return -1;
-        if (br !== null) return 1;
-        return b.trades[b.trades.length - 1].tradeDate.localeCompare(
-          a.trades[a.trades.length - 1].tradeDate,
-        );
-      });
-  })();
-  // Still-held units per company, rolled up from the holdings snapshot. This is
-  // the other half of every export row: the ledger supplies what was sold, this
-  // supplies what is still owned. Derivatives fold into their ordinary, matching
-  // how the ledger groups by parent code.
-  const heldByParent = (() => {
-    const m = new Map<string, HeldPosition>();
-    for (const p of visiblePositions) {
-      const prev = m.get(p.parent);
-      const priced = p.last !== null;
-      m.set(p.parent, {
-        qty: (prev?.qty ?? 0) + p.qty,
-        costBase: (prev?.costBase ?? 0) + p.qty * p.cost,
-        marketValue: (prev?.marketValue ?? 0) + (priced ? p.qty * p.last! : 0),
-        // One unpriced line makes the whole company's market value incomplete.
-        hasPrice: (prev?.hasPrice ?? true) && priced,
-      });
-    }
-    return m;
-  })();
-
   // ONE array drives the table, the CSV and the .xlsx. That is what makes the
   // three impossible to disagree — they are renderings of the same rows, not
   // three separate assemblies of the same idea.
+  //
+  // Those rows are now READ, not derived here. The full calculation values open
+  // positions off the holdings snapshot, fills placement buy sides from the
+  // Placement Tracker workbooks (~48s to parse) and prices free unlisted options
+  // with Black-Scholes off a live spot — none of which a page render can
+  // reproduce, and all of which have to be reproducible later if a client was
+  // ever shown the number. So lib/pnl/recompute.ts computes and stores it, and
+  // this page displays what it stored.
+  //
+  // Overrides are still applied HERE rather than baked in, so correcting a row
+  // keeps tracking the sources underneath it.
   const overrideMap = new Map<string, PnlOverride>(
     overrides
       .filter((o) => inAcct(o.accountId))
       .map((o) => [o.parent, { ...o, parent: o.parent }]),
   );
-  const summaryRows = buildPnlSummary(tradeGroups, heldByParent, overrideMap);
+  const visibleStoredPnl = storedPnl.filter((r) => inAcct(r.accountId));
+  const summaryRows = storedToSummaryRows(visibleStoredPnl, overrideMap);
 
   const summaryTotal = grandTotal(summaryRows);
+
+  /**
+   * When these figures were produced, and anything the desk should read before
+   * trusting them.
+   *
+   * Shown rather than hidden because a stored number is only as good as its
+   * age: a P&L computed before this morning's contract notes landed is not
+   * wrong, but it is not today's either.
+   */
+  const visibleRuns = pnlRuns.filter((r) => inAcct(r.accountId));
+  const lastComputedAt = visibleRuns.reduce<string | null>(
+    (latest, r) => (!latest || r.computedAt > latest ? r.computedAt : latest),
+    null,
+  );
+  const runWarnings = [...new Set(visibleRuns.flatMap((r) => r.warnings))];
 
   // The chart needs realised P&L WITH dates on it, which the per-ticker rollup
   // cannot supply. Replaying the visible ledger through the same cost-basis
@@ -278,6 +270,73 @@ export function ClientDetailClient({
 
   const exportCsv = () =>
     download(buildPnlSummaryCsv(summaryRows), exportName("csv"), "text/csv");
+
+  /**
+   * Rebuild the stored figures now.
+   *
+   * Needed because the inputs move underneath a stored number: a spot price
+   * changes by the minute, and a Placement Tracker can be amended at any time.
+   * The morning ingest does this unattended; this is the desk's way of asking
+   * for today's marks without waiting for tomorrow.
+   */
+  const [recalculating, setRecalculating] = useState(false);
+  const [recalcNote, setRecalcNote] = useState<{
+    tone: "ok" | "bad";
+    text: string;
+  } | null>(null);
+
+  const recalculate = async () => {
+    setRecalculating(true);
+    setRecalcNote(null);
+    try {
+      const res = await recalculateClientPnl(cid);
+      if (!res.ok) {
+        setRecalcNote({ tone: "bad", text: res.error });
+        return;
+      }
+      setRecalcNote({
+        tone: res.warnings.length > 0 ? "bad" : "ok",
+        text:
+          `Recalculated ${res.accounts} account${res.accounts === 1 ? "" : "s"}.` +
+          (res.warnings.length > 0 ? ` ${res.warnings.join(" ")}` : ""),
+      });
+      // The rows are Server Component props, so the page has to re-fetch them.
+      router.refresh();
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
+  /**
+   * Compute without storing, and download the result in the **P&L Calculator's**
+   * CSV format so the two can be diffed directly.
+   *
+   * The stored figures are left exactly as they were, which is the point: this
+   * is how the engine gets checked against the reference implementation before
+   * anyone trusts it with the numbers on the page.
+   */
+  const [previewing, setPreviewing] = useState(false);
+  const previewCsv = async () => {
+    setPreviewing(true);
+    setRecalcNote(null);
+    try {
+      const res = await previewClientPnlCsv(cid);
+      if (!res.ok) {
+        setRecalcNote({ tone: "bad", text: res.error });
+        return;
+      }
+      download(res.csv, res.filename, "text/csv");
+      setRecalcNote({
+        tone: res.warnings.length > 0 ? "bad" : "ok",
+        text:
+          `Preview of ${res.rows} row(s) downloaded — nothing was stored. ` +
+          `Diff it against the P&L Calculator's export for the same client.` +
+          (res.warnings.length > 0 ? ` ${res.warnings.join(" ")}` : ""),
+      });
+    } finally {
+      setPreviewing(false);
+    }
+  };
 
   // The workbook is built by a server action (ExcelJS stays out of the client
   // bundle), so this one is async and the button reflects that.
@@ -530,24 +589,74 @@ export function ClientDetailClient({
 
           <RealizedPnlChart periods={chartPeriods} />
 
+          {/* What the last run wants a human to know before trusting the rows:
+              tickers it could not resolve, options it could not price. These are
+              not errors — the run succeeded — but a number nobody was told was
+              incomplete is worse than one nobody looked at. */}
+          {runWarnings.length > 0 && (
+            <div className="bg-white border border-line rounded-[14px] shadow-shadow px-4.5 py-3 text-[11px] text-loss-d space-y-1">
+              {runWarnings.map((w, i) => (
+                <div key={i}>{w}</div>
+              ))}
+            </div>
+          )}
+
+          {recalcNote && (
+            <div
+              className={`bg-white border border-line rounded-[14px] shadow-shadow px-4.5 py-3 text-[11px] ${
+                recalcNote.tone === "ok" ? "text-mut" : "text-loss-d"
+              }`}
+            >
+              {recalcNote.text}
+            </div>
+          )}
+
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
             <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-baseline justify-between">
               <div>
                 <b className="text-sm font-semibold text-ink">P&amp;L by company</b>
                 <div className="text-[11px] text-mut mt-0.5">
-                  {summaryRows.length} companies from {settledTrades.length} settled
-                  trade{settledTrades.length === 1 ? "" : "s"}
+                  {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"} from{" "}
+                  {settledTrades.length} settled trade
+                  {settledTrades.length === 1 ? "" : "s"}
                   {visibleTrades.length !== settledTrades.length &&
                     ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed excluded`}
                   {" · exports match this table exactly"}
                 </div>
+                {/* A stored figure is only as good as its age, so the age is not
+                    hidden. */}
+                <div className="text-[11px] text-mut mt-0.5">
+                  {lastComputedAt ? (
+                    <>Calculated {stamp(lastComputedAt)}</>
+                  ) : (
+                    <span className="text-loss-d">
+                      Never calculated — press Recalculate to build this client&apos;s P&amp;L.
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  onClick={previewCsv}
+                  disabled={previewing}
+                  title="Compute without storing, and download it in the P&L Calculator's CSV format — for diffing the two before trusting the stored figures"
+                  className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {previewing ? "Computing…" : "Preview CSV"}
+                </button>
+                <button
+                  onClick={recalculate}
+                  disabled={recalculating}
+                  title="Rebuild from the stored ledger, the holdings snapshot and the Placement Trackers, at today's prices"
+                  className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  {recalculating ? "Calculating…" : "Recalculate"}
+                </button>
                 {/* CSV for data, Excel for the colour-coded copy — plain CSV
                     cannot carry a fill. */}
                 <button
                   onClick={exportCsv}
-                  disabled={tradeGroups.length === 0 && heldByParent.size === 0}
+                  disabled={summaryRows.length === 0}
                   className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Export CSV
@@ -555,7 +664,7 @@ export function ClientDetailClient({
                 <button
                   onClick={exportExcel}
                   disabled={
-                    exporting || (tradeGroups.length === 0 && heldByParent.size === 0)
+                    exporting || summaryRows.length === 0
                   }
                   title="Same rows as an .xlsx, colour-coded: amber = still open, green = fully exited, red = needs checking"
                   className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"

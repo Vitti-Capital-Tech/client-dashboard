@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "node --test \"lib/**/*.test.ts\" \"store/**/*.test.ts\"",
     "import:holdings": "node --env-file=.env.local scripts/import-holdings.mjs",
-    "import:trades": "node --env-file=.env.local scripts/import-trades.mjs"
+    "import:trades": "node --env-file=.env.local scripts/import-trades.mjs",
+    "diff:pnl": "node scripts/diff-pnl-csv.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

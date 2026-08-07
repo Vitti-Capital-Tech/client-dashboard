@@ -18,7 +18,12 @@ import {
  *   Value, Brokerage %, Status
  */
 
-const REQUIRED = [
+/**
+ * Exported because these columns are also how a file is IDENTIFIED as a trade
+ * ledger — see `detectCsvKind`. Filenames are a broker's convention and change
+ * without notice; the column set is the shape itself.
+ */
+export const TRADE_REQUIRED_HEADERS = [
   "CNote",
   "Account",
   "Type",
@@ -28,7 +33,9 @@ const REQUIRED = [
   "Units",
   "Value",
   "Status",
-];
+] as const;
+
+const REQUIRED = TRADE_REQUIRED_HEADERS;
 
 /** Only settled trades count. CANCELLED / REVERSAL / REVERSED never happened. */
 export const SETTLED = "SETTLED";

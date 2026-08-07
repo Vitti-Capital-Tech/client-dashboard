@@ -7,6 +7,7 @@ import {
 } from "@/lib/data/queries";
 import { portfolioValue } from "@/lib/data/compute";
 import { ClientsTable, type ClientRegistryRow } from "./ClientsTable";
+import { BackfillPnlButton } from "./BackfillPnlButton";
 
 function s708Label(iso: string | null): string {
   if (!iso) return "—";
@@ -61,12 +62,15 @@ export default async function StaffClientsPage() {
   return (
     <div className="space-y-4 text-ink font-body select-none">
       {/* Page Header */}
-      <div>
-        <div className="font-mono text-xs tracking-wider uppercase text-mut">Verified advisers register</div>
-        <h1 className="font-disp font-medium text-[26px] mt-0.5">Wholesale clients register</h1>
-        <p className="text-xs text-mut mt-1">
-          Full register of wholesale clients with verified s708 certificates, portfolio values, and active bids.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="font-mono text-xs tracking-wider uppercase text-mut">Verified advisers register</div>
+          <h1 className="font-disp font-medium text-[26px] mt-0.5">Wholesale clients register</h1>
+          <p className="text-xs text-mut mt-1">
+            Full register of wholesale clients with verified s708 certificates, portfolio values, and active bids.
+          </p>
+        </div>
+        <BackfillPnlButton />
       </div>
 
       <ClientsTable rows={rows} />

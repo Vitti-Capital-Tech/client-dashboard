@@ -1,14 +1,9 @@
-// Import a broker HOLDINGS SNAPSHOT into clients / accounts / securities / positions.
+// CLI front door for the holdings-snapshot import.
 // ----------------------------------------------------------------------------
-// The snapshot is the authoritative answer to "what is held right now", so this
-// is a FULL REPLACE of `positions` for every account present in the file:
-// anything the broker no longer reports has been sold, and must disappear.
-// Accounts absent from the file are left completely untouched.
-//
-// It is also the platform's only price source today, so Market Price lands in
-// securities.last_price on the way through.
-//
-// Idempotent: re-running the same file converges to the same rows.
+// The import itself lives in lib/import/run-holdings.ts — read that file for
+// what the snapshot means and why `positions` is a full replace. This script
+// only reads argv and renders the result, so the terminal and the morning mail
+// ingest can never disagree about what an import did.
 //
 // Run:
 //   node --env-file=.env.local scripts/import-holdings.mjs <ClientHoldings…csv>
@@ -19,180 +14,64 @@ import {
   adminClient,
   parseArgs,
   readCsv,
-  upsertChunked,
   reportRowErrors,
   fmtMoney,
+  die,
 } from "./_import-common.mjs";
-import {
-  parseHoldingsCsv,
-  extractAccounts,
-  extractSecurities,
-} from "../lib/import/holdings.ts";
+import { runHoldingsImport } from "../lib/import/run-holdings.ts";
 
 const USAGE =
   "Usage: node --env-file=.env.local scripts/import-holdings.mjs <holdings.csv> [--dry-run]";
 
 const { file, dryRun } = parseArgs(USAGE);
 
-// ---------------------------------------------------------------------------
-// 1. Parse
-// ---------------------------------------------------------------------------
-const { holdings, errors } = parseHoldingsCsv(readCsv(file));
-reportRowErrors(errors, "holdings");
+// A dry run never touches the database, so it must not demand credentials
+// either — it is the one command you can hand to someone without the key.
+const supabase = dryRun ? null : adminClient();
 
-if (holdings.length === 0) {
-  console.error("No parseable holdings rows — nothing to do.");
-  process.exit(1);
+let result;
+try {
+  result = await runHoldingsImport(supabase, readCsv(file), { dryRun });
+} catch (err) {
+  die(err);
 }
 
-const accounts = extractAccounts(holdings);
-const securities = extractSecurities(holdings);
+reportRowErrors(result.rowErrors, "holdings");
 
-const totalMarketValue = holdings.reduce((s, h) => s + h.marketValue, 0);
-const totalCostBase = holdings.reduce((s, h) => s + h.costBase, 0);
+const { parsed } = result;
+const unrealised = parsed.marketValue - parsed.costBase;
 
 console.log(`\nParsed ${file}`);
-console.log(`  ${holdings.length} holdings across ${accounts.length} accounts`);
-console.log(`  ${securities.length} distinct securities`);
-console.log(`  market value ${fmtMoney(totalMarketValue)}`);
-console.log(`  cost base    ${fmtMoney(totalCostBase)}`);
+console.log(`  ${parsed.holdings} holdings across ${parsed.accounts} accounts`);
+console.log(`  ${parsed.securities} distinct securities`);
+console.log(`  market value ${fmtMoney(parsed.marketValue)}`);
+console.log(`  cost base    ${fmtMoney(parsed.costBase)}`);
 console.log(
-  `  unrealised   ${fmtMoney(totalMarketValue - totalCostBase)}` +
-    ` (${(((totalMarketValue - totalCostBase) / totalCostBase) * 100).toFixed(1)}%)`,
+  `  unrealised   ${fmtMoney(unrealised)}` +
+    // A snapshot whose every holding is priceless has a zero cost base; a
+    // percentage of nothing is not a fact worth printing.
+    (parsed.costBase > 0
+      ? ` (${((unrealised / parsed.costBase) * 100).toFixed(1)}%)`
+      : ""),
 );
 
-if (dryRun) {
+if (!result.applied) {
   console.log("\n--dry-run: nothing written.");
-  const byClass = new Map();
-  for (const s of securities)
-    byClass.set(s.securityClass, (byClass.get(s.securityClass) ?? 0) + 1);
-  console.log("  securities by class:", Object.fromEntries(byClass));
+  console.log("  securities by class:", result.securitiesByClass);
   console.log(
     "  derivative → parent samples:",
-    securities
-      .filter((s) => s.parent)
-      .slice(0, 8)
-      .map((s) => `${s.code}→${s.parent}`)
-      .join(", "),
+    result.derivativeLinks.slice(0, 8).join(", "),
   );
   process.exit(0);
 }
 
-const supabase = adminClient();
-
-// ---------------------------------------------------------------------------
-// 2. Securities — two phase, because parent_code is a self-referencing FK.
-//    Pass one writes every code with a null parent; pass two wires the links up
-//    once every parent is guaranteed to exist.
-// ---------------------------------------------------------------------------
-await upsertChunked(
-  supabase,
-  "securities",
-  securities.map((s) => ({
-    code: s.code,
-    name: s.name,
-    description: s.description,
-    security_class: s.securityClass,
-    listed: true,
-    last_price: s.lastPrice,
-    last_price_at: s.lastPrice === null ? null : new Date().toISOString(),
-  })),
-  { onConflict: "code" },
-);
-
-const derivatives = securities.filter((s) => s.parent);
-for (const s of derivatives) {
-  const { error } = await supabase
-    .from("securities")
-    .update({ parent_code: s.parent })
-    .eq("code", s.code);
-  if (error) throw new Error(`link ${s.code}→${s.parent}: ${error.message}`);
-}
+const w = result.written;
 console.log(
-  `\n  securities: ${securities.length} upserted (${derivatives.length} linked to a parent)`,
+  `\n  securities: ${w.securities} upserted (${w.derivativesLinked} linked to a parent)`,
 );
-
-// ---------------------------------------------------------------------------
-// 3. Clients & accounts
-// ---------------------------------------------------------------------------
-// The broker models the entity and its account as one thing, so each Account
-// Number becomes one client owning one account. The multi-account schema still
-// applies — staff can merge two of these later with no migration.
-await upsertChunked(
-  supabase,
-  "clients",
-  accounts.map((a) => ({
-    external_ref: a.externalRef,
-    display_name: a.displayName,
-    initials: a.initials,
-    // No email in the broker export. Client logins stay disabled until one is
-    // attached (lib/session.ts resolves the client row by JWT email).
-  })),
-  { onConflict: "external_ref" },
-);
-
-const { data: clientRows, error: clientErr } = await supabase
-  .from("clients")
-  .select("id, external_ref")
-  .in(
-    "external_ref",
-    accounts.map((a) => a.externalRef),
-  );
-if (clientErr) throw clientErr;
-const clientIdByRef = new Map(clientRows.map((c) => [c.external_ref, c.id]));
-
-await upsertChunked(
-  supabase,
-  "accounts",
-  accounts.map((a) => ({
-    external_ref: a.externalRef,
-    client_id: clientIdByRef.get(a.externalRef),
-    label: a.displayName,
-    account_type: "Wholesale",
-    adviser_code: a.adviserCode,
-    adviser_name: a.adviserName,
-    status: a.status,
-  })),
-  { onConflict: "external_ref" },
-);
-
-const { data: accountRows, error: accountErr } = await supabase
-  .from("accounts")
-  .select("id, external_ref, client_id")
-  .in(
-    "external_ref",
-    accounts.map((a) => a.externalRef),
-  );
-if (accountErr) throw accountErr;
-const accountByRef = new Map(accountRows.map((a) => [a.external_ref, a]));
-
-console.log(`  clients:    ${accounts.length} upserted`);
-console.log(`  accounts:   ${accountRows.length} upserted`);
-
-// ---------------------------------------------------------------------------
-// 4. Positions — full replace, scoped to the accounts in this file
-// ---------------------------------------------------------------------------
-const accountIds = accountRows.map((a) => a.id);
-
-const { error: delErr, count: deleted } = await supabase
-  .from("positions")
-  .delete({ count: "exact" })
-  .in("account_id", accountIds);
-if (delErr) throw delErr;
-
-const positionRows = holdings.map((h) => ({
-  account_id: accountByRef.get(h.accountRef).id,
-  client_id: accountByRef.get(h.accountRef).client_id,
-  security_code: h.rawSecurity,
-  qty: h.qty,
-  avg_cost: h.avgCost,
-}));
-
-await upsertChunked(supabase, "positions", positionRows, {
-  onConflict: "account_id,security_code",
-});
-
+console.log(`  clients:    ${w.clients} upserted`);
+console.log(`  accounts:   ${w.accounts} upserted`);
 console.log(
-  `  positions:  ${positionRows.length} written (${deleted ?? 0} stale rows removed)`,
+  `  positions:  ${w.positions} written (${w.staleRemoved} stale rows removed)`,
 );
 console.log("\nDone. Holdings snapshot imported.");

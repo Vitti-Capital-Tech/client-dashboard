@@ -79,6 +79,17 @@ export type PnlSummaryRow = {
   /** Something does not add up — the row needs a human before it is trusted. */
   flagged: boolean;
 
+  /**
+   * Leave this row OUT of the Grand Total.
+   *
+   * Set only when the buy side is genuinely UNKNOWN rather than zero — the
+   * placement could not be resolved, so the row's cost is blank. Summing it
+   * would report the entire sale proceeds as profit, which is precisely the
+   * error the blank is there to prevent. A blank cannot be added up, so it
+   * is not added up.
+   */
+  excludedFromTotal?: boolean;
+
   /** True if any field on this row was set by hand. */
   edited: boolean;
   overridden: OverriddenFields;
@@ -223,10 +234,14 @@ export function buildPnlSummary(
 }
 
 export function grandTotal(rows: PnlSummaryRow[]) {
+  // A row whose cost is unknown contributes nothing to any column, not even its
+  // real sale proceeds: showing proceeds against a blank cost would make the
+  // total read as profit the client never made.
+  const summable = rows.filter((r) => !r.excludedFromTotal);
   return {
-    buyPrice: rows.reduce((s, r) => s + r.buyPrice, 0),
-    sellOrCurrent: rows.reduce((s, r) => s + r.sellOrCurrent, 0),
-    pnl: rows.reduce((s, r) => s + r.pnl, 0),
+    buyPrice: summable.reduce((s, r) => s + r.buyPrice, 0),
+    sellOrCurrent: summable.reduce((s, r) => s + r.sellOrCurrent, 0),
+    pnl: summable.reduce((s, r) => s + r.pnl, 0),
   };
 }
 

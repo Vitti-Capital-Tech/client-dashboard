@@ -4,14 +4,16 @@ Vitti Capital is a production-grade, stateful Next.js App Router application wri
 
 > **Migration status:** the app has been moved from a purely in-memory prototype (Zustand + `lib/db.ts`) to a **Supabase (PostgreSQL) backend**. All portal routes render as Server Components reading live data through the data-access layer, every state mutation is a Server Action writing to Supabase + `audit_log`, and access is enforced by real Supabase Auth plus Postgres RLS. The legacy Zustand store is no longer imported by any route.
 >
-> **Holdings are no longer demo data.** Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by an offline pipeline (§4.5) that derives realised P&L from the trade history. Where it cannot substantiate a figure it says so rather than guessing: see the [migration status](#5-supabase-migration-status).
+> **Holdings are no longer demo data.** Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by a pipeline (§4.5) that derives realised P&L from the trade history. Where it cannot substantiate a figure it says so rather than guessing: see the [migration status](#5-supabase-migration-status).
+>
+> **That pipeline now runs itself.** The broker mails both files each weekday morning; a cron job reads that mailbox, imports what it carries, and rebuilds each affected account's P&L (§4.6). The same importers still run from the CLI — the logic lives in `lib/import/run-*.ts` and the two front doors are thin renderers over it. The client profile's P&L table **reads what the recompute stored** rather than deriving it per request, because the full calculation depends on live spot prices and the Placement Tracker workbooks, and a figure shown to a client has to be reproducible afterwards.
 
 ---
 
 ## 1. Document Directory
 Detailed design information is available under the `docs` folder:
-* **[High-Level Design (HLD)](docs/HLD.md):** Platform structure, the Supabase persistence + data-access layer, the session bridge, the broker batch-ingress pipeline, dual-workspace flows, and responsive layout.
-* **[Low-Level Design (LLD)](docs/LLD.md):** Data interfaces, the production SQL schema + interface→table mapping, the DAL / session / compute modules, state-mutation algorithms, the broker import pipeline and cost-basis reducer (§8.14–8.15), and UI-chart math.
+* **[High-Level Design (HLD)](docs/HLD.md):** Platform structure, the Supabase persistence + data-access layer, the session bridge, the broker batch-ingress pipeline, the scheduled mail ingest (§3.1f) and stored P&L (§3.1g), dual-workspace flows, and responsive layout.
+* **[Low-Level Design (LLD)](docs/LLD.md):** Data interfaces, the production SQL schema + interface→table mapping, the DAL / session / compute modules, state-mutation algorithms, the broker import pipeline and cost-basis reducer (§8.14–8.15), stored P&L and the DB→calculator adapter (§8.18), the morning mail ingest (§8.19), the test doubles (§8.20), and UI-chart math.
 * **[Requirements](docs/REQUIREMENTS.md):** Prototype → production requirements, chosen providers, and behaviour flow charts.
 * **[Production SQL Schema](db/schema.sql):** Portable PostgreSQL DDL (Supabase / Neon / Aurora); also applied as the first Supabase migration.
 
@@ -33,7 +35,12 @@ client-dashboard/
 │   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
 │   │   ├── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
 │   │   ├── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
+│   │   ├── pnl.ts              # Server actions: recalculate one client's stored P&L / backfill every account
 │   │   └── pnl-calculator.ts   # Server action: in-memory P&L multi-file trade/placement parsing, OAuth URL fetch & export generation
+│   ├── api/
+│   │   └── ingest/
+│   │       ├── morning/route.ts # Cron entry point: read broker mail → import → recompute
+│   │       └── health/route.ts  # Read-only mailbox probe — verifies Azure setup, imports nothing
 │   ├── login/
 │   │   └── page.tsx            # Email login (resolves client) + 2FA; writes the session cookie
 │   └── portal/
@@ -54,8 +61,10 @@ client-dashboard/
 │           ├── page.tsx        #   ✅ Overview / desk summary + StaffOverviewClient.tsx (island)
 │           ├── pnl-calculator/ #   ✅ page.tsx (server) + PnlCalculatorClient.tsx (in-memory ledger tool island)
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
+│           │   │               #      + BackfillPnlButton.tsx (rebuild stored P&L for every account)
 │           │   └── [id]/       #   ✅ page.tsx (server) + ClientDetailClient.tsx (tabbed island:
 │           │                   #      holdings · order history · options · bids · alerts)
+│           │                   #      Order history renders STORED P&L + Recalculate + "calculated at"
 │           │                   #      + RealizedPnlChart.tsx (realised P&L by month, SVG, no deps)
 │           │                   #      + EditPnlRow.tsx (inline editor for a summary row)
 │           ├── placements/     #   ✅ page.tsx (server) + StaffPlacementsClient.tsx (scaling & settlement island)
@@ -71,11 +80,14 @@ client-dashboard/
 │   ├── supabase/
 │   │   ├── client.ts           # Browser Supabase client (@supabase/ssr)
 │   │   ├── server.ts           # Server Supabase client (async cookies)
+│   │   ├── admin.ts            # service-role client — BYPASSES RLS. Only the cron ingest and the
+│   │   │                       #   P&L recompute, which have no user session, may use it
 │   │   └── database.types.ts   # Generated DB types (supabase gen types)
 │   ├── data/
 │   │   ├── queries.ts          # Data-access layer (read side) — server-only
 │   │   ├── compute.ts          # Pure financial helpers, client-safe: posValue, dailyPL, isITM, rollUpRealized
 │   │   ├── holdings.ts         # Realised-P&L reads (server-only)
+│   │   ├── pnl.ts              # Stored-P&L reads: pnl_summary rows + latest pnl_runs (server-only)
 │   │   └── discovery.ts        # Static /invest goal + theme config (not persisted)
 │   ├── import/                 # Broker CSV pipeline — pure, dependency-free, shared by Next + CLI
 │   │   ├── csv.ts              #   RFC 4180 reader (broker files quote their commas properly)
@@ -83,11 +95,27 @@ client-dashboard/
 │   │   ├── holdings.ts         #   Holdings-snapshot parser + account/security extraction
 │   │   ├── trades.ts           #   Trade-ledger parser + the realised-P&L reducer
 │   │   ├── reconcile.ts        #   Missing-cost-basis worklist + ticker-change suggestions
-│   │   └── import.test.ts      #   28 tests (node --test)
+│   │   ├── runner.ts           #   ImportError · chunked upsert · detectCsvKind (headers, never filenames)
+│   │   ├── run-holdings.ts     #   THE holdings import — prints nothing, exits nothing, returns a result
+│   │   ├── run-trades.ts       #   THE trade-ledger import, ditto. CLI + cron both call these
+│   │   └── *.test.ts           #   43 tests (parsers, reducer, and the runners against a fake DB)
+│   ├── pnl/                    # Database-driven P&L — the calculator engine, fed from Supabase
+│   │   ├── from-db.ts          #   Adapter: stored trades → the engine's ParsedTradeRow (SETTLED only)
+│   │   ├── recompute.ts        #   One account: aggregate → placements → holdings → options → persist
+│   │   ├── providers.ts        #   The expensive shared inputs (Placement Trackers, spot prices)
+│   │   ├── batch.ts            #   Many accounts, ONE tracker parse and one memoised quote per ticker
+│   │   └── recompute.test.ts   #   12 tests
+│   ├── ingest/                 # The morning broker-mail ingest
+│   │   ├── graph-mail.ts       #   Microsoft Graph mailbox reader (sender allowlist + folder + watermark)
+│   │   ├── morning.ts          #   Classify → coverage guardrail → import → one recompute
+│   │   └── morning.test.ts     #   11 tests (fake mailbox + fake DB, no network)
+│   ├── test-support/
+│   │   └── fake-db.ts          # In-memory PostgREST stand-in, so DB choreography is testable
 │   └── export/
 │       ├── order-history.ts    # P&L summary rows + CSV (pure, client-safe)
+│       ├── stored-pnl.ts       # pnl_summary rows → the same PnlSummaryRow the table and exports use
 │       ├── xlsx.ts              # Colour-coded .xlsx via ExcelJS — server-side only
-│       └── *.test.ts            # 21 tests incl. an xlsx generate-and-read-back round trip
+│       └── *.test.ts            # 28 tests incl. an xlsx generate-and-read-back round trip
 ├── store/
 │   ├── usePnlCalculatorStore.ts # P&L Calculator working state — module-scope Zustand so it
 │   │                            #   survives navigating between portal tabs. MEMORY ONLY by
@@ -97,12 +125,14 @@ client-dashboard/
 ├── supabase/
 │   ├── config.toml             # Supabase CLI project config
 │   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
-│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle · trade-ledger · pnl-overrides
+│   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle ·
+│                               #   trade-ledger · pnl-overrides · pnl-summary · mail-ingest
 ├── scripts/
 │   ├── seed-auth-users.mjs     # Creates the staff Supabase Auth user (role in app_metadata)
-│   ├── _import-common.mjs      # Shared importer plumbing (service-role client, chunked upserts)
-│   ├── import-holdings.mjs     # Holdings snapshot → clients / accounts / securities / positions
-│   └── import-trades.mjs       # Trade ledger → trades / realized_pnl + reconciliation report
+│   ├── _import-common.mjs      # CLI plumbing only: argv, file reads, console rendering
+│   ├── import-holdings.mjs     # Thin CLI over lib/import/run-holdings.ts
+│   ├── diff-pnl-csv.mjs        # Compare two P&L exports ticker-by-ticker (npm run diff:pnl)
+│   └── import-trades.mjs       # Thin CLI over lib/import/run-trades.ts
 ├── db/
 │   └── schema.sql              # Canonical schema reference (= the first migration)
 ├── docs/
@@ -110,7 +140,8 @@ client-dashboard/
 │   ├── LLD.md                  # Low-Level Component Design
 │   └── REQUIREMENTS.md         # Prototype → production requirements + flow charts
 ├── proxy.ts                    # Next 16 Proxy (ex-Middleware): refreshes the Supabase auth session
-├── .env.local                  # Supabase URL + anon key + service-role key (gitignored)
+├── vercel.json                 # Cron schedules for the morning ingest (three UTC times — see §4.6)
+├── .env.local                  # Supabase URL + anon key + service-role key + mailbox config (gitignored)
 ├── vitti-capital-platform.html # Original single-file prototype (visual source of truth)
 ├── next.config.ts
 ├── eslint.config.mjs
@@ -128,8 +159,10 @@ client-dashboard/
 - **Data-access layer:** `lib/data/queries.ts` — server-only read functions returning denormalized, UI-ready shapes (prices/names joined from `securities`, `dte` computed from `expiry_date`), each wrapped in `React.cache`. Pure financial math lives in `lib/data/compute.ts`.
 - **Mutations:** all state changes are **Server Actions** (`app/actions/placements.ts`, `app/actions/alerts.ts`) that write to Supabase, append an `audit_log` entry, and `revalidatePath("/portal", "layout")` so the UI reflects the new state. Islands call them from event handlers.
 - **Auth & session:** **real Supabase Auth** (email + password). `signInWithPassword` (`app/actions/session.ts`) verifies credentials; the root `proxy.ts` refreshes the session cookie each request; `lib/session.ts` reads identity via `supabase.auth.getUser()` (`getActiveClientId` / `getActor`), with the workspace role in `app_metadata.role`. Only `vitti_view` (staff's inspected client) remains a cookie. Deferred: RLS, route protection, and real TOTP MFA (the login OTP screen is cosmetic).
-- **Broker data pipeline:** two CSV exports (holdings snapshot + contract-note ledger) are imported by plain-Node CLIs in `scripts/`, with all parsing and P&L logic in `lib/import/` — pure, dependency-free modules the Next server and the CLIs both load. Node 24 strips their types natively, which is why they import each other with an explicit `.ts` extension (`allowImportingTsExtensions`). See §4.5.
-- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts" "store/**/*.test.ts"`. 177 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, the export's exit classification, an xlsx generate-and-read-back round trip that asserts on what Excel would actually show, Black-Scholes (against a textbook reference value, plus the degenerate inputs that must collapse to intrinsic rather than `NaN`), the add-on spec parser against every shape the real workbooks contain — both column spellings, the `Unisted` typo, and the expiry-less cells dated off settlement — and the P&L Calculator store's `useState`-compatible setters.
+- **Broker data pipeline:** two CSV exports (holdings snapshot + contract-note ledger) with all parsing and P&L logic in `lib/import/` — pure, dependency-free modules the Next server and the CLIs both load. Node 24 strips their types natively, which is why they import each other with an explicit `.ts` extension (`allowImportingTsExtensions`). The imports themselves live in `run-holdings.ts` / `run-trades.ts` under two rules that make them callable from anywhere: **nothing prints** (every figure a caller might show is returned) and **nothing exits** (a refusal is a typed `ImportError`). The CLIs in `scripts/` are renderers over them, and the cron ingest is the second caller. See §4.5–4.6.
+- **Scheduled ingest:** the broker mails both files each weekday; a cron route (`app/api/ingest/morning/route.ts`, `vercel.json`) reads that mailbox over Microsoft Graph, imports what it carries and recomputes the affected accounts' P&L. Guarded by a constant-time `CRON_SECRET` comparison, because there is no user here and the work behind it writes across every client's rows. See §4.6.
+- **Stored P&L:** `pnl_summary` + `pnl_runs` hold the calculator's output per account, rebuilt by `lib/pnl/recompute.ts`. There is deliberately **one P&L engine** — `lib/pnl-calculator.ts`, written for an uploaded file — and `lib/pnl/from-db.ts` feeds it the database instead of reimplementing it, so the calculator page and the client profile cannot disagree.
+- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts" "store/**/*.test.ts"`. 223 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, the export's exit classification, an xlsx generate-and-read-back round trip that asserts on what Excel would actually show, Black-Scholes (against a textbook reference value, plus the degenerate inputs that must collapse to intrinsic rather than `NaN`), the add-on spec parser against every shape the real workbooks contain — both column spellings, the `Unisted` typo, and the expiry-less cells dated off settlement — and the P&L Calculator store's `useState`-compatible setters. The newer suites cover what only appears once a **database** is involved, against an in-memory PostgREST stand-in (`lib/test-support/fake-db.ts`) rather than a live project: which rows a full replace may delete, whether re-running a file double-counts it, that a ticker dropped by both sources leaves the stored P&L, that a cancelled trade never moves it, and that a truncated snapshot is quarantined instead of emptying the book.
 - **Spreadsheets:** `exceljs` is the one non-Supabase runtime dependency, and it is confined to a **server action** (`app/actions/exports.ts`) — a build check confirms it appears in no client chunk, so the browser only ever receives the finished bytes.
 - **Charts:** hand-written SVG, no charting library — a diverging bar chart for realised P&L (`RealizedPnlChart.tsx`). The `--color-gain`/`--color-loss` pair was validated for colour-vision deficiency and lands in the ΔE 6–8 floor band, so polarity is carried by **bar direction and signed value labels** as well as hue.
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
@@ -150,11 +183,11 @@ npm install --legacy-peer-deps
 ```
 
 ### 4.2 Environment
-Create `.env.local` from your Supabase project (Dashboard → Project Settings → API). The `SERVICE_ROLE` key is **server-only** — it is used solely by the CLI scripts in `scripts/` (auth seeding §4.4, broker imports §4.5), which need to bypass RLS, and must never reach the browser:
+Create `.env.local` from your Supabase project (Dashboard → Project Settings → API). The `SERVICE_ROLE` key is **server-only** and bypasses RLS. Three things use it and nothing else may: the CLI scripts in `scripts/` (auth seeding §4.4, broker imports §4.5), the cron ingest (§4.6), and the P&L recompute it triggers — all of which run with no user session and write across every client's rows. In the app it is reachable only through `lib/supabase/admin.ts`, which is `import "server-only"` so a Client Component importing it is a build error rather than a runtime leak:
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY   # for scripts/seed-auth-users.mjs only
+SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 ```
 
 #### Private spreadsheet links (optional — P&L calculator)
@@ -236,8 +269,8 @@ Add `--dry-run` to either to print the parsed totals and a P&L preview **without
 
 | Stage | Owns | Grain |
 |---|---|---|
-| `import-holdings.mjs` | `clients`, `accounts`, `securities`, `positions` | account × security code |
-| `import-trades.mjs` | `trades`, `realized_pnl` | account × **parent** code |
+| `run-holdings.ts` | `clients`, `accounts`, `securities`, `positions` | account × security code |
+| `run-trades.ts` | `trades`, `realized_pnl` | account × **parent** code |
 
 **Security codes.** ASX ordinaries are exactly three characters and may contain digits (`ADN`, `AT4`, `PC2`); derivatives extend that root (`EOSXX`, `ADNOD`, `PC2ZZ`). The parent is the **first three characters** — never a literal `XX` strip, which would mangle real codes like `LDX`. Each raw code keeps its own `securities` row (an option and its ordinary trade at different prices, so their units are not additive); `securities.parent_code` links them, and the UI rolls up by `COALESCE(parent_code, code)`.
 
@@ -252,13 +285,67 @@ Run the pipeline's unit tests (Node's built-in runner, no framework):
 npm test
 ```
 
-### 4.6 Run Development Server
+### 4.6 Automated morning ingest (broker mail → database → P&L)
+
+The broker mails both files every weekday morning. `app/api/ingest/morning/route.ts` reads that mailbox, runs the **same** importers as §4.5, and rebuilds the P&L for whatever they touched.
+
+```bash
+BROKER_MAILBOX=ecm@vitti.capital                        # must be a real MAILBOX
+BROKER_SENDER_ALLOWLIST=reporting@morrisonsecurities.com # comma-separated; required
+BROKER_MAIL_FOLDER=BrokerData                            # optional but recommended
+BROKER_SUBJECT_PATTERN=                                  # optional regex
+CRON_SECRET=<a long random string>
+```
+
+**`BROKER_MAILBOX` must have a mailbox behind it.** A distribution list forwards to its members and stores nothing, so Graph has nothing to open and returns 404 — the error names this outright, because it is otherwise a long afternoon. If the broker mail arrives via a DL, point this at a shared mailbox (or an individual's) that is a **member** of that list.
+
+**Azure.** Add `Mail.Read` as an **Application** permission and grant admin consent — then scope it. `Mail.Read` at application level grants access to *every mailbox in the tenant*, so restrict the app registration with an `ApplicationAccessPolicy` covering only this mailbox (via a mail-enabled security group containing just it). Without that, a leaked client secret reads the whole company's mail.
+
+**A folder beats scanning the inbox.** A mail rule that files broker mail into `BrokerData` makes the scan cheap, removes any chance of touching an unrelated message, and gives the desk a **replay** mechanism: drag a missed file into the folder and the next run picks it up.
+
+**Three schedules, because Sydney is not a fixed offset.** Cron runs in UTC; AEST is UTC+10 and AEDT is UTC+11, so one fixed time is an hour wrong for half the year. `vercel.json` fires at 22:00, 23:00 and 00:30 UTC and the job is made cheap to repeat instead — attachments dedupe on Graph's own message/attachment ids and both importers are idempotent, so a run with no new mail does almost nothing.
+
+**What a run does, in order.** Holdings before trades (the snapshot *creates* the accounts a ledger references, and a trade for an unknown account is refused rather than attributed by guesswork), then **one** P&L recompute across everything touched — the Placement Tracker workbooks are parsed once for the whole batch and each ticker is quoted once, not once per account.
+
+**A file is identified by its CSV headers, never its filename.** `detectCsvKind` matches the column set; the broker is free to rename and reorder. Anything matching neither export is recorded as `unrecognised` and skipped — running the wrong importer would be worse than doing nothing.
+
+> **The coverage guardrail.** The holdings import is a **full replace**: every account in the file has its positions deleted and rewritten, so a truncated export would faithfully wipe the accounts it omits. Before applying one, the ingest parses it with `--dry-run` semantics and compares its account list against the accounts that currently hold positions. Below **90 %** coverage the file is **quarantined** rather than applied, the reason is stored on the `ingest_attachments` row, and the watermark does **not** advance — so it is offered again tomorrow instead of being silently skipped past. Clients do close accounts; a tenth of the book vanishing overnight is a different event.
+
+Every run and every attachment is written down (`ingest_runs`, `ingest_attachments`) — nobody is watching the output at 9am, so the output has to be recorded. A catch-up run can be triggered by hand with the same secret:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/ingest/morning
+```
+
+#### Verifying the setup before 9am
+
+`/api/ingest/health` walks the same path the ingest walks — config → Graph token → mailbox → folder → a filtered message count — and **stops before downloading an attachment**. Nothing is imported, nothing is written, and each step is reported separately, because "it doesn't work" has five different causes here and the fix for each is in a different console.
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/ingest/health
+```
+
+A 404 on the mailbox step names the distribution-list case outright; a 403 points at the missing consent or the access policy. An `ok: true` with *no matching messages* is a real answer too — the mailbox is readable but `BROKER_SENDER_ALLOWLIST` does not match what is actually arriving.
+
+#### Verifying the numbers
+
+**After first deploy, press "Rebuild all P&L"** on `/portal/staff/clients`. The client profile renders what the recompute stored, so an account that has never been recomputed has no rows and says so.
+
+Before trusting it, check the engine against the P&L Calculator — the reference implementation, which it shares. The client profile has a **Preview CSV** button that computes **without storing** and downloads the result in the *calculator's own* CSV format, so the two are directly comparable:
+
+```bash
+npm run diff:pnl -- calculator-export.csv pnl-preview-<client>.csv
+```
+
+The script reads either export format, matches on ticker, and reports rows present on one side only plus any figure differing by more than a cent. It exits non-zero on a difference. Five things legitimately differ and it prints them rather than letting you hunt for a bug: the two sides read **different ledgers** (uploaded file vs the `trades` table), a different **account scope**, a different **placement client hint** (`clients.display_name` vs the name resolved from the file — this moves the *buy* side), **spot prices** that move between runs, and **overrides** plus a stale reporting period on the calculator.
+
+### 4.7 Run Development Server
 ```bash
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000).
 
-### 4.7 Production Build & Verification
+### 4.8 Production Build & Verification
 ```bash
 npm run lint
 npm run build
@@ -288,8 +375,12 @@ Migrated routes read the DAL through the async server client (`cookies()`), so t
 | P&L summary export | ✅ one row per company (Row Labels · Company · Buy Qty · Sell Qty · Buy Price · Sell/Current Price · PnL · Open Positions · Type) with a summing Grand Total, rendered identically on screen and in both files. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — the P&L column is green above zero and red below it (a loss reading `-$1,234.56`, not accounting brackets), on every row and on the Grand Total alike. The workbook is built in a server action so the ~1 MB library never reaches the browser |
 | Desk P&L overrides | ✅ `…_pnl_overrides.sql` + `app/actions/pnl-overrides.ts` — an **Edit** button on each summary row lets staff correct Buy Qty / Sell Qty / Buy Price / Sell Price when a source is incomplete. Null = keep the computed value; P&L itself is never stored, so an edited row cannot contradict its own columns. Every edit is audited and marked in the table and both exports |
 | In-Memory P&L Calculator | ✅ `/portal/staff/pnl-calculator` — a dedicated admin tool that parses trade ledger Excel/CSV files entirely in-memory with **zero database persistence**. Automatically auto-detects SELL trades (including negative unit fallback `rawUnits < 0`), maps derivative/option tickers (`ENVO → ENV`, `NVOO → NVO`), filters strictly `SETTLED` trades, supports account filtering (`external_ref` bar), an **optional From/To reporting period** on the Contract Date (empty = the lifetime P&L; set = only that period's trades, and only the unlisted options its own placements granted — a placement issued after the period ends cannot grant into it, while the entitlement still needs a parcel *bought* inside it; the holdings snapshot may not invent rows for stocks the period never traded, undated trades are reported rather than silently dropped, and the period is named in the export filename), and multi-file Placement Tracker upload & removal — **one trade file at a time**, a new upload replacing the active one. The placement merge identifies the account holder from the trade file's **`Account` column** resolved through the database (`accounts.external_ref` → `clients.display_name`), falling back to the file name only if that fails — a filename is often wrong (`PKevadiya-….csv` is actually "Sri Guru Nanak Pty Ltd"). A stock placed **more than once** — twice in a year (`KNI (a)` / `KNI (b)` tabs) or a year apart across the two trackers — is no longer summed across those placements; that stacked every parcel on one row and reported a P&L wrong by a whole placement. Each placement is its own record, and the client's own row is the one that fills the summary: matched **by name**, then narrowed by the ledger's **Contract Date year** and by **quantity reconciliation** (the units the ledger cannot account for must equal what the placement delivered). Its Options / Add-Ons cell is what grants the unlisted options, so a placement that granted none cannot inherit another's. Where nothing identifies a placement the row's Buy Qty / Buy Price / P&L are left **blank and flagged red** (`Check Placement Year`) and excluded from the totals rather than guessed. Plus account-scoped DB portfolio holdings sync (`fetchDatabaseHoldingsAction`) for open position market valuation — a **partial exit** (`0 < sellQty < buyQty`) adds the still-held parcel's market value on top of the realised sale, and a **short buy side** (`0 < buyQty < sellQty`) adds the Placement Tracker allocation on top of the recorded buys — flagged `Partial Exit` / `Partial Buy` / `Open` in a **Comments** column. A DB holding the trade file never mentions (free placement options have no contract note, so nothing ever created a row) now gets its own row using the snapshot's cost base, tagged `DB Holding` — previously the whole position was silently dropped from the P&L. **Unlisted placement options** from the Overview grant column — `Add-Ons` in the 2026 tracker, `Options` in the 2025 one, both matched, since matching only the newer spelling meant a whole year of grants read as absent — (`1:3 @$0.14 Unlisted Expiry 31/12/27`, including multi-tranche cells like `… + 1:2 @$1.00 Unlisted Piggyback Exp 30/06/28`) become their own zero-cost rows priced with **Black-Scholes** (spot from `yahoo-finance2` → the **ASX market-data feed** → DB snapshot, with the source shown so a live quote is never confused with a stale one; vol 50% / rate 5% / div 0%), with a hover card showing every input — a model estimate, not a mark. Cells that name no expiry (most of the 2025 column) are dated **settlement + 2 years** by desk convention and flagged `assumed` everywhere they surface, rather than being dropped as unpriceable. 9 filter tabs incl. `Unlisted Options` and `Open`; option rows are excluded from `Unmatched` since their legs are not expected to balance. Working state (uploaded files, merges, filters) lives in a module-scope Zustand store so it **survives navigating to another portal tab** — memory only, never browser storage, and cleared on sign-out. Exports formatted Excel (`.xlsx`) and CSV files, named after the client and the period they cover — `pnl-114716-Sri-Guru-Nanak-PTY-LTD-2026-01-01_to_2026-06-30.xlsx`, or today's date when no period is set — with every account in scope contributing its number and name. |
-| Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import |
+| Stored P&L | ✅ `…_pnl_summary.sql` — `pnl_summary` (account × ticker) + `pnl_runs` (one per computation). The client profile now **renders what was stored** rather than deriving it per request: the full calculation marks open positions to the snapshot, fills placement buy sides from the Placement Trackers (~48 s to parse) and prices free unlisted options with Black-Scholes off a **live** spot, none of which a page render can reproduce and all of which must be reproducible later if a client was shown the number — hence `pnl_runs`, which records the spot sources, the tracker count and the warnings in force. Crucially there is **no second engine**: `lib/pnl/from-db.ts` reshapes stored `trades` into the calculator's own `ParsedTradeRow` and every downstream stage is the code the calculator page runs, so the two surfaces cannot drift. Overrides are still applied at **read** time, so a correction keeps tracking its sources instead of being frozen in. A **Recalculate** button per client, a "calculated at" stamp, and **Rebuild all P&L** on the register |
+| Automated morning ingest | ✅ `…_mail_ingest.sql` + `app/api/ingest/morning/route.ts` — a cron job reads the broker's mailbox over Microsoft Graph (sender allowlist, optional folder + subject regex, received-time watermark), classifies each attachment **by its CSV headers rather than its filename**, imports holdings before trades, and fires one P&L recompute across every account touched. Three UTC schedules make it DST-proof; idempotent importers plus id-level attachment dedupe make the repeats free. A holdings file covering under 90 % of the accounts that currently hold positions is **quarantined** — the import is a full replace and would otherwise wipe what it omits — and the watermark does not advance past it, so it is re-offered rather than lost. `ingest_runs` / `ingest_attachments` record every run and every file, since nobody reads a 9am console |
+| Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import (the unlisted-option spot *is* live: Yahoo → ASX → snapshot, with the source recorded) |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
 
-> **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Real client holdings and realised P&L now arrive through an offline broker-CSV pipeline (§4.5). Remaining hardening: real **TOTP 2FA**, a live price feed, and parcel-level cost basis.
+> **Cut-over complete + auth enforced.** Every portal route renders as a Server Component reading the Supabase DAL, all state mutations are Server Actions that write to Supabase + `audit_log` and revalidate the portal, login is **real Supabase Auth** (email + password), and access is enforced end-to-end: **route protection** (proxy + layouts) plus **Postgres RLS** so the database itself guarantees a client only ever touches their own rows. The legacy in-memory engine (`lib/db.ts`, `store/useDatabaseStore.ts`) is no longer imported by any route and is pending removal. Real client holdings and realised P&L arrive through the broker-CSV pipeline (§4.5), which now **runs itself** every weekday morning off the broker's mail (§4.6) and rebuilds each affected account's stored P&L. Remaining hardening: real **TOTP 2FA**, a live price feed for ordinary holdings, and parcel-level cost basis.
+>
+> **Not yet exercised against production.** The ingest's 11 tests run against a fake mailbox and a fake database; it has never read the real `ecm@vitti.capital`, and whether that address has a mailbox or is a nested distribution list is still open. The recompute has likewise only run against the fake — before pressing **Rebuild all P&L**, recalculate one client and reconcile the figures against the P&L Calculator, which runs the same engine.

@@ -6,7 +6,7 @@ The Vitti Capital Platform is a structured, production-ready Next.js application
 The objectives of the platform are:
 - **High Fidelity UI:** Mirroring the aesthetic language of the original mock-up, including custom typography (Fraunces, Hanken Grotesk, IBM Plex Mono), HSL colors (navy, green, paper, etc.), custom option expiry urgency rails, and moneyness bars.
 - **Simulated Real-World Functions:** Stateful operations for bidding on open capital raises, scaling allocations, acknowledging system/custom notifications, monitoring option expiration, and viewing transactional audit logs.
-- **Real Broker Data:** holdings and P&L are no longer simulated. Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by an offline pipeline (§3.1d) that derives realised P&L from the trade history and reports, rather than silently patches, anything it cannot substantiate.
+- **Real Broker Data:** holdings and P&L are no longer simulated. Two broker CSV exports — a holdings snapshot and a contract-note ledger — are imported by a pipeline (§3.1d) — scheduled off the broker's mail each weekday morning (§3.1f), and runnable by hand — that derives realised P&L from the trade history and reports, rather than silently patches, anything it cannot substantiate.
 - **Dual-role Workspaces:** Dynamic interfaces tailored to **Clients** (portfolio valuation, placing placement bids, options overview, AI assistant) and **Staff/Advisers** (adviser registry, scaling back raises, updating deal stages, auditing trails).
 
 ---
@@ -36,19 +36,31 @@ graph TD
         Actions -->|"insert/update + audit_log + revalidatePath"| Supa
     end
 
-    subgraph "Batch ingress (offline, out-of-band)"
-        CSV[["Broker CSV exports<br/>holdings snapshot · contract notes"]]
-        CSV --> Imp["CLI importers · scripts/import-{holdings,trades}.mjs<br/>pure logic in lib/import/"]
-        Imp -->|"service_role · bypasses RLS"| Supa
+    subgraph "Batch ingress (out-of-band, service_role)"
+        Mail[["Broker mail · ~9am AEST<br/>holdings snapshot · contract notes"]]
+        Cron["Cron · /api/ingest/morning<br/>lib/ingest/{graph-mail,morning}.ts"]
+        CLI["CLI · scripts/import-{holdings,trades}.mjs"]
+        Runners["THE importers · lib/import/run-{holdings,trades}.ts<br/>pure logic in lib/import/"]
+
+        Mail -->|"Microsoft Graph"| Cron
+        Cron --> Runners
+        CLI --> Runners
+        Runners -->|"bypasses RLS"| Supa
+
+        Cron --> Recompute["P&L recompute · lib/pnl/{recompute,batch}.ts<br/>engine = lib/pnl-calculator.ts, fed from the DB"]
+        Recompute -->|"pnl_summary · pnl_runs"| Supa
     end
 
     F -->|"read"| DAL
     G -->|"read"| DAL
     F -->|"mutate (place/withdraw bid, ack/create alert, BPAY)"| Actions
     G -->|"mutate (scale, settle, ack/create alert, setViewClient)"| Actions
+    G -->|"Recalculate · Rebuild all"| Recompute
 ```
 
-> **Two write paths, deliberately separate.** Server actions handle *transactional* change originated by a person in the app. The broker importers handle *bulk reconciliation* against an external system of record — they run offline, as `service_role`, and rebuild derived tables wholesale. Real client holdings enter the platform only through the second path; nothing in the UI writes `positions` or `trades`.
+> **Two write paths, deliberately separate.** Server actions handle *transactional* change originated by a person in the app. The broker importers handle *bulk reconciliation* against an external system of record — they run as `service_role` and rebuild derived tables wholesale. Real client holdings enter the platform only through the second path; nothing in the UI writes `positions` or `trades`.
+
+> **Two front doors, one importer.** The scheduled ingest and the CLI are both thin callers of `lib/import/run-*.ts`. The logic used to live inside the CLI scripts as top-level statements that read argv, wrote to stdout and called `process.exit` — fine for one caller and impossible for a second. It now prints nothing and exits nothing: every figure is returned, and a refusal is a typed `ImportError` the caller can act on. That is what lets an unattended job decide between "tell the operator" and "quarantine the file and alert the desk".
 
 > Every interactive route follows a **server page → client island** split: the Server Component resolves the active client (`getActiveClientId`), fetches from the DAL with `Promise.all`, and passes data as props to a `"use client"` island that keeps the interactivity and calls server actions (e.g. `positions/PositionsClient.tsx`, `placements/PlacementsClient.tsx`, `staff/placements/StaffPlacementsClient.tsx`). Pure-display routes (`insights/`) need no island.
 
@@ -97,6 +109,29 @@ Neither can do the other's job: a snapshot cannot express what was made on units
 
 - **All logic is pure and shared.** Parsing, ticker normalization, the cost-basis reducer and reconciliation live in `lib/import/` with no I/O, no `server-only`, and no dependencies — so the same code is unit-tested, runs in the CLIs today, and could back a staff upload UI tomorrow without a rewrite.
 - **Idempotent by construction.** The snapshot import is a full replace scoped to the accounts in the file; the ledger upserts on `(cnote, raw_security, side)`. Re-running any export converges to the same rows.
+- **The imports themselves are `run-holdings.ts` / `run-trades.ts`**, and both the CLI (§3.1d) and the scheduled ingest (§3.1f) call them. They return a structured result and throw typed errors rather than printing and exiting, which is the whole reason a second, unattended caller was possible at all.
+
+### 3.1f Scheduled mail ingest (`lib/ingest/`, `app/api/ingest/morning/route.ts`)
+
+The broker mails the same two exports every weekday around 9am AEST. A cron route reads that mailbox and runs the pipeline above.
+
+- **Mailbox, not list.** Read over Microsoft Graph with the app registration already used for private spreadsheet links. `BROKER_MAILBOX` must resolve to a real mailbox — a distribution list forwards to its members and stores nothing, so there is nothing for Graph to open. `Mail.Read` at application level reaches *every* mailbox in the tenant, so the registration is scoped with an `ApplicationAccessPolicy` to just this one.
+- **Which mail, then which file.** Sender allowlist first (an env var, because a broker's address changes without a deploy), optionally a subject regex and a mail folder, then a received-time watermark. None of that decides *what a file is*: that is settled by the **CSV headers**, because filenames are a convention someone has to remember and are routinely wrong. A file matching neither export is recorded and skipped rather than guessed at.
+- **Order matters and is enforced.** Holdings before trades — the snapshot creates the accounts a ledger references, and a trade for an unknown account is refused rather than attributed by guesswork. Then **one** recompute for everything touched.
+- **The coverage guardrail.** The holdings import is a full replace, so a truncated export would faithfully delete the accounts it omits. A file covering under 90% of the accounts that currently hold positions is **quarantined**, and the watermark does not advance past it — it is re-offered tomorrow rather than skipped. Clients do close accounts; a tenth of the book disappearing overnight is a different event, and the difference is exactly what a threshold encodes.
+- **Everything is written down.** `ingest_runs` and `ingest_attachments` record each run and each file with its outcome and reason. Nobody is watching a console at 9am, so the output has to be a table — a quarantined file in particular has to be findable, explainable and re-runnable by hand.
+- **Safe to repeat, which is the DST answer.** Cron is UTC and Sydney is UTC+10/+11, so three schedules fire across the window instead of tracking the changeover. Attachment dedupe on Graph's own ids plus idempotent importers make a redundant run almost free.
+
+### 3.1g Stored P&L (`lib/pnl/`, `pnl_summary`, `pnl_runs`)
+
+The client profile's P&L table renders what was computed and **stored**, rather than deriving it on each request.
+
+- **Why store at all.** The full calculation is not a pure function of the database. Free unlisted options are valued with Black-Scholes off a **live** spot price, and the Placement Tracker workbooks cost ~48s to parse. A figure that depends on the minute it was computed cannot be re-derived later — and one that has been shown to a client must be explainable a week afterwards. `pnl_runs` records the inputs in force (spot sources, tracker count, warnings); `pnl_summary.run_id` ties every row to one.
+- **Why not `realized_pnl`.** That table remains the cost-basis rollup over the ledger alone: parent-code grain, no placement enrichment, no open-position valuation, no option rows. It answers a different question and keeps answering it.
+- **One engine, two front doors.** The temptation is a second implementation that reads the database — which is how two P&L figures for the same client start disagreeing and the desk has to decide which to believe. Instead `lib/pnl/from-db.ts` reshapes stored `trades` into the *calculator's own* `ParsedTradeRow`, and every stage after that (aggregate → Placement Tracker merge → snapshot valuation → Black-Scholes) is the code the calculator page runs. The file upload and the morning ingest are two ways into one engine.
+- **Expensive inputs are injected, not fetched.** `recomputeAccountPnl` refuses to load the trackers or quote a price itself; `lib/pnl/batch.ts` resolves both once and shares them, memoising quotes per ticker. Fifty clients holding the same option cost one quote — and, less obviously, are all valued at the *same* quote, which per-account fetching would not guarantee.
+- **Overrides are not baked in.** `pnl_overrides` is still applied at read time (§3.1c / LLD §8.16), so a correction keeps tracking the sources underneath it instead of being frozen into a stored row.
+- **Staleness is shown, not hidden.** The tab carries a "calculated at" stamp and the run's warnings, plus a **Recalculate** button; the register has **Rebuild all P&L** for the first fill and after an engine change. A stored figure is only as good as its age, and the age is a fact the reader is entitled to.
 
 ### 3.1e In-Memory PNL Calculator (`/portal/staff/pnl-calculator`)
 A dedicated admin utility that parses broker trade ledger files (`.xlsx`, `.xls`, `.csv`, `.xlsm`, `.xlsb`) and Placement Tracker workbooks entirely in-memory with **zero database persistence**:
@@ -159,13 +194,22 @@ The portal layout is fully responsive natively using CSS media queries (Tailwind
 4. **Acknowledgement:** Clicking "Ack" calls the `ackAlert` server action, which sets `acknowledged`/`acknowledged_at`/`acknowledged_by` and revalidates the portal, moving it down the priority list.
 
 ### 4.3 Broker Reconciliation Lifecycle (holdings + realised P&L)
-1. **Snapshot import:** `scripts/import-holdings.mjs` parses the holdings export, upserts every `securities` code (linking derivatives to their ordinary via `parent_code`), creates a client + account per broker account number, and **fully replaces** `positions` for those accounts. Market Price lands in `securities.last_price` — currently the platform's only price source.
-2. **Ledger import:** `scripts/import-trades.mjs` upserts contract notes into `trades` by note number. Non-settled rows (`CANCELLED` / `REVERSAL` / `REVERSED`) are stored for the audit trail but never reach P&L.
+1. **Snapshot import:** `runHoldingsImport` parses the holdings export, upserts every `securities` code (linking derivatives to their ordinary via `parent_code`), creates a client + account per broker account number, and **fully replaces** `positions` for those accounts. Market Price lands in `securities.last_price` — currently the platform's only price source.
+2. **Ledger import:** `runTradeImport` upserts contract notes into `trades` by note number. Non-settled rows (`CANCELLED` / `REVERSAL` / `REVERSED`) are stored for the audit trail but never reach P&L.
 3. **Replay:** the reducer walks each account's settled ledger chronologically, grouped by **parent** ticker so a placement bought as `EOSXX` and sold as `EOS` nets as the one round trip it was. Cost basis is weighted average; because the broker's `Value` column is already net of brokerage and GST, realised P&L is fee-inclusive without extra arithmetic. Results are written to `realized_pnl`.
 4. **Reconciliation:** the importer reports what it could not establish — sales with no matching purchase, and ledger open-units that disagree with the snapshot. Where an orphaned sale's unit count exactly matches an unsold buy under **another ticker** it proposes a **ticker change** with the buy value to adopt (the real `JBY → BKB` case); ambiguous or option-to-ordinary matches are never auto-proposed.
 5. **Surfacing:** `/portal/staff/clients/[id]` → **Order history** renders the ledger grouped by company under its realised result, with a diverging bar chart ranking companies and every unbacked figure flagged. The flags travel into the CSV export too, so a provisional number never reaches a spreadsheet without its caveat. (See LLD §8.14–8.15.)
 
-### 4.4 Account Lifecycle (create + approved merge)
+### 4.4 Morning Ingest Lifecycle (mail → database → P&L)
+1. **Wake:** cron calls `/api/ingest/morning` with the `CRON_SECRET` bearer (compared in constant time — the endpoint's whole security boundary is that string, and the work behind it rewrites the book). Three UTC schedules cover the AEST/AEDT shift.
+2. **Read:** `fetchBrokerAttachments` lists messages in the configured mailbox/folder from an allowlisted sender, received after the last **clean** run's watermark, and decodes their CSV attachments.
+3. **Skip what is already done:** attachments seen before — keyed on Graph's own `(messageId, attachmentId)` — are dropped. Both importers are idempotent anyway, so this is an optimisation rather than a correctness guarantee.
+4. **Classify by headers:** `detectCsvKind` decides holdings vs trades vs unknown from the column set. Unknown files are recorded and left alone.
+5. **Guard, then import:** a holdings file is parsed dry first and its account list compared against the accounts currently holding positions; under 90% coverage it is **quarantined** with the reason stored. Otherwise holdings apply, then trades.
+6. **Recompute once:** every account touched goes into a single `recomputeAccounts` batch — one Placement Tracker parse, one quote per ticker — writing `pnl_summary` + `pnl_runs`.
+7. **Record:** the run's status (`ok` / `partial` / `failed`), notes and per-attachment outcomes are written. The watermark advances **only** on a clean run, so a quarantined or failed file is offered again tomorrow rather than skipped past. A non-ok run returns HTTP 500 so the platform's own cron monitoring shows it as failed instead of a quiet success with sad JSON inside.
+
+### 4.5 Account Lifecycle (create + approved merge)
 1. **Open account:** A client visits `/portal/client/accounts` and creates a new account (`createAccount`) — it appears immediately in their switcher (empty, s708 "verification pending").
 2. **Request merge:** The client requests merging one account into another (`requestAccountMerge`) → a `pending` `account_merge_requests` row; **no data moves yet**.
 3. **Desk review:** Staff see the request at `/portal/staff/merge-requests` (with a nav badge) and **Approve** or **Reject** (`decideAccountMerge`).

@@ -1,5 +1,9 @@
-// Shared plumbing for the broker importers (scripts/import-*.mjs).
+// Shared CLI plumbing for the broker importers (scripts/import-*.mjs).
 // ----------------------------------------------------------------------------
+// Argv, file reading and console rendering ONLY. The import logic itself lives
+// in lib/import/run-*.ts, because the morning mail ingest runs the same imports
+// with no terminal to print to — see lib/import/runner.ts for why.
+//
 // Both importers write across every client's rows, so they run as service_role
 // and bypass RLS. That key must never reach the browser — these scripts are the
 // only place it is used, alongside seed-auth-users.mjs.
@@ -51,25 +55,6 @@ export function readCsv(file) {
   return fs.readFileSync(file, "utf8");
 }
 
-/**
- * Upsert in chunks. PostgREST caps payload size and a single 300-row statement
- * is no faster than three of 100, so keep batches modest and predictable.
- */
-export async function upsertChunked(supabase, table, rows, options = {}) {
-  const { chunkSize = 250, ...rest } = options;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
-    const { error } = await supabase.from(table).upsert(chunk, rest);
-    if (error) {
-      throw new Error(
-        `upsert ${table} [rows ${i}-${i + chunk.length - 1}] failed: ${error.message}` +
-          (error.details ? `\n  details: ${error.details}` : "") +
-          (error.hint ? `\n  hint: ${error.hint}` : ""),
-      );
-    }
-  }
-}
-
 /** Report parse failures without hiding them behind a count. */
 export function reportRowErrors(errors, label) {
   if (errors.length === 0) return;
@@ -78,6 +63,25 @@ export function reportRowErrors(errors, label) {
     console.warn(`    line ${e.line}: ${e.reason}`);
   }
   if (errors.length > 20) console.warn(`    … and ${errors.length - 20} more`);
+}
+
+/**
+ * Render a failed import and exit non-zero.
+ *
+ * `ImportError` is the runner's structured refusal — it already carries the
+ * offending account numbers or parse failures in `details`, so print those
+ * rather than a bare message. Anything else is a genuine crash and keeps its
+ * stack, which is what you want at 7am.
+ */
+export function die(err) {
+  if (err?.name === "ImportError") {
+    console.error(`\n${err.message}`);
+    for (const d of err.details ?? []) console.error(`  ${d}`);
+    console.error(`\n  (${err.code})`);
+  } else {
+    console.error(err);
+  }
+  process.exit(1);
 }
 
 export const fmtMoney = (n) =>

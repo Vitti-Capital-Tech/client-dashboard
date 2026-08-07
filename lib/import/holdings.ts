@@ -29,7 +29,12 @@ import type { RowError } from "./trades.ts";
  *   Security Class
  */
 
-const REQUIRED = [
+/**
+ * Exported because these columns are also how a file is IDENTIFIED as a
+ * holdings snapshot — see `detectCsvKind`. Filenames are a broker's convention
+ * and change without notice; the column set is the shape itself.
+ */
+export const HOLDINGS_REQUIRED_HEADERS = [
   "Account Number",
   "Account Name",
   "Security Code",
@@ -37,7 +42,9 @@ const REQUIRED = [
   "Holding Qty",
   "Market Price",
   "Average Cost",
-];
+] as const;
+
+const REQUIRED = HOLDINGS_REQUIRED_HEADERS;
 
 export type ParsedHolding = {
   accountRef: string;

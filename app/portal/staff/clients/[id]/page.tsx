@@ -10,6 +10,7 @@ import {
   type PlacementRow,
 } from "@/lib/data/queries";
 import { getClientRealized, getClientPnlOverrides } from "@/lib/data/holdings";
+import { getClientStoredPnl, getClientLatestPnlRuns } from "@/lib/data/pnl";
 import { ClientDetailClient } from "./ClientDetailClient";
 
 // Server Component: single client register view. Fetches the client and all of
@@ -27,18 +28,34 @@ export default async function Page({
     return <div className="text-mut text-center py-10">Client not found on registry.</div>;
   }
 
-  const [accounts, positions, options, placements, alerts, signals, trades, realized, overrides] =
-    await Promise.all([
-      getAccounts(id),
-      getClientPositions(id),
-      getClientOptions(id),
-      getPlacements(),
-      getAlerts(id),
-      getSignals(),
-      getClientTrades(id),
-      getClientRealized(id),
-      getClientPnlOverrides(id),
-    ]);
+  const [
+    accounts,
+    positions,
+    options,
+    placements,
+    alerts,
+    signals,
+    trades,
+    realized,
+    overrides,
+    storedPnl,
+    pnlRuns,
+  ] = await Promise.all([
+    getAccounts(id),
+    getClientPositions(id),
+    getClientOptions(id),
+    getPlacements(),
+    getAlerts(id),
+    getSignals(),
+    getClientTrades(id),
+    getClientRealized(id),
+    getClientPnlOverrides(id),
+    // The P&L table now renders what the recompute STORED, rather than deriving
+    // it here — the full calculation depends on live spot prices and the
+    // Placement Trackers, neither of which a page render can reproduce.
+    getClientStoredPnl(id),
+    getClientLatestPnlRuns(id),
+  ]);
 
   const clientBids: PlacementRow[] = placements.filter((p) =>
     p.bids.some((b) => b.clientId === id),
@@ -60,6 +77,8 @@ export default async function Page({
       trades={trades}
       realized={realized}
       overrides={overrides}
+      storedPnl={storedPnl}
+      pnlRuns={pnlRuns}
     />
   );
 }

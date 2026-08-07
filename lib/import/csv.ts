@@ -92,7 +92,10 @@ export function parseCsvRecords(text: string): {
  * between versions; failing loudly at row 0 beats importing 280 rows of
  * silent nulls because a column was renamed.
  */
-export function requireHeaders(headers: string[], required: string[]): void {
+export function requireHeaders(
+  headers: string[],
+  required: readonly string[],
+): void {
   const present = new Set(headers);
   const missing = required.filter((h) => !present.has(h));
   if (missing.length > 0) {
