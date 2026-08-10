@@ -1,5 +1,9 @@
 import { parseCsvRecords, requireHeaders, type CsvRow } from "./csv.ts";
 import {
+  isContractNotesListing,
+  normaliseContractNotesRow,
+} from "./trade-formats.ts";
+import {
   clean,
   cleanOrNull,
   money,
@@ -69,8 +73,21 @@ export function parseTradeCsv(text: string): {
   trades: ParsedTrade[];
   errors: RowError[];
 } {
-  const { headers, rows } = parseCsvRecords(text);
-  requireHeaders(headers, REQUIRED);
+  const { headers, rows: rawRows } = parseCsvRecords(text);
+
+  // The broker sends this ledger in two shapes. The scheduled mail carries
+  // `ContractNotesListing`, whose columns hold the same data under different
+  // names and different encodings; `trade-formats.ts` rewrites it into the one
+  // shape everything below understands. See that file for each decision.
+  const rows = isContractNotesListing(headers)
+    ? rawRows.map(normaliseContractNotesRow)
+    : rawRows;
+
+  // Checked against the ORIGINAL headers when the file is already canonical,
+  // and skipped when it has just been normalised — the normaliser guarantees
+  // the columns exist, and re-deriving a header list from rewritten rows would
+  // only be able to confirm its own work.
+  if (rows === rawRows) requireHeaders(headers, REQUIRED);
 
   const trades: ParsedTrade[] = [];
   const errors: RowError[] = [];

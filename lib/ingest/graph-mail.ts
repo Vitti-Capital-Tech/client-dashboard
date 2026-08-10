@@ -189,28 +189,58 @@ export async function checkMailboxAccess(): Promise<MailboxCheck> {
     });
   }
 
-  // The real filter, but count-only: does anything from the allowlisted sender
-  // actually exist? An empty result is not an error — it is the answer "the
+  // The real query, through the same degradation ladder the ingest uses — so
+  // this reports what the ingest will actually be able to do, not what an
+  // easier query could. An empty result is not an error; it is the answer "the
   // sender address does not match what is arriving", which is worth knowing
-  // before 9am rather than after.
-  const filter = [
-    "hasAttachments eq true",
-    `(${senders.map((s) => `from/emailAddress/address eq '${s.replace(/'/g, "''")}'`).join(" or ")})`,
-  ].join(" and ");
-
-  const probe = await graph(
-    token,
-    `${base}/messages?$top=5&$select=id,subject,receivedDateTime,from&$orderby=receivedDateTime desc&$filter=${encodeURIComponent(filter)}`,
-  );
+  // before the morning rather than after.
+  const probe = await listMessages(token, base, { senders, since: null, top: 10 });
   if (!probe.ok) {
-    const body = await probe.text().catch(() => "");
-    steps.push({ step: "messages", ok: false, detail: `HTTP ${probe.status} ${body.slice(0, 300)}` });
-    return fail("The mailbox opened but the filtered query failed — see the detail above.");
+    const body = await probe.res.text().catch(() => "");
+    steps.push({
+      step: "messages",
+      ok: false,
+      detail: `HTTP ${probe.res.status} ${body.slice(0, 300)}`,
+    });
+    return fail(
+      probe.res.status === 400 && body.includes("InefficientFilter")
+        ? "Exchange refused even the reduced query. Set BROKER_MAIL_FOLDER and add a mail " +
+          "rule filing the broker's mail into it — a smaller folder is what makes the " +
+          "filter acceptable."
+        : "The mailbox opened but the filtered query failed — see the detail above.",
+    );
   }
 
-  const found = ((await probe.json()) as {
-    value?: { subject: string | null; receivedDateTime: string }[];
+  const all = ((await probe.res.json()) as {
+    value?: {
+      subject: string | null;
+      receivedDateTime: string;
+      from?: { emailAddress?: { address?: string } };
+    }[];
   }).value ?? [];
+
+  // Re-applied here for the same reason the ingest re-applies it: the server
+  // filter may have been dropped to get the query accepted.
+  const found = all.filter((m) =>
+    senders.includes((m.from?.emailAddress?.address ?? "").toLowerCase()),
+  );
+
+  // Subjects are reported verbatim so BROKER_SUBJECT_PATTERN can be written
+  // against what actually arrives rather than what someone remembers.
+  const subjectMatches = subjectPattern
+    ? found.filter((m) => subjectPattern.test(m.subject ?? "")).length
+    : found.length;
+
+  steps.push({
+    step: "subject-filter",
+    ok: !subjectPattern || subjectMatches > 0,
+    detail: subjectPattern
+      ? `${subjectMatches} of ${found.length} recent message(s) match /${subjectPattern.source}/i.` +
+        (subjectMatches < found.length
+          ? " The rest would be SKIPPED — check that is intended."
+          : "")
+      : "No subject filter — every message from an allowlisted sender is considered.",
+  });
 
   steps.push({
     step: "messages",
@@ -232,6 +262,81 @@ export async function checkMailboxAccess(): Promise<MailboxCheck> {
           "rule is filing into the configured folder."
         : undefined,
   };
+}
+
+/**
+ * List candidate messages, degrading the query until Exchange accepts it.
+ *
+ * Exchange rejects a `$filter` it considers too expensive with **HTTP 400
+ * `InefficientFilter`** — "the restriction or sort order is too complex". Which
+ * queries qualify depends on the mailbox's size and indexes, not on anything
+ * visible from here, so a single hand-tuned query is a guess that works on one
+ * mailbox and fails on the next. Three attempts, each cheaper than the last:
+ *
+ *   1. sender + hasAttachments + watermark, newest first
+ *   2. …without `$orderby` — combining a sort with a navigation-property
+ *      filter (`from/emailAddress/address`) is the usual trigger
+ *   3. …without the sender filter either, leaving only the indexed
+ *      `receivedDateTime` and `hasAttachments`
+ *
+ * The sender allowlist is NOT weakened by attempt 3 — it is re-applied in
+ * memory by the caller, which is the only place it has ever been enforced for
+ * subject anyway. Server-side filtering is a bandwidth optimisation here, never
+ * the security boundary.
+ *
+ * Ordering is likewise not lost: the caller sorts what it gets. `$orderby`
+ * mattered only for choosing WHICH messages `$top` returns, which the watermark
+ * already narrows to a handful.
+ */
+async function listMessages(
+  token: string,
+  base: string,
+  opts: { senders: string[]; since: Date | null; top: number },
+): Promise<{ ok: true; res: Response } | { ok: false; res: Response }> {
+  const { senders, since, top } = opts;
+
+  const senderClause = `(${senders
+    .map((s) => `from/emailAddress/address eq '${s.replace(/'/g, "''")}'`)
+    .join(" or ")})`;
+  const windowClause = since ? `receivedDateTime gt ${since.toISOString()}` : null;
+
+  const attempts: { filter: string; order: boolean }[] = [
+    { filter: ["hasAttachments eq true", windowClause, senderClause].filter(Boolean).join(" and "), order: true },
+    { filter: ["hasAttachments eq true", windowClause, senderClause].filter(Boolean).join(" and "), order: false },
+    { filter: ["hasAttachments eq true", windowClause].filter(Boolean).join(" and "), order: false },
+  ];
+
+  let last: Response | null = null;
+
+  for (const [i, attempt] of attempts.entries()) {
+    const res = await graph(
+      token,
+      `${base}/messages?$top=${top}` +
+        `&$select=id,receivedDateTime,subject,from,hasAttachments` +
+        (attempt.order ? `&$orderby=receivedDateTime desc` : "") +
+        `&$filter=${encodeURIComponent(attempt.filter)}`,
+    );
+
+    if (res.ok) {
+      if (i > 0) {
+        console.warn(
+          `Broker mail: Exchange rejected query ${i} as too complex; ` +
+            `succeeded with the reduced form. Setting BROKER_MAIL_FOLDER would avoid this.`,
+        );
+      }
+      return { ok: true, res };
+    }
+
+    // Only an InefficientFilter is worth retrying — a 403 or 404 will not
+    // improve by asking for less, and retrying would just hide the real cause.
+    const body = await res.clone().text().catch(() => "");
+    if (!(res.status === 400 && body.includes("InefficientFilter"))) {
+      return { ok: false, res };
+    }
+    last = res;
+  }
+
+  return { ok: false, res: last! };
 }
 
 async function graph(token: string, path: string): Promise<Response> {
@@ -317,40 +422,31 @@ export async function fetchBrokerAttachments(
     base += `/mailFolders/${folderId}`;
   }
 
-  // Filtering server-side keeps a busy mailbox from being pulled over the wire.
-  // Sender is filtered here; subject is matched locally, because Graph's
-  // `contains` is not supported on `subject` in a $filter alongside these.
-  const filters = ["hasAttachments eq true"];
-  if (since) filters.push(`receivedDateTime gt ${since.toISOString()}`);
-  filters.push(
-    `(${senders.map((s) => `from/emailAddress/address eq '${s.replace(/'/g, "''")}'`).join(" or ")})`,
-  );
+  const top = opts.maxMessages ?? 50;
 
-  const query =
-    `${base}/messages?$top=${opts.maxMessages ?? 50}` +
-    `&$select=id,receivedDateTime,subject,from,hasAttachments` +
-    `&$orderby=receivedDateTime desc` +
-    `&$filter=${encodeURIComponent(filters.join(" and "))}`;
-
-  const listRes = await graph(token, query);
+  const listRes = await listMessages(token, base, { senders, since, top });
   if (!listRes.ok) {
-    const body = await listRes.text().catch(() => "");
+    const body = await listRes.res.text().catch(() => "");
+    const status = listRes.res.status;
     // 404 on a valid-looking address is the distribution-list symptom, and it is
     // worth naming outright — it is otherwise a long afternoon.
     const hint =
-      listRes.status === 404
+      status === 404
         ? ` — ${mailbox} may be a distribution list rather than a mailbox, or the ` +
           `app has no ApplicationAccessPolicy covering it.`
-        : "";
+        : status === 400 && body.includes("InefficientFilter")
+          ? ` — Exchange refused even the reduced query. Set BROKER_MAIL_FOLDER so a ` +
+            `mail rule narrows the scan to one folder.`
+          : "";
     return {
       ok: false,
       attachments: [],
       messagesSeen: 0,
-      error: `Graph message list failed (${listRes.status})${hint} ${body.slice(0, 300)}`,
+      error: `Graph message list failed (${status})${hint} ${body.slice(0, 300)}`,
     };
   }
 
-  const messages = ((await listRes.json()) as {
+  const messages = ((await listRes.res.json()) as {
     value?: {
       id: string;
       receivedDateTime: string;
@@ -359,9 +455,18 @@ export async function fetchBrokerAttachments(
     }[];
   }).value ?? [];
 
-  const wanted = messages.filter(
-    (m) => !subjectPattern || subjectPattern.test(m.subject ?? ""),
-  );
+  // The sender allowlist is re-applied HERE, unconditionally.
+  //
+  // `listMessages` may have had to drop it from the server-side query to get
+  // past Exchange's InefficientFilter, so the server filter is a bandwidth
+  // optimisation and never the boundary. Enforcing it in one place, on every
+  // path, is what stops "the query degraded" from quietly becoming "we now
+  // import attachments from anyone who can mail this address".
+  const wanted = messages.filter((m) => {
+    const from = (m.from?.emailAddress?.address ?? "").toLowerCase();
+    if (!senders.includes(from)) return false;
+    return !subjectPattern || subjectPattern.test(m.subject ?? "");
+  });
 
   const attachments: BrokerAttachment[] = [];
 

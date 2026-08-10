@@ -20,6 +20,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseCsvRecords } from "./csv.ts";
 import { HOLDINGS_REQUIRED_HEADERS } from "./holdings.ts";
 import { TRADE_REQUIRED_HEADERS } from "./trades.ts";
+import { CONTRACT_NOTES_LISTING_HEADERS } from "./trade-formats.ts";
 
 /**
  * A service-role Supabase client. Both importers write across every client's
@@ -121,6 +122,8 @@ export function detectCsvKind(text: string): CsvKind {
     required.every((h) => present.has(h));
 
   if (hasAll(HOLDINGS_REQUIRED_HEADERS)) return "holdings";
+  // Either dialect of the trade ledger — see lib/import/trade-formats.ts.
   if (hasAll(TRADE_REQUIRED_HEADERS)) return "trades";
+  if (hasAll(CONTRACT_NOTES_LISTING_HEADERS)) return "trades";
   return "unknown";
 }
