@@ -248,7 +248,7 @@ test("an attachment already processed is not processed again", async () => {
 
   const report = await go();
   assert.equal(report.attachments.length, 0);
-  assert.match(report.notes.join(" "), /already processed/);
+  assert.match(report.notes.join(" "), /already imported/);
   assert.equal(tables.positions.length, 0, "nothing was re-applied");
 });
 
@@ -384,4 +384,96 @@ test("an empty tracker cache stops the recompute but not the import", async () =
   assert.equal(tables.positions.length, 1, "the import still happened");
   assert.match(report.notes.join(" "), /Placement Tracker cache is empty/);
   assert.equal(tables.pnl_recompute_queue.length, 1, "the recompute is still owed");
+});
+
+test("a FAILED attachment is retried, not treated as done", async () => {
+  // Only `imported` and `unrecognised` are final. A failure's cause is usually
+  // something a later run fixes — a missing account a holdings snapshot then
+  // creates — and marking it seen manufactures a permanent skip out of a
+  // temporary problem. Three real trade files were lost to exactly this.
+  const att = attachment();
+  const { go, tables } = run(
+    {
+      ingest_attachments: [
+        { message_id: att.messageId, attachment_id: att.attachmentId, outcome: "failed" },
+      ],
+    },
+    [att],
+  );
+
+  const report = await go();
+
+  assert.equal(report.attachments.length, 1, "retried");
+  assert.equal(report.attachments[0].outcome, "imported");
+  assert.equal(tables.positions.length, 1);
+});
+
+test("a QUARANTINED attachment is retried too", async () => {
+  // The guardrail may refuse again, and that is fine — but the refusal must be
+  // re-decided against today's book, not inherited from yesterday's.
+  const att = attachment();
+  const { go } = run(
+    {
+      ingest_attachments: [
+        { message_id: att.messageId, attachment_id: att.attachmentId, outcome: "quarantined" },
+      ],
+    },
+    [att],
+  );
+
+  const report = await go();
+  assert.equal(report.attachments.length, 1, "re-examined rather than skipped");
+});
+
+test("a byte-identical file is imported once, not once per copy", async () => {
+  // The broker re-sends the same full-history export daily, so three identical
+  // 4,026-row files sat in one mailbox. Each costs ~10.8s to import and cannot
+  // reach a state the first did not — thirty seconds of a sixty-second budget
+  // spent arriving where the database already was.
+  const content = tradesCsv("114716");
+  const { go, tables } = run(
+    {
+      clients: [{ id: "c1", external_ref: "114716" }],
+      accounts: [{ id: "a1", external_ref: "114716", client_id: "c1" }],
+      securities: [{ code: "EOS", parent_code: null }],
+    },
+    [
+      attachment({ messageId: "m1", attachmentId: "a1", filename: "day1.csv", content }),
+      attachment({ messageId: "m2", attachmentId: "a2", filename: "day2.csv", content }),
+      attachment({ messageId: "m3", attachmentId: "a3", filename: "day3.csv", content }),
+    ],
+  );
+
+  const report = await go();
+
+  assert.deepEqual(
+    report.attachments.map((a) => a.outcome),
+    ["imported", "duplicate", "duplicate"],
+  );
+  assert.equal(tables.trades.length, 2, "one import's worth of rows");
+  // A duplicate is settled work, so it must not hold the watermark back.
+  assert.equal(report.ok, true);
+  assert.notEqual(tables.ingest_runs[0].watermark, null);
+});
+
+test("different content is never treated as a duplicate", async () => {
+  const { go, tables } = run(
+    {
+      clients: [{ id: "c1", external_ref: "114716" }],
+      accounts: [{ id: "a1", external_ref: "114716", client_id: "c1" }],
+      securities: [{ code: "EOS", parent_code: null }],
+    },
+    [
+      attachment({ messageId: "m1", attachmentId: "a1", content: tradesCsv("114716") }),
+      attachment({
+        messageId: "m2",
+        attachmentId: "a2",
+        content: tradesCsv("114716").replace("2001,", "3001,").replace("2002,", "3002,"),
+      }),
+    ],
+  );
+
+  const report = await go();
+  assert.deepEqual(report.attachments.map((a) => a.outcome), ["imported", "imported"]);
+  assert.equal(tables.trades.length, 4);
 });

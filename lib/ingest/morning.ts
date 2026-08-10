@@ -71,21 +71,66 @@ const MIN_ACCOUNT_COVERAGE = 0.9;
 
 const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 
-/** Attachments this mailbox has already been through, by Graph's own ids. */
-async function alreadySeen(db: AdminDb, atts: BrokerAttachment[]): Promise<Set<string>> {
-  if (atts.length === 0) return new Set();
+/**
+ * Attachments this mailbox has already SETTLED, by Graph's own ids.
+ *
+ * Deliberately not "already seen". Only two outcomes are final:
+ *
+ *   imported     — the work is done; re-running is a waste even though the
+ *                  importers would tolerate it
+ *   unrecognised — the headers match no known export, and a file's columns do
+ *                  not change between runs
+ *
+ * A `failed` or `quarantined` attachment is explicitly NOT final. Its cause is
+ * usually something the next run can fix — a missing account that a later
+ * holdings snapshot creates, a coverage shortfall that a corrected file
+ * resolves — and treating those as done is how a permanent skip is manufactured
+ * out of a temporary problem. That is not hypothetical: three trade files
+ * failed on unknown accounts, and once the importer was taught to create them
+ * the fix could not take effect, because the files had been marked seen.
+ */
+async function alreadySettled(
+  db: AdminDb,
+  atts: BrokerAttachment[],
+): Promise<{ ids: Set<string>; hashes: Set<string> }> {
+  if (atts.length === 0) return { ids: new Set(), hashes: new Set() };
 
   const { data, error } = await db
     .from("ingest_attachments")
-    .select("message_id, attachment_id")
-    .in("message_id", [...new Set(atts.map((a) => a.messageId))]);
+    .select("message_id, attachment_id, outcome, sha256");
   if (error) throw error;
 
-  return new Set(
-    ((data ?? []) as unknown as { message_id: string; attachment_id: string }[]).map(
-      (r) => `${r.message_id}:${r.attachment_id}`,
-    ),
+  const rows = (data ?? []) as unknown as {
+    message_id: string;
+    attachment_id: string;
+    outcome: string;
+    sha256: string | null;
+  }[];
+
+  const settled = rows.filter(
+    (r) => r.outcome === "imported" || r.outcome === "unrecognised",
   );
+
+  return {
+    ids: new Set(settled.map((r) => `${r.message_id}:${r.attachment_id}`)),
+    /**
+     * Content hashes of files already imported.
+     *
+     * The broker re-sends the SAME full-history export every morning — three
+     * byte-identical `ContractNotesListing` files sat in the mailbox, each
+     * 4,026 rows. The importers tolerate that, but tolerating is not free: one
+     * measured at **10.8s**, so re-importing two more spends thirty seconds of
+     * a sixty-second budget to reach a state the database was already in.
+     *
+     * Identical bytes cannot produce a different outcome, so the second copy is
+     * skipped outright. This is why the hash is stored at all.
+     */
+    hashes: new Set(
+      settled
+        .filter((r) => r.outcome === "imported" && r.sha256)
+        .map((r) => r.sha256 as string),
+    ),
+  };
 }
 
 /** Where the last successful run got to. */
@@ -212,14 +257,14 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
       };
     }
 
-    const seen = await alreadySeen(db, mail.attachments);
+    const settled = await alreadySettled(db, mail.attachments);
     const fresh = mail.attachments.filter(
-      (a) => !seen.has(`${a.messageId}:${a.attachmentId}`),
+      (a) => !settled.ids.has(`${a.messageId}:${a.attachmentId}`),
     );
 
     if (fresh.length < mail.attachments.length) {
       notes.push(
-        `${mail.attachments.length - fresh.length} attachment(s) already processed — skipped.`,
+        `${mail.attachments.length - fresh.length} attachment(s) already imported — skipped.`,
       );
     }
 
@@ -229,10 +274,31 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
       ...fresh.filter((a) => detectCsvKind(a.content) !== "holdings"),
     ];
 
+    // Content hashes imported during THIS run as well as previous ones, so the
+    // three identical files in one mailbox collapse to one import.
+    const importedHashes = new Set(settled.hashes);
+
     for (const att of ordered) {
       const kind = detectCsvKind(att.content);
+      const hash = sha256(att.content);
+
+      if (importedHashes.has(hash)) {
+        const report: AttachmentReport = {
+          filename: att.filename,
+          kind,
+          outcome: "duplicate",
+          accountRefs: [],
+          error: "Byte-identical to a file already imported — nothing to do.",
+        };
+        reports.push(report);
+        await recordAttachment(db, att, kind, report);
+        continue;
+      }
+
       const report = await processOne(db, att, kind);
       reports.push(report);
+
+      if (report.outcome === "imported") importedHashes.add(hash);
 
       await recordAttachment(db, att, kind, report);
 
@@ -296,10 +362,34 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
     ).length;
     const status = failed > 0 || deferredCount > 0 ? "partial" : "ok";
 
-    // The watermark only advances on a CLEAN run. A quarantined or failed file
-    // must be re-offered tomorrow rather than silently skipped past.
+    /**
+     * The watermark advances only when EVERY attachment in the window is
+     * settled — imported or unrecognised — and nothing is still owed.
+     *
+     * The status check alone is not enough, and the gap is not hypothetical: a
+     * run that skipped three previously-failed files as "already processed" did
+     * no work, reported `ok`, and moved the watermark past them. They then fell
+     * outside the mail window entirely and could not be retried even after the
+     * bug that failed them was fixed.
+     *
+     * The attachment table is what guarantees correctness; the watermark is only
+     * an optimisation to avoid re-listing old mail. So when the two disagree,
+     * the watermark yields — re-reading a message costs a Graph call, and
+     * skipping one costs the day's data.
+     */
+    const unsettled = fresh.filter(
+      (a) =>
+        !reports.some(
+          (r) =>
+            r.filename === a.filename &&
+            (r.outcome === "imported" ||
+              r.outcome === "unrecognised" ||
+              r.outcome === "duplicate"),
+        ),
+    ).length;
+
     const watermark =
-      status === "ok" && mail.attachments.length > 0
+      status === "ok" && unsettled === 0 && mail.attachments.length > 0
         ? new Date(mail.attachments[mail.attachments.length - 1].receivedAt)
         : since;
 
