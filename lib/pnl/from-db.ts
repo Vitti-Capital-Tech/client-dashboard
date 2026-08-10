@@ -23,7 +23,7 @@ import {
   normalizeAccountNo,
   type ParsedTradeRow,
 } from "../pnl-calculator.ts";
-import type { AdminDb } from "../import/runner.ts";
+import { selectAll, type AdminDb } from "../import/runner.ts";
 
 /**
  * The stored rows these queries read back.
@@ -160,25 +160,26 @@ export async function loadCalculatorTrades(
     };
   }
 
-  const [accRes, tradeRes, secRes] = await Promise.all([
-    db.from("accounts").select("id, external_ref, ref, client_id").in("id", accountIds),
-    db
-      .from("trades")
-      .select(
-        "cnote, account_id, raw_security, security_code, parent_code, instrument, " +
-          "side, trade_date, units, avg_price, consideration, value, status",
-      )
-      .in("account_id", accountIds),
-    db.from("securities").select("code, name"),
+  // All three are paged. The trade read is the one that matters most — a
+  // truncated ledger gives the engine a complete-looking, wrong P&L — but
+  // securities passed a thousand rows long ago and positions will.
+  const [accounts, tradeRows, securities] = await Promise.all([
+    selectAll<AccountRow>(db, "accounts", "id, external_ref, ref, client_id", (q) =>
+      q.in("id", accountIds),
+    ),
+    selectAll<DbTradeRow>(
+      db,
+      "trades",
+      "cnote, account_id, raw_security, security_code, parent_code, instrument, " +
+        "side, trade_date, units, avg_price, consideration, value, status",
+      (q) => q.in("account_id", accountIds),
+    ),
+    selectAll<SecurityRow>(db, "securities", "code, name"),
   ]);
-
-  if (accRes.error) throw accRes.error;
-  if (tradeRes.error) throw tradeRes.error;
-  if (secRes.error) throw secRes.error;
 
   const accountRefById = new Map<string, string>();
   const clientIdByAccountId = new Map<string, string>();
-  for (const a of (accRes.data ?? []) as unknown as AccountRow[]) {
+  for (const a of accounts) {
     // `external_ref` is the broker's number and the one trade files carry;
     // `ref` is the legacy demo id, kept only as a fallback so an account
     // created before the broker pipeline still resolves to something.
@@ -187,16 +188,12 @@ export async function loadCalculatorTrades(
   }
 
   const securityNames = new Map<string, string>();
-  for (const s of (secRes.data ?? []) as unknown as SecurityRow[]) {
+  for (const s of securities) {
     if (s.code) securityNames.set(String(s.code).trim().toUpperCase(), s.name || s.code);
   }
 
   return {
-    trades: dbTradesToParsedRows(
-      (tradeRes.data ?? []) as unknown as DbTradeRow[],
-      accountRefById,
-      securityNames,
-    ),
+    trades: dbTradesToParsedRows(tradeRows, accountRefById, securityNames),
     accountRefs: [...new Set(accountRefById.values())],
     accountRefById,
     clientIdByAccountId,
@@ -244,19 +241,15 @@ export async function loadDbHoldings(
 ): Promise<DbHolding[]> {
   if (accountIds.length === 0) return [];
 
-  const [posRes, secRes] = await Promise.all([
-    db
-      .from("positions")
-      .select("account_id, security_code, qty, avg_cost")
-      .in("account_id", accountIds),
-    db.from("securities").select("code, name, last_price"),
+  const [positions, securities] = await Promise.all([
+    selectAll<PositionRow>(db, "positions", "account_id, security_code, qty, avg_cost", (q) =>
+      q.in("account_id", accountIds),
+    ),
+    selectAll<SecurityRow>(db, "securities", "code, name, last_price"),
   ]);
 
-  if (posRes.error) throw posRes.error;
-  if (secRes.error) throw secRes.error;
-
   const secMap = new Map<string, { name: string; lastClose: number }>();
-  for (const s of (secRes.data ?? []) as unknown as SecurityRow[]) {
+  for (const s of securities) {
     if (!s.code) continue;
     secMap.set(String(s.code).trim().toUpperCase(), {
       name: s.name || s.code,
@@ -266,7 +259,7 @@ export async function loadDbHoldings(
 
   const byGroup = new Map<string, DbHolding>();
 
-  for (const p of (posRes.data ?? []) as unknown as PositionRow[]) {
+  for (const p of positions) {
     const code = String(p.security_code || "").trim().toUpperCase();
     if (!code) continue;
 

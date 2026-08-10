@@ -97,6 +97,54 @@ export async function upsertChunked(
   }
 }
 
+/** How many rows PostgREST returns before it silently stops. */
+const PAGE = 1000;
+
+/**
+ * Read EVERY row a query matches, not the first thousand.
+ *
+ * PostgREST caps a response at its `max-rows` setting — 1000 on Supabase — and
+ * says nothing about it: no error, no flag, just a short array. `.range()` does
+ * not lift the cap either; it only moves the window.
+ *
+ * That is a quiet correctness bug wherever a full set is assumed, and this
+ * codebase assumed it in the worst possible place. The realised-P&L replay
+ * re-reads an account's whole stored ledger and walks it chronologically to
+ * attribute cost; handed the first 1,000 of 3,996 trades it produced a complete
+ * looking, entirely wrong answer. The same applied to the P&L recompute's own
+ * trade load.
+ *
+ * So any select that can exceed a thousand rows goes through here. Pages until
+ * a short page arrives, which is the only reliable end-of-set signal.
+ *
+ *     const rows = await selectAll(db, "trades", "cnote, side",
+ *       (q) => q.in("account_id", ids));
+ */
+export async function selectAll<T>(
+  db: AdminDb,
+  table: string,
+  columns: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the PostgREST builder is not usefully typeable here.
+  filter?: (query: any) => any,
+): Promise<T[]> {
+  const out: T[] = [];
+
+  for (let from = 0; ; from += PAGE) {
+    let query = db.from(table).select(columns).range(from, from + PAGE - 1);
+    if (filter) query = filter(query);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const page = (data ?? []) as unknown as T[];
+    out.push(...page);
+
+    // A short page means the end. Stopping on `length === 0` instead would cost
+    // one wasted round trip whenever the total is an exact multiple of the cap.
+    if (page.length < PAGE) return out;
+  }
+}
+
 export type CsvKind = "holdings" | "trades" | "unknown";
 
 /**

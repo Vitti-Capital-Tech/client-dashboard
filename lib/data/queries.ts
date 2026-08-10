@@ -1,4 +1,5 @@
 import "server-only";
+import { pagedSelect } from "./paged";
 import { cache } from "react";
 import { createClient } from "../supabase/server";
 import type { Database } from "../supabase/database.types";
@@ -528,16 +529,18 @@ export const getClientOptions = cache(
 export const getClientTrades = cache(
   async (clientId: string): Promise<TradeRow[]> => {
     const supabase = await createClient();
-    const [{ data, error }, securityMap] = await Promise.all([
-      supabase
-        .from("trades")
-        .select("*")
-        .eq("client_id", clientId)
-        .order("trade_date", { ascending: false })
-        .order("cnote", { ascending: false }),
+    // Paged: one real client holds 1,650 contract notes, and PostgREST would
+    // hand back the first 1,000 without a word — silently truncating their
+    // order history, their realised-P&L chart and every total on the page.
+    const [data, securityMap] = await Promise.all([
+      pagedSelect<Record<string, any>>(supabase, "trades", "*", (b) =>
+        b
+          .eq("client_id", clientId)
+          .order("trade_date", { ascending: false })
+          .order("cnote", { ascending: false }),
+      ),
       getSecurityMap(),
     ]);
-    if (error) throw error;
 
     return data.map((t) => ({
       id: t.id,

@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { createClient } from "../supabase/server";
+import { pagedSelect } from "./paged";
 import type { RealizedRow } from "./compute";
 
 /**
@@ -68,11 +69,14 @@ export const getClientPnlOverrides = cache(
 export const getClientRealized = cache(
   async (clientId: string): Promise<RealizedRow[]> => {
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("realized_pnl")
-      .select("*")
-      .eq("client_id", clientId);
-    if (error) throw error;
+    // Paged — see lib/data/paged.ts. A busy client can hold more rollup rows
+    // than PostgREST will return in one response.
+    const data = await pagedSelect<Record<string, any>>(
+      supabase,
+      "realized_pnl",
+      "*",
+      (b) => b.eq("client_id", clientId),
+    );
 
     return data.map((r) => ({
       accountId: r.account_id,

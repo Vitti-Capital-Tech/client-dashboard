@@ -277,3 +277,35 @@ test("trades: a ledger-only security gets a stub so nothing is dropped", async (
   assert.ok(res.written!.securityStubs.includes("LDX"));
   assert.ok(tables.securities.some((s) => s.code === "LDX"));
 });
+
+// ---------------------------------------------------------------------------
+// The 1000-row cap
+// ---------------------------------------------------------------------------
+
+test("trades: the ledger replay reads past PostgREST's 1000-row cap", async () => {
+  // PostgREST stops at 1000 rows and says nothing about it — no error, no flag,
+  // just a short array. The realised-P&L replay walks an account's WHOLE ledger
+  // to attribute cost, so a truncated read produced a complete-looking and
+  // entirely wrong answer against a real 3,996-trade book.
+  //
+  // 1,200 buys of one unit each, then one sale of the lot. If the replay only
+  // saw the first 1,000 the cost basis would be short by 200 units.
+  const { db, tables } = seededForTrades();
+
+  const rows = [TRADES_CSV.split("\n")[0]];
+  for (let i = 1; i <= 1200; i++) {
+    rows.push(`B${i},114716,BUY,EOS,ELECTRO OPTIC,19/05/26,1,1.00,1.00,1,0,0,0,SETTLED`);
+  }
+  rows.push("S1,114716,SELL,EOS,ELECTRO OPTIC,21/05/26,1200,3000,2.50,3000,0,0,0,SETTLED");
+  rows.push("");
+
+  const res = await runTradeImport(db, rows.join("\n"));
+
+  assert.equal(tables.trades.length, 1201, "every row stored");
+
+  const rollup = res.rollups.find((r) => r.parent === "EOS")!;
+  assert.equal(rollup.unitsBought, 1200, "not 1000 — the cap was paged past");
+  assert.equal(rollup.costOfSold, 1200);
+  assert.equal(rollup.realizedPl, 1800, "3000 proceeds − 1200 cost");
+  assert.equal(rollup.shortHistory, false, "a full cost basis was found");
+});

@@ -23,6 +23,16 @@ import type { AdminDb } from "../import/runner.ts";
 export type Row = Record<string, any>;
 
 /**
+ * PostgREST's default `max-rows`, enforced here so tests feel it too.
+ *
+ * The cap is silent — a short array, no error, no flag — and it truncated the
+ * realised-P&L replay to the first thousand of nearly four thousand trades,
+ * producing a complete-looking and entirely wrong answer. A fake that returned
+ * everything would let that class of bug back in unnoticed.
+ */
+const MAX_ROWS = 1000;
+
+/**
  * The fluent builder. Thenable rather than a Promise because the real one is
  * too — `db.from("securities").select("code")` is awaited with no filter at all.
  */
@@ -39,6 +49,8 @@ class FakeBuilder {
   returning = false;
   sortBy: { col: string; ascending: boolean } | null = null;
   take: number | null = null;
+  rangeFrom: number | null = null;
+  rangeTo: number | null = null;
 
   constructor(
     tables: Record<string, Row[]>,
@@ -72,6 +84,13 @@ class FakeBuilder {
 
   limit(n: number) {
     this.take = n;
+    return this;
+  }
+
+  /** Real paging, against the same cap the real client enforces. */
+  range(from: number, to: number) {
+    this.rangeFrom = from;
+    this.rangeTo = to;
     return this;
   }
 
@@ -152,6 +171,15 @@ class FakeBuilder {
         }
 
         if (this.take !== null) rows = rows.slice(0, this.take);
+
+        // The cap applies whether or not a range was asked for — that is what
+        // makes it a trap in the real client, so the fake reproduces it.
+        if (this.rangeFrom !== null) {
+          const asked = (this.rangeTo ?? this.rangeFrom + MAX_ROWS - 1) - this.rangeFrom + 1;
+          rows = rows.slice(this.rangeFrom, this.rangeFrom + Math.min(asked, MAX_ROWS));
+        } else {
+          rows = rows.slice(0, MAX_ROWS);
+        }
 
         return { data: rows.map((r) => this.embed(r, cols)), error: null };
       }

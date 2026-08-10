@@ -1,6 +1,7 @@
 import "server-only";
 import { cache } from "react";
 import { createClient } from "../supabase/server";
+import { pagedSelect } from "./paged";
 
 /**
  * Reads of the STORED P&L — the calculator's output, as written by
@@ -69,13 +70,15 @@ const num = (v: unknown): number => Number(v ?? 0) || 0;
 export const getClientStoredPnl = cache(
   async (clientId: string): Promise<StoredPnlRow[]> => {
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("pnl_summary")
-      .select("*")
-      .eq("client_id", clientId);
-    if (error) throw error;
+    // Paged — see lib/data/paged.ts.
+    const data = await pagedSelect<Record<string, any>>(
+      supabase,
+      "pnl_summary",
+      "*",
+      (b) => b.eq("client_id", clientId),
+    );
 
-    return (data ?? []).map((r) => ({
+    return data.map((r) => ({
       accountId: r.account_id,
       clientId: r.client_id,
       ticker: r.ticker,
