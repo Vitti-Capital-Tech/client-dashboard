@@ -1,61 +1,51 @@
 import "server-only";
-import {
-  combinePlacementMaps,
-  placementArrayToMap,
-  type PlacementTickerInfo,
-} from "@/lib/pnl-calculator";
-import {
-  fetchSpotPricesAction,
-  loadConfiguredPlacementTrackersAction,
-} from "@/app/actions/pnl-calculator";
+import { fetchSpotPricesAction } from "@/app/actions/pnl-calculator";
+import type { PlacementTickerInfo } from "@/lib/pnl-calculator";
+import type { AdminDb } from "@/lib/import/runner";
+import { cachedPlacementMap } from "./tracker-cache-store";
 import type { SpotFetcher, SpotPriceMap } from "./recompute";
 
 /**
- * The two expensive inputs the recompute refuses to fetch for itself.
+ * The two inputs the recompute refuses to fetch for itself.
  *
  * `recomputeAccountPnl` takes both as parameters precisely so a batch resolves
- * them ONCE and reuses them across every account: the Placement Tracker
- * workbooks cost ~48s of CPU-bound parsing on a cold cache, and spot prices are
- * a network round trip per ticker. Doing either per account turns a two-minute
- * morning batch into an overnight one.
- *
- * These are thin adapters over the calculator page's existing server actions —
- * the same links, the same cache, the same ASX/Yahoo/database fallback chain.
- * Nothing about how a price is found is re-decided here.
+ * them ONCE and reuses them across every account. Doing either per account
+ * turns a two-minute batch into an overnight one — and, for the quotes, values
+ * two clients' identical holdings at two slightly different prices.
  */
+
+export type PlacementSource = {
+  map: Map<string, PlacementTickerInfo>;
+  /** When the underlying workbooks were last parsed — always surfaced. */
+  parsedAt: string;
+  labels: string[];
+};
 
 /**
- * Every Placement Tracker configured in `PLACEMENT_TRACKER_URL`, merged into
- * one map, or `null` if none are configured or none could be read.
+ * The Placement Trackers, READ from the database cache rather than parsed.
  *
- * `null` is a meaningful answer and not a failure to paper over: it means the
- * placement buy sides stay exactly as the contract notes recorded them, and no
- * free-option rows are generated. A recompute that quietly used an empty map
- * would look identical while silently dropping every option line.
+ * Parsing costs ~17s cold, which a scheduled job should not spend: every cron
+ * invocation is a cold function, so an in-process cache never hits and every
+ * run would pay it again for a workbook nobody had edited. Measured on the
+ * first real run — a third of the request budget gone before a single account
+ * was recomputed. `lib/pnl/tracker-cache.ts` owns the refresh; this only reads.
+ *
+ * `null` is a meaningful answer and the caller MUST respect it: it means
+ * placement buy sides stay exactly as the contract notes recorded them and no
+ * free-option rows exist. A recompute that quietly used an empty map would look
+ * identical while silently dropping every option line.
  */
-export async function loadStandingPlacementMap(): Promise<Map<
-  string,
-  PlacementTickerInfo
-> | null> {
-  const res = await loadConfiguredPlacementTrackersAction();
-  if (!res.configured) return null;
-
-  const loaded = res.trackers.filter((t) => t.placementItems.length > 0);
-  if (loaded.length === 0) {
+export async function loadCachedPlacements(db: AdminDb): Promise<PlacementSource | null> {
+  const cached = await cachedPlacementMap(db);
+  if (!cached) {
     console.error(
-      "P&L recompute: no Placement Tracker could be read — placement buy sides " +
-        "and unlisted option rows will be missing from this run.",
-      res.trackers.map((t) => t.error).filter(Boolean).join(" "),
+      "P&L recompute: the Placement Tracker cache is empty. Run the staff " +
+        "'Refresh trackers' action — until then placement buy sides and " +
+        "unlisted option rows cannot be computed.",
     );
     return null;
   }
-
-  // The desk keeps one workbook per year; `combinePlacementMaps` resolves a
-  // ticker that appears in more than one of them the same way the calculator
-  // page does, rather than summing the years.
-  return combinePlacementMaps(
-    loaded.map((t) => ({ map: placementArrayToMap(t.placementItems) })),
-  );
+  return cached;
 }
 
 /**

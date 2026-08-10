@@ -131,6 +131,13 @@ if (w.securityStubs.length > 0) {
       `(${w.securityStubs.join(", ")})`,
   );
 }
+if (w.skippedAccounts.length > 0) {
+  console.log(
+    `
+  ${w.skippedAccounts.length} account(s) skipped — their trades were NOT imported:`,
+  );
+  for (const a of w.skippedAccounts) console.log(`    ${a}`);
+}
 console.log(`  trades:     ${w.trades} upserted`);
 console.log(`  realized:   ${w.realizedRows} rollup rows rebuilt`);
 console.log(`\n  Total realized P&L: ${fmtMoney(result.totalRealized)}`);

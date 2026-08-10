@@ -210,6 +210,7 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
     realized_pnl: [],
     pnl_runs: [],
     pnl_summary: [],
+    pnl_recompute_queue: [],
     ...seed,
   };
 

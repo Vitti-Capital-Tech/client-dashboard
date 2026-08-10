@@ -49,6 +49,15 @@ export type TradeSide = "BUY" | "SELL";
 export type ParsedTrade = {
   cnote: string;
   accountRef: string;
+  /**
+   * The account holder as the ledger names them.
+   *
+   * Carried because the ledger is sometimes the ONLY place an account appears:
+   * a client who has sold everything has no holdings row, so the snapshot —
+   * which normally creates accounts — never mentions them. Without this the
+   * importer could only refuse their trades.
+   */
+  accountName: string;
   side: TradeSide;
   rawSecurity: string;
   parent: string;
@@ -114,6 +123,7 @@ export function parseTradeCsv(text: string): {
       trades.push({
         cnote: clean(row["CNote"]),
         accountRef: clean(row["Account"]),
+        accountName: clean(row["Account Name"]),
         side,
         rawSecurity,
         parent: parentCode(rawSecurity),

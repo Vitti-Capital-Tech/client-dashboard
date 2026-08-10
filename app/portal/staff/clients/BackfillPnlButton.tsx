@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { recalculateAllPnl } from "@/app/actions/pnl";
+import { recalculateAllPnl, refreshPlacementTrackers } from "@/app/actions/pnl";
 
 /**
  * Rebuild every account's stored P&L in one go.
@@ -59,8 +59,53 @@ export function BackfillPnlButton() {
     }
   };
 
+  /**
+   * Re-parse the Placement Tracker workbooks into the cache.
+   *
+   * The slowest step in the pipeline (~17s). The scheduled ingest does not pay
+   * it — every cron invocation is a cold function, so it would pay it daily for
+   * an answer that rarely changes, and on the first real run that was a third
+   * of the request budget. Paid here instead, when a human asks.
+   *
+   * Needed after the desk issues a new placement; until then the cached parse
+   * is what every recompute reads.
+   */
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    setNote(null);
+    try {
+      const res = await refreshPlacementTrackers();
+      setNote(
+        res.ok
+          ? {
+              tone: res.failed.length > 0 ? "bad" : "ok",
+              text:
+                `Cached ${res.refreshed} workbook(s), ${res.tickerCount} ticker(s).` +
+                (res.failed.length > 0 ? ` Failed: ${res.failed.join(" ")}` : ""),
+            }
+          : { tone: "bad", text: res.error },
+      );
+    } catch (err) {
+      setNote({
+        tone: "bad",
+        text: err instanceof Error ? err.message : "Tracker refresh failed.",
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   return (
     <div className="flex items-center gap-3">
+      <button
+        onClick={refresh}
+        disabled={refreshing}
+        title="Re-parse the Placement Tracker workbooks into the cache (~17s). Needed after a new placement is issued — every recompute reads this cache."
+        className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+      >
+        {refreshing ? "Parsing…" : "Refresh trackers"}
+      </button>
       <button
         onClick={run}
         disabled={running}

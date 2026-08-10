@@ -61,21 +61,27 @@ const mailbox =
   async () => ({ ok: true, attachments, messagesSeen: attachments.length });
 
 /** A recompute that records what it was asked to do and does nothing else. */
-function spyRecompute() {
+function spyRecompute(opts: { deferAll?: boolean; skip?: string } = {}) {
   const calls: string[][] = [];
   const fn = async (accountIds: string[]) => {
     calls.push([...accountIds]);
+    const deferred = opts.deferAll ? [...accountIds] : [];
     return {
       batchId: "batch-1",
-      results: accountIds.map((accountId) => ({
-        accountId,
-        runId: "run-1",
-        rows: [],
-        totalPnl: 0,
-        warnings: [],
-      })),
+      results: opts.deferAll
+        ? []
+        : accountIds.map((accountId) => ({
+            accountId,
+            runId: "run-1",
+            rows: [],
+            totalPnl: 0,
+            warnings: [],
+          })),
       failures: [],
-      placementTickers: 12,
+      deferred,
+      placementTickers: opts.skip ? null : 12,
+      placementsParsedAt: opts.skip ? null : "2026-08-10T00:00:00Z",
+      ...(opts.skip ? { skippedReason: opts.skip } : {}),
     };
   };
   return { calls, fn };
@@ -84,9 +90,10 @@ function spyRecompute() {
 function run(
   tables: Parameters<typeof fakeDb>[0],
   attachments: BrokerAttachment[],
+  recomputeOpts: Parameters<typeof spyRecompute>[0] = {},
 ) {
   const { db, tables: t } = fakeDb(tables);
-  const recompute = spyRecompute();
+  const recompute = spyRecompute(recomputeOpts);
   return {
     tables: t,
     recompute,
@@ -259,7 +266,7 @@ test("the P&L is recomputed once, for exactly the accounts touched", async () =>
   assert.equal(recompute.calls.length, 1, "one batch, not one per file or per account");
   assert.equal(recompute.calls[0].length, 2);
   assert.equal(report.accountsRecomputed, 2);
-  assert.match(report.notes.join(" "), /Recomputed P&L for 2 account/);
+  assert.match(report.notes.join(" "), /Recomputed 2 of 2 owed account/);
 });
 
 test("every run and every attachment is written down", async () => {
@@ -322,4 +329,59 @@ test("a mailbox that cannot be read fails loudly and records why", async () => {
   assert.equal(report.ok, false);
   assert.match(report.error!, /distribution list/);
   assert.equal(tables.ingest_runs[0].status, "failed");
+});
+
+// ---------------------------------------------------------------------------
+// The recompute queue
+// ---------------------------------------------------------------------------
+
+test("touched accounts are queued BEFORE the recompute is attempted", async () => {
+  // The queue is what makes an interrupted run still owe the work. Enqueueing
+  // after a successful recompute would lose exactly the case it exists for —
+  // which is the case that actually happened on the first real scheduled run.
+  const { go, tables } = run({}, [attachment({ content: holdingsCsv(["114716"]) })], {
+    deferAll: true,
+  });
+
+  const report = await go();
+
+  assert.equal(tables.pnl_recompute_queue.length, 1, "still owed");
+  assert.match(report.notes.join(" "), /left queued/);
+  assert.equal(report.ok, false, "work still owed is not a clean morning");
+  assert.equal(tables.ingest_runs[0].watermark, null, "and the watermark waits");
+});
+
+test("work owed from a previous run is picked up even if today touched nothing", async () => {
+  // An account deferred yesterday must not wait behind the accident of which
+  // accounts today's file happens to mention.
+  const { go, recompute } = run(
+    {
+      accounts: [{ id: "a-old", external_ref: "999999", client_id: "c9" }],
+      pnl_recompute_queue: [
+        { account_id: "a-old", queued_at: "2026-08-09T00:00:00Z", attempts: 1 },
+      ],
+    },
+    [],
+  );
+
+  await go();
+
+  assert.equal(recompute.calls.length, 1);
+  assert.deepEqual(recompute.calls[0], ["a-old"]);
+});
+
+test("an empty tracker cache stops the recompute but not the import", async () => {
+  // Placement buy sides and unlisted option rows would be missing, and a stored
+  // figure without them is indistinguishable from a correct one.
+  const { go, tables } = run(
+    {},
+    [attachment({ content: holdingsCsv(["114716"]) })],
+    { deferAll: true, skip: "The Placement Tracker cache is empty." },
+  );
+
+  const report = await go();
+
+  assert.equal(tables.positions.length, 1, "the import still happened");
+  assert.match(report.notes.join(" "), /Placement Tracker cache is empty/);
+  assert.equal(tables.pnl_recompute_queue.length, 1, "the recompute is still owed");
 });

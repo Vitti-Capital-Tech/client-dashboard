@@ -153,9 +153,24 @@ export type IngestDeps = {
   db?: AdminDb;
   fetchAttachments?: typeof fetchBrokerAttachments;
   recompute?: typeof recomputeAccounts;
+  /** Overrides `INGEST_BUDGET_MS`; tests use it to force the deferral path. */
+  budgetMs?: number;
 };
 
+/**
+ * How long the whole run may take before it stops starting new recomputes.
+ *
+ * Sized for the ceiling this actually runs against — 60s on the host's free
+ * tier — and the import must finish inside it whatever else does not. The first
+ * real scheduled run was killed at exactly that point having recomputed 13 of
+ * 43 accounts, and because the kill came before any run row was written, the
+ * failure was silent. Raise via `INGEST_BUDGET_MS` where the host allows more.
+ */
+const DEFAULT_BUDGET_MS = Number(process.env.INGEST_BUDGET_MS) || 40_000;
+
 export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestReport> {
+  const budgetMs = deps.budgetMs ?? DEFAULT_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
   const db = deps.db ?? (await import("../supabase/admin.ts")).createAdminClient();
   const fetchAttachments =
     deps.fetchAttachments ?? (await import("./graph-mail.ts")).fetchBrokerAttachments;
@@ -228,18 +243,44 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
       }
     }
 
-    // One recompute for everything the morning touched — the Placement Trackers
-    // are parsed once for the whole batch, not once per file or per account.
+    // ---------------------------------------------------------------------
+    // Recompute: QUEUED first, so an interrupted run still owes the work.
+    // ---------------------------------------------------------------------
+    // Importing and recomputing are one logical morning but wildly unequal in
+    // cost, so the recompute must never be able to cost the import. Enqueueing
+    // after a successful recompute would lose exactly the case the queue exists
+    // for — which is the case that actually happened on the first real run.
     let pnlBatchId: string | null = null;
+    let deferredCount = 0;
+
+    const { enqueueRecompute, pendingRecomputes } = await import("../pnl/queue.ts");
     if (touchedAccountIds.size > 0) {
-      const batch = await recompute([...touchedAccountIds], { trigger: "ingest" });
+      await enqueueRecompute(db, [...touchedAccountIds], "ingest");
+    }
+
+    // Everything owed, not just today's — an account deferred yesterday must
+    // not wait behind the accident of which accounts today's file mentions.
+    const owed = (await pendingRecomputes(db)).map((r) => r.account_id);
+
+    if (owed.length > 0) {
+      const batch = await recompute(owed, { trigger: "ingest", deadline });
       pnlBatchId = batch.batchId;
-      notes.push(
-        `Recomputed P&L for ${batch.results.length} account(s)` +
-          (batch.placementTickers === null
-            ? " — NO Placement Tracker was readable, so placement buy sides and unlisted option rows are missing from this run."
-            : ` against ${batch.placementTickers} placement ticker(s).`),
-      );
+      deferredCount = batch.deferred.length;
+
+      if (batch.skippedReason) {
+        notes.push(batch.skippedReason);
+      } else {
+        notes.push(
+          `Recomputed ${batch.results.length} of ${owed.length} owed account(s) against ` +
+            `${batch.placementTickers} placement ticker(s) parsed ${batch.placementsParsedAt}.`,
+        );
+      }
+      if (batch.deferred.length > 0) {
+        notes.push(
+          `${batch.deferred.length} account(s) left queued — the ${Math.round(budgetMs / 1000)}s ` +
+            `budget ran out. The next run or Rebuild all P&L will take them.`,
+        );
+      }
       if (batch.failures.length > 0) {
         notes.push(`${batch.failures.length} account(s) failed to recompute.`);
       }
@@ -247,10 +288,13 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
       notes.push("No new broker mail.");
     }
 
+    // A quarantined or failed file, or work left owed, all mean this morning is
+    // not finished. Saying "ok" would be a lie the watermark then makes
+    // permanent by skipping past what was never done.
     const failed = reports.filter(
       (r) => r.outcome === "failed" || r.outcome === "quarantined",
     ).length;
-    const status = failed > 0 ? "partial" : "ok";
+    const status = failed > 0 || deferredCount > 0 ? "partial" : "ok";
 
     // The watermark only advances on a CLEAN run. A quarantined or failed file
     // must be re-offered tomorrow rather than silently skipped past.
@@ -349,11 +393,19 @@ async function processOne(
     }
 
     const res = await runTradeImport(db, att.content, { sourceFile: att.filename });
+    const skipped = res.written?.skippedAccounts ?? [];
     return {
       ...base,
       outcome: "imported",
       rows: res.parsed.trades,
       accountRefs: res.touched.accountRefs,
+      // A skipped account is a decision, not a footnote. It travels into
+      // `ingest_attachments.error` so it is visible in the table rather than
+      // only in a log nobody reads at 10am.
+      error:
+        skipped.length > 0
+          ? `Skipped ${skipped.length} account(s): ${skipped.join("; ")}`
+          : undefined,
     };
   } catch (err) {
     const detail =

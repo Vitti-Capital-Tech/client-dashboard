@@ -847,6 +847,65 @@ export type Database = {
           },
         ]
       }
+      placement_tracker_cache: {
+        Row: {
+          items: Json
+          label: string
+          parse_ms: number | null
+          parsed_at: string
+          ticker_count: number
+          url_hash: string
+        }
+        Insert: {
+          items: Json
+          label: string
+          parse_ms?: number | null
+          parsed_at?: string
+          ticker_count?: number
+          url_hash: string
+        }
+        Update: {
+          items?: Json
+          label?: string
+          parse_ms?: number | null
+          parsed_at?: string
+          ticker_count?: number
+          url_hash?: string
+        }
+        Relationships: []
+      }
+      pnl_recompute_queue: {
+        Row: {
+          account_id: string
+          attempts: number
+          last_error: string | null
+          queued_at: string
+          reason: string
+        }
+        Insert: {
+          account_id: string
+          attempts?: number
+          last_error?: string | null
+          queued_at?: string
+          reason?: string
+        }
+        Update: {
+          account_id?: string
+          attempts?: number
+          last_error?: string | null
+          queued_at?: string
+          reason?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pnl_recompute_queue_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       pnl_runs: {
         Row: {
           account_id: string

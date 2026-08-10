@@ -132,12 +132,75 @@ export async function previewClientPnlCsv(
 }
 
 /**
+ * Re-parse the Placement Tracker workbooks and store the result.
+ *
+ * This is where the ~17s of downloading and parsing lives, and the point of it
+ * living somewhere deliberate: the scheduled ingest must not spend it. Every
+ * cron invocation is a cold function, so an in-process cache never hits — on
+ * the first real run that was a third of the request budget gone before any
+ * account had been recomputed. And a recompute that skipped the trackers would
+ * produce figures missing every placement buy side and every unlisted option,
+ * indistinguishable once stored from correct ones.
+ *
+ * So the parse happens here, on a warm request, when a human asks. Placements
+ * are issued occasionally rather than daily, so refreshing is an occasional
+ * action too — but its age is shown wherever the figures are, because a stale
+ * cache silently misses anything placed since it was parsed.
+ */
+export async function refreshPlacementTrackers(): Promise<
+  | { ok: true; refreshed: number; tickerCount: number; failed: string[] }
+  | { ok: false; error: string }
+> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  try {
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const { refreshTrackerCache } = await import("@/lib/pnl/tracker-cache");
+
+    const res = await refreshTrackerCache(createAdminClient());
+
+    if (res.refreshed === 0) {
+      return {
+        ok: false,
+        error:
+          `No tracker could be parsed. ${res.failed.join(" ")} ` +
+          `Until one is cached, no recompute will store figures.`,
+      };
+    }
+
+    const supabase = await createClient();
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Refreshed Placement Trackers",
+      detail:
+        `${res.refreshed} workbook(s), ${res.tickerCount} ticker(s)` +
+        (res.failed.length > 0 ? ` · ${res.failed.length} failed` : ""),
+    });
+
+    revalidatePath("/portal", "layout");
+    return {
+      ok: true,
+      refreshed: res.refreshed,
+      tickerCount: res.tickerCount,
+      failed: res.failed,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Tracker refresh failed.",
+    };
+  }
+}
+
+/**
  * Backfill: rebuild every account that has a stored ledger.
  *
  * Meant to be run once, after the tables are first created — the client profile
  * reads stored rows and an account that has never been recomputed simply has
- * none. Cheap to re-run, and the batch shares one Placement Tracker parse across
- * the lot.
+ * none. Cheap to re-run, and the batch shares one cached Placement Tracker read
+ * across the lot.
  */
 export async function recalculateAllPnl(): Promise<
   { ok: true; accounts: number; failed: number } | { ok: false; error: string }

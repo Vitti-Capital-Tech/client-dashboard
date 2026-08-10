@@ -16,6 +16,9 @@
 import { parseTradeCsv, reduceTrades, SETTLED } from "./trades.ts";
 import type { ParsedTrade, PnlRollup, RowError } from "./trades.ts";
 import { extractSecurities } from "./holdings.ts";
+// Same naming helpers the snapshot importer uses, so an account looks identical
+// whichever file introduced it.
+import { initialsOf, titleCase } from "./normalize.ts";
 import { reconcile, findDrift } from "./reconcile.ts";
 import type { DriftRow, ReconcileException } from "./reconcile.ts";
 import {
@@ -90,11 +93,85 @@ export type TradeImportResult = {
     securityStubs: string[];
     trades: number;
     realizedRows: number;
+    /** Accounts the ledger named but that were deliberately not created. */
+    skippedAccounts: string[];
   } | null;
 
   /** The recompute scope for everything downstream. */
   touched: { accountIds: string[]; accountRefs: string[] };
 };
+
+async function selectAccounts(
+  db: AdminDb,
+  refs: string[],
+): Promise<AccountRefRow[]> {
+  const { data, error } = await db
+    .from("accounts")
+    .select("id, external_ref, client_id")
+    .in("external_ref", refs);
+  if (error) throw error;
+  return (data ?? []) as unknown as AccountRefRow[];
+}
+
+/**
+ * Create a client + account for holders the ledger names but the snapshot does
+ * not.
+ *
+ * Deliberately identical in shape to what `run-holdings.ts` creates — same
+ * title-cased display name, same initials — so an account has one appearance
+ * whichever file happened to introduce it. A client created here has no email
+ * and therefore cannot log in, exactly like one created from a snapshot.
+ */
+async function createAccountsFromLedger(
+  db: AdminDb,
+  samples: ParsedTrade[],
+): Promise<void> {
+  const accounts = samples.map((t) => ({
+    externalRef: t.accountRef,
+    displayName: titleCase(t.accountName),
+    initials: initialsOf(t.accountName),
+    adviser: t.adviser,
+  }));
+
+  await upsertChunked(
+    db,
+    "clients",
+    accounts.map((a) => ({
+      external_ref: a.externalRef,
+      display_name: a.displayName,
+      initials: a.initials,
+    })),
+    { onConflict: "external_ref" },
+  );
+
+  const { data: clientRows, error: clientErr } = await db
+    .from("clients")
+    .select("id, external_ref")
+    .in("external_ref", accounts.map((a) => a.externalRef));
+  if (clientErr) throw clientErr;
+
+  const clientIdByRef = new Map(
+    ((clientRows ?? []) as unknown as { id: string; external_ref: string }[]).map(
+      (c) => [c.external_ref, c.id],
+    ),
+  );
+
+  await upsertChunked(
+    db,
+    "accounts",
+    accounts.map((a) => ({
+      external_ref: a.externalRef,
+      client_id: clientIdByRef.get(a.externalRef),
+      label: a.displayName,
+      account_type: "Wholesale",
+      adviser_code: a.adviser,
+      // The ledger carries no status. Left null rather than assumed ACTIVE:
+      // these accounts hold nothing, which is often why they are here at all.
+      status: null,
+    })),
+    { onConflict: "external_ref" },
+  );
+}
 
 export async function runTradeImport(
   db: AdminDb,
@@ -159,25 +236,66 @@ export async function runTradeImport(
   }
 
   // -------------------------------------------------------------------------
-  // 2. Resolve accounts. The holdings snapshot creates them; a trade for an
-  //    unknown account is a hard error, because guessing an owner in a
-  //    financial system is never the right call.
+  // 2. Resolve accounts, creating the ones only the ledger knows about.
   // -------------------------------------------------------------------------
-  const { data: accountRows, error: accountErr } = await db
-    .from("accounts")
-    .select("id, external_ref, client_id")
-    .in("external_ref", accountRefs);
-  if (accountErr) throw accountErr;
+  // The holdings snapshot normally creates accounts, but it is a snapshot of
+  // what is *currently held* — a client who has sold everything has no rows in
+  // it and yet has a full trade history. Twelve such accounts appeared in the
+  // first real file.
+  //
+  // This used to be a hard error on the grounds that guessing an owner is never
+  // right. That reasoning still holds; what changed is that it is no longer a
+  // guess — the ledger states the account holder in `Account Name`, exactly as
+  // the snapshot does. So the account is created from what the broker wrote,
+  // and the refusal is kept only for the case where nothing names it.
+  //
+  // Critically, one unrecognised account no longer costs the whole file: it was
+  // rejecting 4,026 trades over 12 accounts.
+  let accountRows = await selectAccounts(db, accountRefs);
+  let accountByRef = new Map(accountRows.map((a) => [a.external_ref, a]));
 
-  const resolvedAccounts = (accountRows ?? []) as unknown as AccountRefRow[];
-  const accountByRef = new Map(resolvedAccounts.map((a) => [a.external_ref, a]));
   const unknown = accountRefs.filter((r) => !accountByRef.has(r));
-  if (unknown.length > 0) {
+  const creatable: ParsedTrade[] = [];
+  const skippedAccounts: string[] = [];
+
+  for (const ref of unknown) {
+    const sample = trades.find((t) => t.accountRef === ref);
+    const name = sample?.accountName ?? "";
+
+    // The broker's own errors/suspense account. It is labelled as such in the
+    // ledger ("ERRORS - VITT - …") and is not a client, so it must not become
+    // one — a client row implies somebody the desk reports to.
+    //
+    // Matched on the NAME, not the reference: `ERRVITT` is non-numeric, but so
+    // is `PLACEVITT`, which is a real account that appears in the snapshot too.
+    // A rule based on the reference's shape would have skipped both.
+    if (!name || /^ERRORS\b/i.test(name)) {
+      skippedAccounts.push(`${ref}${name ? ` (${name})` : " (no name in the ledger)"}`);
+      continue;
+    }
+    if (sample) creatable.push(sample);
+  }
+
+  if (creatable.length > 0) {
+    await createAccountsFromLedger(db, creatable);
+    accountRows = await selectAccounts(db, accountRefs);
+    accountByRef = new Map(accountRows.map((a) => [a.external_ref, a]));
+  }
+
+  // Anything still unresolved is dropped rather than allowed to fail the file.
+  // The rows are reported, so a skipped account is a visible decision.
+  const unresolved = new Set(
+    accountRefs.filter((r) => !accountByRef.has(r)),
+  );
+  const importable = unresolved.size > 0
+    ? trades.filter((t) => !unresolved.has(t.accountRef))
+    : trades;
+
+  if (importable.length === 0) {
     throw new ImportError(
       "UNKNOWN_ACCOUNTS",
-      "Trade ledger references account number(s) with no account row. " +
-        "Import the holdings snapshot first, or add these accounts manually.",
-      unknown,
+      "Every trade in this file belongs to an account that could not be resolved.",
+      [...unresolved],
     );
   }
 
@@ -187,7 +305,7 @@ export async function runTradeImport(
   //    Create stubs (no price) for anything missing so nothing is dropped.
   // -------------------------------------------------------------------------
   const codesInFile = [
-    ...new Map(trades.map((t) => [t.rawSecurity, t.company])).entries(),
+    ...new Map(importable.map((t) => [t.rawSecurity, t.company])).entries(),
   ].map(([code, name]) => ({ code, name }));
 
   const { data: knownSecs, error: secErr } = await db
@@ -230,7 +348,7 @@ export async function runTradeImport(
   await upsertChunked(
     db,
     "trades",
-    trades.map((t) => {
+    importable.map((t) => {
       const acct = accountByRef.get(t.accountRef)!;
       return {
         cnote: t.cnote,
@@ -261,7 +379,7 @@ export async function runTradeImport(
   // -------------------------------------------------------------------------
   // 5. Rebuild realized_pnl from the FULL stored ledger for these accounts
   // -------------------------------------------------------------------------
-  const accountIds = resolvedAccounts.map((a) => a.id);
+  const accountIds = accountRows.map((a) => a.id);
 
   const { data: allTrades, error: ledgerErr } = await db
     .from("trades")
@@ -272,7 +390,7 @@ export async function runTradeImport(
     .in("account_id", accountIds);
   if (ledgerErr) throw ledgerErr;
 
-  const refById = new Map(resolvedAccounts.map((a) => [a.id, a.external_ref]));
+  const refById = new Map(accountRows.map((a) => [a.id, a.external_ref]));
 
   // Re-shape DB rows into the reducer's input type. Postgres returns numerics
   // as strings over PostgREST when precision could be lost, so coerce.
@@ -281,6 +399,9 @@ export async function runTradeImport(
       (t): ParsedTrade => ({
         cnote: t.cnote,
         accountRef: refById.get(t.account_id)!,
+        // The stored ledger does not carry the holder name and the replay does
+        // not need it — accounts already exist by this point.
+        accountName: "",
         side: t.side,
         rawSecurity: t.raw_security,
         parent: t.parent_code,
@@ -365,12 +486,14 @@ export async function runTradeImport(
     rollups,
     totalRealized: rollups.reduce((s, r) => s + r.realizedPl, 0),
     partialCount: rollups.filter((r) => r.hasPartial).length,
-    exceptions: reconcile(trades, rollups),
+    exceptions: reconcile(importable, rollups),
     drift: findDrift(rollups, snapshotUnits),
     written: {
       securityStubs: missing.map((s) => s.code),
-      trades: trades.length,
+      trades: importable.length,
       realizedRows: rollups.length,
+      /** Accounts deliberately left out, each with the reason. */
+      skippedAccounts,
     },
     touched: { accountIds, accountRefs },
   };
