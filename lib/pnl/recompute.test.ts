@@ -251,6 +251,53 @@ test("recompute: a cancelled trade never moves the stored P&L", async () => {
   assert.equal(res.totalPnl, 3000, "not 102000");
 });
 
+test("recompute: an unmatched placement row is counted, not just described", async () => {
+  // The sheet names two people and neither is this account holder, and the row
+  // it would have filled has no buy side at all. Nothing is filled — the
+  // stranger's parcel must not be stored here — and the count travels back as a
+  // NUMBER so a rebuild of every account can say how many still need an alias
+  // without anyone opening fifty client profiles.
+  const { db, tables } = seeded();
+  tables.trades.length = 0;
+  tables.trades.push({
+    cnote: "3001",
+    account_id: ACCOUNT,
+    raw_security: "ABE",
+    security_code: "ABE",
+    parent_code: "ABE",
+    instrument: "FPO",
+    side: "SELL",
+    trade_date: "2026-05-21",
+    units: "100000",
+    avg_price: "0.10",
+    consideration: "10000",
+    value: "10000",
+    status: "SETTLED",
+  });
+  tables.securities.push({ code: "ABE", parent_code: null, name: "ABE", last_price: 0.1 });
+
+  const placements = new Map([
+    [
+      "ABE",
+      {
+        ticker: "ABE",
+        totalShares: 200000,
+        totalActualDollar: 20000,
+        clientAllocations: [
+          { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 10000, roundShares: 100000, actualDollar: 10000 },
+          { clientName: "Ikigai Consortium Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 10000, roundShares: 100000, actualDollar: 10000 },
+        ],
+      },
+    ],
+  ]);
+
+  const res = await recomputeAccountPnl(db, ACCOUNT, { placements });
+
+  assert.equal(res.unfilledPlacements, 1);
+  assert.equal(tables.pnl_summary.find((r) => r.ticker === "ABE")?.buy_qty, 0);
+  assert.ok(res.warnings.some((w) => w.includes("incomplete buy side")));
+});
+
 test("recompute: a holding with no contract note still appears", async () => {
   // Free attaching options are never bought, so nothing in the ledger names
   // them. They exist only in the snapshot, and must not vanish from the P&L.

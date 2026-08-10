@@ -203,7 +203,15 @@ export async function refreshPlacementTrackers(): Promise<
  * across the lot.
  */
 export async function recalculateAllPnl(): Promise<
-  { ok: true; accounts: number; failed: number } | { ok: false; error: string }
+  | {
+      ok: true;
+      accounts: number;
+      failed: number;
+      /** Accounts left with a placement row nobody could be matched to. */
+      unfilledAccounts: number;
+      unfilledRows: number;
+    }
+  | { ok: false; error: string }
 > {
   const { role, actor } = await getActor();
   if (role !== "admin") return { ok: false, error: "Staff only." };
@@ -216,15 +224,32 @@ export async function recalculateAllPnl(): Promise<
     const accountIds = (data ?? []).map((a) => a.id);
     const batch = await recomputeAccounts(accountIds, { trigger: "backfill" });
 
+    // Rolled up here because after a rebuild of every account the per-run
+    // warnings sit one-per-row in `pnl_runs`, so "who still needs an alias"
+    // would cost opening every client profile — and that is the question the
+    // operator has the moment this finishes.
+    const unfilled = batch.results.filter((r) => r.unfilledPlacements > 0);
+    const unfilledRows = unfilled.reduce((sum, r) => sum + r.unfilledPlacements, 0);
+
     await supabase.from("audit_log").insert({
       actor,
       role,
       action: "Backfilled P&L",
-      detail: `${batch.results.length} account(s) rebuilt, ${batch.failures.length} failed`,
+      detail:
+        `${batch.results.length} account(s) rebuilt, ${batch.failures.length} failed` +
+        (unfilled.length > 0
+          ? ` · ${unfilledRows} placement row(s) unfilled across ${unfilled.length} account(s)`
+          : ""),
     });
 
     revalidatePath("/portal", "layout");
-    return { ok: true, accounts: batch.results.length, failed: batch.failures.length };
+    return {
+      ok: true,
+      accounts: batch.results.length,
+      failed: batch.failures.length,
+      unfilledAccounts: unfilled.length,
+      unfilledRows,
+    };
   } catch (err) {
     return {
       ok: false,

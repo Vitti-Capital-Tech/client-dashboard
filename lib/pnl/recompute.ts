@@ -81,6 +81,18 @@ export type RecomputeResult = {
   rows: PnlSummaryItem[];
   totalPnl: number;
   warnings: string[];
+  /**
+   * Rows whose buy side a placement could have filled and did not, because no
+   * participant in the sheet resolved to this account holder.
+   *
+   * Carried as a NUMBER rather than left inside `warnings` so a caller can add
+   * it up. After a rebuild of every account the warnings live one-per-run in
+   * `pnl_runs`, which means "who still needs an alias" costs opening fifty
+   * client profiles — the one question the operator has right then.
+   * `clients.placement_aliases` (§8.23) is the fix, `npm run suggest:aliases`
+   * finds the candidates.
+   */
+  unfilledPlacements: number;
   /** False when this was a dry run. */
   persisted: boolean;
 };
@@ -107,6 +119,7 @@ export async function recomputeAccountPnl(
   } = opts;
   const now = opts.now ?? new Date();
   const warnings: string[] = [];
+  let unfilledPlacements = 0;
 
   const accountIds = [accountId];
 
@@ -138,6 +151,8 @@ export async function recomputeAccountPnl(
       soleParticipantFallback: false,
     });
     summary = merged.summary;
+
+    unfilledPlacements = merged.ambiguousTickers.length;
 
     if (merged.ambiguousTickers.length > 0) {
       // Only rows a placement could actually have completed reach this list — a
@@ -224,7 +239,15 @@ export async function recomputeAccountPnl(
   }
 
   if (dryRun) {
-    return { accountId, runId: null, rows: summary, totalPnl, warnings, persisted: false };
+    return {
+      accountId,
+      runId: null,
+      rows: summary,
+      totalPnl,
+      warnings,
+      unfilledPlacements,
+      persisted: false,
+    };
   }
 
   const runId = await persist(db, {
@@ -239,7 +262,15 @@ export async function recomputeAccountPnl(
     placementCount: placements?.size ?? 0,
   });
 
-  return { accountId, runId, rows: summary, totalPnl, warnings, persisted: true };
+  return {
+    accountId,
+    runId,
+    rows: summary,
+    totalPnl,
+    warnings,
+    unfilledPlacements,
+    persisted: true,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -119,7 +119,9 @@ const GENERIC_TOKENS = new Set([
   "services",
   "group",
   "partners",
-  "superannuation",
+  // `entityTokens` canonicalises `superannuation` to `super` and collapses
+  // `super fund` into `superfund`, so both forms have to be listed here.
+  "super",
   "superfund",
   "fund",
   "funds",

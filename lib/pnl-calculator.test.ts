@@ -975,6 +975,15 @@ test("isClientMatch - one entity spelled two ways matches; two entities never do
   }
   assert.equal(isClientMatch("Smith Superannuation Fund", "Smith Super Fund"), true);
 
+  // A super fund written as one word in the register and two in the tracker —
+  // a real client, and the case the earlier `super → superannuation` mapping
+  // actively broke: it lengthened one side only, so the same entity matched
+  // nothing and needed a hand-written alias to state its own spelling.
+  assert.equal(isClientMatch("PSG Super Fund", "Psg Superfund PTY LTD"), true);
+  assert.equal(isClientMatch("PSG Super", "Psg Superfund PTY LTD"), true);
+  // …and it still does not reach the OTHER PSG entity, which is the whole point.
+  assert.equal(isClientMatch("PSG Super Fund", "Psg Capital Investments PTY LTD"), false);
+
   // A joint account, whose connector the two sources write three different ways.
   // `&` used to survive as punctuation and vanish; once it was read as a word it
   // became a token the other spellings did not have, so it is dropped outright.

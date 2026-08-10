@@ -2021,8 +2021,14 @@ const ENTITY_TOKEN_ALIASES: Record<string, string> = {
   svcs: "services",
   service: "services",
   services: "services",
-  super: "superannuation",
-  superannuation: "superannuation",
+  // Canonicalised to the SHORT form, which is the one that also appears written
+  // as a single word. Going the other way (`super` → `superannuation`) is what
+  // this originally did, and it split the very case it was meant to join:
+  // `PSG Super Fund` became `psg|superannuation|fund` while `Psg Superfund Pty
+  // Ltd` stayed `psg|superfund|ptyltd`, so the same entity matched nothing and
+  // needed a hand-written alias to say what its own spelling already said.
+  super: "super",
+  superannuation: "super",
 };
 
 /** Words that identify a file rather than a person, so they cannot carry a match. */
@@ -2065,11 +2071,18 @@ export function entityTokens(name: string): string[] {
     tokens.push(ENTITY_TOKEN_ALIASES[raw] ?? raw);
   }
 
-  // `Pty Ltd` is one suffix written as two words, and each maps to its own token.
-  // Collapsing the pair is what makes it identical to `P/L`, which is one word.
+  // Two-word forms of things that are also written as one word. Collapsing the
+  // pair is what makes `Pty Ltd` identical to `P/L`, and `Super Fund` identical
+  // to `Superfund` — which is a real client's name spelled both ways across the
+  // register and the tracker.
   const out: string[] = [];
   for (const token of tokens) {
-    if (token === "ltd" && out[out.length - 1] === "ptyltd") continue;
+    const prev = out[out.length - 1];
+    if (token === "ltd" && prev === "ptyltd") continue;
+    if (token === "fund" && prev === "super") {
+      out[out.length - 1] = "superfund";
+      continue;
+    }
     out.push(token);
   }
   return out;

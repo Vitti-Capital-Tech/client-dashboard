@@ -46,7 +46,13 @@ export function BackfillPnlButton() {
         tone: res.failed > 0 ? "bad" : "ok",
         text:
           `Rebuilt ${res.accounts} account${res.accounts === 1 ? "" : "s"}.` +
-          (res.failed > 0 ? ` ${res.failed} failed — see the server log.` : ""),
+          (res.failed > 0 ? ` ${res.failed} failed — see the server log.` : "") +
+          // The one question the operator has right now, and otherwise a
+          // fifty-profile hunt: the warnings live one-per-run in `pnl_runs`.
+          (res.unfilledAccounts > 0
+            ? ` ${res.unfilledRows} placement row(s) across ${res.unfilledAccounts} account(s)` +
+              " could not be matched to an account holder — run npm run suggest:aliases."
+            : ""),
       });
       router.refresh();
     } catch (err) {
