@@ -793,9 +793,12 @@ test("PNL Calculator - a DB holding the trade file never mentioned gets its own 
   assert.equal(gedo.sellPrice, 562.5);
   assert.equal(gedo.pnlCalculated, 562.5);
   assert.equal(gedo.isDbOnly, true);
-  assert.equal(gedo.comment, "DB Holding");
+  // An OPTION recovered from the snapshot is named for what it is. The snapshot
+  // only carries coded instruments, so it is listed — and the note then reads
+  // directly against the modelled `Unlisted Options` rows beside it.
+  assert.equal(gedo.comment, "Listed Options");
   assert.equal(gedo.tradeCount, 0);
-  assert.equal(exportStatus(gedo), "DB Holding");
+  assert.equal(exportStatus(gedo), "Listed Options");
 
   // LITOC's parent is LIT, which is absent from the file entirely — still fine.
   const litoc = merged.summary.find((s) => s.ticker === "LITOC");
@@ -952,6 +955,88 @@ test("PNL Calculator - Comments column reaches both exports", async () => {
 
   const xlsx = await buildPnlExportXlsxBuffer(merged.summary);
   assert.ok(xlsx.length > 0);
+});
+
+test("isClientMatch - one entity spelled two ways matches; two entities never do", () => {
+  // The real failing case. `clients.display_name` says PTY LTD, the hand-typed
+  // tracker says something shorter, and the client matched NOTHING — which on the
+  // stored-P&L path reported 24 tickers unfilled for one account.
+  const hint = "Psg Capital Investments PTY LTD";
+  for (const sheetName of [
+    "PSG CAPITAL INVESTMENTS PTY LTD",
+    "Psg Capital Investments Pty. Ltd.",
+    "Psg Capital Investments P/L",
+    "PSG Capital Investments Pty Limited",
+    "PSG Capital Inv Pty Ltd",
+    "Psg Capital Investment Pty Ltd",
+    "Psg Capital Investments Pty Ltd ATF Psg Super Fund",
+  ]) {
+    assert.equal(isClientMatch(sheetName, hint), true, sheetName);
+  }
+  assert.equal(isClientMatch("Smith Superannuation Fund", "Smith Super Fund"), true);
+
+  // A joint account, whose connector the two sources write three different ways.
+  // `&` used to survive as punctuation and vanish; once it was read as a word it
+  // became a token the other spellings did not have, so it is dropped outright.
+  const joint = "R Chawla & G Vijan PTY LTD";
+  for (const sheetName of [
+    "R Chawla & G Vijan Pty Ltd",
+    "R Chawla and G Vijan Pty Ltd",
+    "R Chawla G Vijan Pty Ltd",
+    "R Chawla & G Vijan",
+  ]) {
+    assert.equal(isClientMatch(sheetName, joint), true, sheetName);
+  }
+  // …but the family's OTHER entities are not this one. Both are real rows in the
+  // tracker and both are separate clients in the database.
+  assert.equal(isClientMatch("RG Vijan Super Fund", joint), false);
+  assert.equal(isClientMatch("RG Vijan Pty Ltd", joint), false);
+
+  // The trap the canonicalisation must not fall into. DELETING `Pty Ltd` would be
+  // the easy fix and would make "Smith Pty Ltd" a prefix of "Smith Super Fund",
+  // filling one client's row from a related entity's parcel. Mapping the suffix to
+  // a single token instead keeps it as evidence.
+  assert.equal(isClientMatch("Smith Super Fund", "Smith Pty Ltd"), false);
+  assert.equal(isClientMatch("Smith Family Trust", "Smith Pty Ltd"), false);
+  assert.equal(isClientMatch("Psg Capital Superannuation Fund", hint), false);
+  assert.equal(isClientMatch("Mr Paul Grant", hint), false);
+  // A public company is not a proprietary one, so `Ltd` alone stays distinct.
+  assert.equal(isClientMatch("Psg Capital Investments Ltd", hint), false);
+});
+
+test("resolvePlacementClientHints - a client's tracker aliases are hints too", async () => {
+  const stem = (n: string) => n.replace(/\.[^.]+$/, "");
+  const base = { override: "__auto__", autoSentinel: "__auto__", filenameStem: stem };
+
+  // The database calls this client one thing and the hand-typed tracker calls it
+  // several others. The difference is not spelling — `PSG Capital Ltd` and `PSG
+  // Super` are one word apart and are two SEPARATE clients — so the mapping is
+  // stated in `clients.placement_aliases` rather than inferred by a looser matcher.
+  const resolved = resolvePlacementClientHints({
+    ...base,
+    files: [{ name: "whatever.csv", accounts: ["114716"] }],
+    accountHolders: { "114716": "Psg Capital Investments PTY LTD" },
+    accountAliases: { "114716": ["PSG Capital Pty Ltd", "PSG Investments"] },
+  });
+  assert.deepEqual(resolved.hints, [
+    "Psg Capital Investments PTY LTD",
+    "PSG Capital Pty Ltd",
+    "PSG Investments",
+  ]);
+  // Aliases only ADD candidates, so they can never change which source won.
+  assert.equal(resolved.source, "account");
+  // And each of them now matches its sheet, which the display name alone did not.
+  assert.equal(isClientMatch("PSG Capital Pty Ltd", resolved.hints[1]), true);
+  // The family's other entity is still not this client.
+  assert.ok(!resolved.hints.some((h) => isClientMatch("PSG Superfund Pty Ltd", h)));
+
+  // No aliases configured is the ordinary case and behaves exactly as before.
+  const bare = resolvePlacementClientHints({
+    ...base,
+    files: [{ name: "whatever.csv", accounts: ["114716"] }],
+    accountHolders: { "114716": "Psg Capital Investments PTY LTD" },
+  });
+  assert.deepEqual(bare.hints, ["Psg Capital Investments PTY LTD"]);
 });
 
 test("resolvePlacementClientHints - the Account column beats the file name", async () => {
@@ -1226,6 +1311,95 @@ test("parsePlacementTrackerBuffer - reads a real workbook via SheetJS", async ()
   assert.equal(grv.addOns?.length, 1);
   assert.equal(grv.addOns?.[0].strike, 0.14);
   assert.equal(grv.addOns?.[0].listed, false);
+});
+
+test("parsePlacementTrackerBuffer - a sheet's own arithmetic is not a participant", async () => {
+  // From the real workbooks: every tab ends with `Total Confirmation`, and many
+  // carry an `Allowance` bucket for what was not allocated to anybody. Both were
+  // read as clients, which (a) counted the sheet's total a second time — AT1
+  // reported 727,274 shares against one real allocation of 363,637 — and (b) made
+  // every sheet look like it had one participant more than it does, silently
+  // disabling the single-participant rule in the merge.
+  const ExcelJS = (await import("exceljs")).default;
+  const wb = new ExcelJS.Workbook();
+
+  const ws = wb.addWorksheet("AT1");
+  ws.addRow(["ASX CODE", "AT1"]);
+  ws.addRow([]);
+  ws.addRow(["CLIENT NAME", "ADVISOR/BROKER", "Asking Bid ($)", "Allocation ($)", "# of shares", "Round Shares", "ACTUAL $", "Seller Fee ($)"]);
+  ws.addRow(["PSG Capital Ltd", "VTC", 12000, 12000.02, 363637, 363637, 12000.02, 360]);
+  ws.addRow(["Allowance", "", 0, 3176.88, 264740, 264740, 3176.88, 0]);
+  ws.addRow(["Total Confirmation", "", 12000, 12000.02, 363637, 363637, 12000.02, 360]);
+
+  const map = await parsePlacementTrackerBuffer(Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer));
+  const at1 = map.get("AT1");
+  assert.ok(at1);
+
+  assert.deepEqual(at1.clientAllocations.map((a) => a.clientName), ["PSG Capital Ltd"]);
+  // The total is now the sum of the real allocations, not double it.
+  assert.equal(at1.totalShares, 363637);
+  assert.equal(at1.totalActualDollar, 12000.02);
+});
+
+test("PNL Calculator - the sole-participant rule is the calculator's, not the recompute's", () => {
+  // One participant, and it is NOT the client being merged. On the calculator page
+  // a human uploaded this client's ledger and is watching, so a lone name is taken
+  // as a different spelling of them — long-standing, and what makes a merge work
+  // before the holder is resolved.
+  //
+  // The unattended recompute cannot assume that: it runs every client against one
+  // tracker, so filling here would store a stranger's parcel on this client's row
+  // where nothing downstream could tell it from a real figure. It passes
+  // `soleParticipantFallback: false` and takes a reported, unfilled row instead.
+  const placements = new Map<string, PlacementTickerInfo>([
+    [
+      "AT1",
+      {
+        ticker: "AT1",
+        totalShares: 363637,
+        totalActualDollar: 12000.02,
+        clientAllocations: [
+          { clientName: "PSG Capital Ltd", advisor: "VTC", askingBid: 12000, allocationDollar: 12000.02, roundShares: 363637, actualDollar: 12000.02 },
+        ],
+      },
+    ],
+  ]);
+
+  const row = (): PnlSummaryItem[] => [
+    {
+      ticker: "AT1",
+      parentTicker: "AT1",
+      instrument: "EQUITY",
+      company: "ATOMO",
+      buyQty: 0,
+      sellQty: 363637,
+      buyPrice: 0,
+      sellPrice: 15000,
+      totalBuyValue: 0,
+      totalSellValue: 15000,
+      pnlCalculated: 15000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: -363637,
+      tradeCount: 1,
+      buyYears: [],
+      tradeYears: [2026],
+    },
+  ];
+
+  const hint = "Some Other Client Pty Ltd";
+
+  const calculator = mergePlacementTrackerIntoSummary(row(), placements, hint);
+  assert.equal(calculator.summary[0].buyQty, 363637, "the calculator keeps the fallback");
+
+  const recompute = mergePlacementTrackerIntoSummary(row(), placements, hint, {
+    soleParticipantFallback: false,
+  });
+  assert.equal(recompute.summary[0].buyQty, 0, "nothing may be filled from a stranger");
+  assert.equal(recompute.mergedCount, 0);
+  // …and the row is reported, because its buy side is genuinely missing.
+  assert.deepEqual(recompute.ambiguousTickers, ["AT1"]);
 });
 
 test("parsePlacementTrackerBuffer - the 2025 tracker's 'Options' column is read too", async () => {
@@ -2190,6 +2364,74 @@ test("PNL Calculator - two placements in one period: name, buy qty and sell qty 
   const ambiguous = mergePlacementTrackerIntoSummary(row(0, 0, 70000), shared, "Saturn Fund");
   assert.equal(ambiguous.summary[0].buyQty, 0);
   assert.deepEqual(ambiguous.ambiguousTickers, ["SKK"]);
+});
+
+test("PNL Calculator - only rows a placement could have filled are reported unfilled", () => {
+  // Three stocks, the same story in the sheet each time: several participants and
+  // none of them this client. What differs is the LEDGER.
+  //
+  //   GRV — bought and sold on-market, both sides recorded. A placement would have
+  //         changed nothing, so naming it is a false alarm. This is the bug: one
+  //         real account reported 24 such tickers and the genuine gaps were lost
+  //         among them.
+  //   ABE — sold with no recorded buy: a parcel really is missing.
+  //   CCM — sold more than the ledger saw bought: short buy side, also missing.
+  const strangers = [
+    { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 5000, roundShares: 10000, actualDollar: 5000 },
+    { clientName: "Ikigai Consortium Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 5000, roundShares: 10000, actualDollar: 5000 },
+  ];
+  const sheet = (ticker: string): PlacementTickerInfo => ({
+    ticker,
+    totalShares: 20000,
+    totalActualDollar: 10000,
+    clientAllocations: strangers,
+  });
+  const placements = new Map<string, PlacementTickerInfo>([
+    ["GRV", sheet("GRV")],
+    ["ABE", sheet("ABE")],
+    ["CCM", sheet("CCM")],
+  ]);
+
+  const row = (
+    ticker: string,
+    buyQty: number,
+    buyPrice: number,
+    sellQty: number
+  ): PnlSummaryItem => ({
+    ticker,
+    parentTicker: ticker,
+    instrument: "EQUITY",
+    company: ticker,
+    buyQty,
+    sellQty,
+    buyPrice,
+    sellPrice: 9000,
+    totalBuyValue: buyPrice,
+    totalSellValue: 9000,
+    pnlCalculated: 9000 - buyPrice,
+    isMatched: buyQty === sellQty && buyQty > 0,
+    isOption: false,
+    hasOptionCode: false,
+    openQty: buyQty - sellQty,
+    tradeCount: 2,
+    buyYears: buyQty > 0 ? [2026] : [],
+    tradeYears: [2026],
+  });
+
+  const merged = mergePlacementTrackerIntoSummary(
+    [row("GRV", 5000, 2500, 5000), row("ABE", 0, 0, 10000), row("CCM", 3000, 1500, 10000)],
+    placements,
+    "Psg Capital Investments Pty Ltd"
+  );
+
+  assert.deepEqual(merged.ambiguousTickers, ["ABE", "CCM"]);
+
+  // What changed is the REPORT, not the figures: an unidentified client still
+  // fills nothing, on every row.
+  assert.equal(merged.mergedCount, 0);
+  assert.equal(merged.summary.find((s) => s.ticker === "GRV")?.buyQty, 5000);
+  assert.equal(merged.summary.find((s) => s.ticker === "ABE")?.buyQty, 0);
+  assert.equal(merged.summary.find((s) => s.ticker === "CCM")?.buyQty, 3000);
 });
 
 test("parsePnlFileBuffer - a real .xlsx date cell survives as a readable date", async () => {

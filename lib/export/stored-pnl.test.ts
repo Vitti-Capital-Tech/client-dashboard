@@ -187,7 +187,11 @@ test("stored: status precedence matches the calculator's", () => {
   assert.equal(status({ buySideUnknown: true, isDbOnly: true, isMatched: true }), "Buy Side Unknown");
   // A DB-only row trivially "matches" because both legs came from the same held
   // quantity, so where the figures came from is the useful fact.
-  assert.equal(status({ isDbOnly: true, isMatched: true }), "DB Holding");
+  // Both wordings answer "why are there no trades behind this row?" rather than
+  // naming the table it came from, and an OPTION only ever reaches the snapshot
+  // with a code — so it is listed, which reads against the modelled rows beside it.
+  assert.equal(status({ isDbOnly: true, isMatched: true }), "Open - no ledger history");
+  assert.equal(status({ isDbOnly: true, isMatched: true, isOption: true }), "Listed Options");
   assert.equal(status({ isUnlistedOption: true, isMatched: true }), "Unlisted Option");
   assert.equal(status({ isMatched: false, isOption: true }), "Option");
   assert.equal(status({ isMatched: false, openQty: 500 }), "Open");

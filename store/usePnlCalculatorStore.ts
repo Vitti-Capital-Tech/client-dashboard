@@ -91,6 +91,14 @@ interface PnlCalculatorState {
    */
   accountHolders: Record<string, string>;
   /**
+   * Broker account number → the OTHER names the Placement Tracker calls that
+   * holder (`clients.placement_aliases`).
+   *
+   * Kept beside `accountHolders` rather than folded into it because the UI labels
+   * an account with one name while the merge may match on any of them.
+   */
+  accountAliases: Record<string, string[]>;
+  /**
    * Whether the standing `PLACEMENT_TRACKER_URL` load has already been attempted.
    *
    * Lives in the store, not in component state, precisely because the route remounts
@@ -112,6 +120,7 @@ interface PnlCalculatorState {
   setFilterType: Setter<PnlFilterType>;
   setSearchQuery: Setter<string>;
   setAccountHolders: Setter<Record<string, string>>;
+  setAccountAliases: Setter<Record<string, string[]>>;
   setConfiguredTrackersAttempted: Setter<boolean>;
 
   /** Drop everything back to a fresh calculator. */
@@ -135,6 +144,7 @@ const initialState = () => ({
   filterType: "all" as PnlFilterType,
   searchQuery: "",
   accountHolders: {} as Record<string, string>,
+  accountAliases: {} as Record<string, string[]>,
   configuredTrackersAttempted: false,
 });
 
@@ -153,6 +163,7 @@ export const usePnlCalculatorStore = create<PnlCalculatorState>()((set) => ({
   setFilterType: (v) => set((s) => ({ filterType: next(v, s.filterType) })),
   setSearchQuery: (v) => set((s) => ({ searchQuery: next(v, s.searchQuery) })),
   setAccountHolders: (v) => set((s) => ({ accountHolders: next(v, s.accountHolders) })),
+  setAccountAliases: (v) => set((s) => ({ accountAliases: next(v, s.accountAliases) })),
   setConfiguredTrackersAttempted: (v) =>
     set((s) => ({ configuredTrackersAttempted: next(v, s.configuredTrackersAttempted) })),
 

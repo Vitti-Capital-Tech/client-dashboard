@@ -137,7 +137,15 @@ class FakeBuilder {
 
     if (cols.includes("clients(")) {
       const client = (this.tables.clients ?? []).find((c) => c.id === r.client_id);
-      out.clients = client ? { display_name: client.display_name } : null;
+      out.clients = client
+        ? {
+            display_name: client.display_name,
+            // Absent in the fixture means the column's default — an empty array,
+            // not null — so a test that never mentions aliases behaves like a
+            // client that has none rather than like a broken row.
+            placement_aliases: client.placement_aliases ?? [],
+          }
+        : null;
     }
 
     if (cols.includes("accounts(")) {

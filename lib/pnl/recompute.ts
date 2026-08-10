@@ -127,13 +127,29 @@ export async function recomputeAccountPnl(
   // 2. Placement Trackers fill the buy side of a placement the contract notes
   //    never recorded, matched to THIS account holder's allocation rows.
   if (placements && placements.size > 0) {
-    const merged = mergePlacementTrackerIntoSummary(summary, placements, holders);
+    // `soleParticipantFallback: false` — this runs unattended over EVERY client
+    // against one tracker, and the hints came from the database rather than a
+    // filename. So "the only name in this sheet is not this client" is evidence,
+    // not a spelling accident: filling from it would store a stranger's parcel on
+    // this client's row, where nothing downstream could tell it apart from a real
+    // figure. The calculator page keeps the fallback, because there a human
+    // uploaded one client's ledger and is watching the result.
+    const merged = mergePlacementTrackerIntoSummary(summary, placements, holders, {
+      soleParticipantFallback: false,
+    });
     summary = merged.summary;
 
     if (merged.ambiguousTickers.length > 0) {
+      // Only rows a placement could actually have completed reach this list — a
+      // holding bought on-market in a stock that was placed to other people is
+      // not a problem and is no longer reported as one. So what is left is a
+      // real gap, and it has one usual cause worth naming: the tracker spells
+      // the account holder differently from `clients.display_name`.
       warnings.push(
-        `${merged.ambiguousTickers.length} ticker(s) left unfilled — the placement sheet ` +
-          `lists several account holders and none matched ${holders.join(", ") || "this account"}: ` +
+        `${merged.ambiguousTickers.length} ticker(s) have an incomplete buy side that a ` +
+          `placement could have filled, but the sheet lists several account holders and ` +
+          `none matched ${holders.join(", ") || "this account"} — check how the tracker ` +
+          `spells the name: ` +
           merged.ambiguousTickers.join(", "),
       );
     }

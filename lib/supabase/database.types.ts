@@ -413,6 +413,7 @@ export type Database = {
           external_ref: string | null
           id: string
           initials: string | null
+          placement_aliases: string[]
           ref: string | null
           updated_at: string
         }
@@ -423,6 +424,7 @@ export type Database = {
           external_ref?: string | null
           id?: string
           initials?: string | null
+          placement_aliases?: string[]
           ref?: string | null
           updated_at?: string
         }
@@ -433,6 +435,7 @@ export type Database = {
           external_ref?: string | null
           id?: string
           initials?: string | null
+          placement_aliases?: string[]
           ref?: string | null
           updated_at?: string
         }

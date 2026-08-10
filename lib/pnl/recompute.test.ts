@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { fakeDb } from "../test-support/fake-db.ts";
-import { dbTradesToParsedRows, loadDbHoldings, type DbTradeRow } from "./from-db.ts";
+import {
+  dbTradesToParsedRows,
+  loadAccountHolders,
+  loadDbHoldings,
+  type DbTradeRow,
+} from "./from-db.ts";
 import { recomputeAccountPnl } from "./recompute.ts";
 
 /**
@@ -87,6 +92,37 @@ function tradeRow(over: Partial<DbTradeRow> = {}): DbTradeRow {
     ...over,
   };
 }
+
+test("holders: the tracker's own names for a client are hints too", async () => {
+  // The placement sheet is hand-typed and `display_name` is not, so one party is
+  // written several ways — and what is left after normalising spelling is not
+  // spelling at all: the real workbooks carry `PSG Capital Ltd` and `PSG Super`
+  // against two SEPARATE clients. Which is which is a fact about the desk's
+  // records, so it is stated in `clients.placement_aliases` rather than guessed at
+  // by a looser matcher, which would move a parcel between two real clients.
+  const { db } = fakeDb({
+    clients: [
+      {
+        id: "c1",
+        display_name: "Psg Capital Investments PTY LTD",
+        placement_aliases: ["PSG Capital Pty Ltd", "PSG Investments"],
+      },
+    ],
+    accounts: [{ id: ACCOUNT, client_id: "c1", label: "Smith", external_ref: "114716" }],
+  });
+
+  const holders = await loadAccountHolders(db, [ACCOUNT]);
+  assert.deepEqual(holders, [
+    "Psg Capital Investments PTY LTD",
+    "PSG Capital Pty Ltd",
+    "PSG Investments",
+  ]);
+});
+
+test("holders: a client with no aliases behaves exactly as before", async () => {
+  const holders = await loadAccountHolders(seeded().db, [ACCOUNT]);
+  assert.deepEqual(holders, ["SMITH JOHN"]);
+});
 
 test("adapter: numerics arrive from PostgREST as strings and must be coerced", () => {
   // Left as strings, every sum downstream becomes string concatenation.

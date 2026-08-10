@@ -262,6 +262,30 @@ function normHeader(h: string): string {
 }
 
 /**
+ * Rows in the CLIENT NAME column that are not a client.
+ *
+ * A placement tab ends with its own arithmetic — `Total Confirmation` — and often
+ * carries an `Allowance` bucket for what was not allocated to anybody. Both were
+ * being read as participants, with two consequences:
+ *
+ *   • the sheet's `totalShares` counted its own total again (AT1: one real
+ *     allocation of 363,637 plus a `Total Confirmation` of 363,637 reported as
+ *     727,274);
+ *   • every sheet looked like it had one participant more than it does, which
+ *     silently disabled the single-participant rule in `selectClientPlacements`.
+ *
+ * Matched on a PREFIX for the total family, because the label is written several
+ * ways (`Total`, `Totals`, `Total Confirmation`, `Total Allocation`). The rest are
+ * exact, since a prefix rule there could swallow a real name.
+ */
+function isNonClientAllocationRow(name: string): boolean {
+  const n = normHeader(name);
+  if (!n) return true;
+  if (n.startsWith("total") || n.startsWith("grandtotal") || n.startsWith("subtotal")) return true;
+  return ["sum", "balance", "allowance", "unallocated", "shortfall"].includes(n);
+}
+
+/**
  * Normalizes security codes/tickers by mapping derivatives (e.g. EOSXX, ACWXX, EOSYY, EOSZZ)
  * to their 3-character ordinary parent ticker (e.g. EOS, ACW).
  */
@@ -319,7 +343,11 @@ export function exportStatus(item: PnlSummaryItem): string {
   // Checked before `isMatched`: a DB-only row trivially reconciles because both legs
   // were set from the same held quantity, so "Matched" would imply a trade
   // reconciliation that never happened. Where the figures came from is the useful fact.
-  if (item.isDbOnly) return "DB Holding";
+  // Both say WHY the row has no trades behind it rather than which table it came
+  // out of: an option reached the snapshot with a code, so it is listed (against
+  // the modelled `Unlisted Option` rows); an equity is simply an open holding the
+  // ledger never recorded — the same wording the client profile's Type column uses.
+  if (item.isDbOnly) return isOptionRow(item) ? "Listed Options" : "Open - no ledger history";
   // Ahead of everything else: the row's figures are blank, so no status describing
   // them can be true. `isMatched` is especially wrong here — 0 buys against 0 buys.
   if (isBuySideUnknown(item)) return "Buy Side Unknown";
@@ -1442,11 +1470,8 @@ export async function parsePlacementTrackerBuffer(
       if (!Array.isArray(cells)) continue;
 
       const clientName = String(cells[colClient] ?? "").trim();
-      const normClient = normHeader(clientName);
 
-      if (!clientName || normClient === "total" || normClient === "grandtotal" || normClient === "subtotal" || normClient === "sum") {
-        continue;
-      }
+      if (isNonClientAllocationRow(clientName)) continue;
 
       const parseNum = (col: number) => {
         if (col === -1 || col >= cells.length) return 0;
@@ -1953,22 +1978,129 @@ export function placementArrayToMap(list: PlacementTickerInfo[]): Map<string, Pl
 }
 
 /**
- * Helper to check if a client name matches or contains the filename stem.
+ * Spellings of the same legal entity, canonicalised to one token each.
+ *
+ * The Placement Tracker is hand-typed and the database is not, so the same
+ * company arrives as `Psg Capital Investments Pty Ltd` from one and
+ * `PSG CAPITAL INVESTMENTS P/L` from the other. Compared as raw text neither
+ * string contains the other, the client matches NOTHING, and on the stored-P&L
+ * path that showed up as 24 tickers reported unfilled for one real account.
+ *
+ * Every entry is a **canonicalisation, never a deletion**, and the difference is
+ * the whole safety argument. Dropping `Pty Ltd` outright would be simpler and
+ * wrong: `Smith Pty Ltd` would then be a prefix of `Smith Super Fund`, and one
+ * client's allocation would be filled onto another client's row — the exact
+ * failure this matching exists to prevent. Mapping every spelling of a suffix
+ * onto ONE token keeps the suffix as evidence while making its spelling
+ * irrelevant.
+ *
+ * Kept deliberately short: only abbreviations seen in the real workbooks, and
+ * only ones whose expansion is unambiguous. A wrong entry here is a wrong figure
+ * in a client's P&L, whereas a missing one is a visible unfilled row.
+ */
+const ENTITY_TOKEN_ALIASES: Record<string, string> = {
+  // Proprietary-company suffix. `pty ltd`, `pty limited`, `pty` and `p/l` all
+  // collapse to one token; a bare `ltd` / `limited` deliberately does NOT, since
+  // a public company is a different entity from a proprietary one.
+  pty: "ptyltd",
+  ptyltd: "ptyltd",
+  proprietary: "ptyltd",
+  limited: "ltd",
+  ltd: "ltd",
+  inv: "investments",
+  invest: "investments",
+  investment: "investments",
+  investments: "investments",
+  holding: "holdings",
+  hldgs: "holdings",
+  holdings: "holdings",
+  nom: "nominees",
+  noms: "nominees",
+  nominee: "nominees",
+  nominees: "nominees",
+  svcs: "services",
+  service: "services",
+  services: "services",
+  super: "superannuation",
+  superannuation: "superannuation",
+};
+
+/** Words that identify a file rather than a person, so they cannot carry a match. */
+const FILE_NOISE_WORDS = new Set([
+  "trade",
+  "ledger",
+  "contract",
+  "note",
+  "notes",
+  "xlsx",
+  "csv",
+  "xls",
+]);
+
+/**
+ * Joining words, dropped outright.
+ *
+ * A joint account is written `R Chawla & G Vijan Pty Ltd` in one place, `R Chawla
+ * and G Vijan Pty Ltd` in another and sometimes with neither. The connector says
+ * nothing about *who*, and keeping it means those three spellings are three
+ * different names — which is the same failure this whole function exists to
+ * avoid, one level down.
+ */
+const CONNECTOR_WORDS = new Set(["and"]);
+
+/**
+ * A name reduced to comparable tokens: lower-cased, punctuation dropped, and each
+ * known abbreviation replaced by its canonical spelling.
+ */
+function entityTokens(name: string): string[] {
+  const text = String(name ?? "")
+    .toLowerCase()
+    // `P/L` is the one abbreviation that lives INSIDE the punctuation, so it has
+    // to be recognised before the punctuation is stripped.
+    .replace(/\bp\s*[/.\-]\s*l\b/g, " ptyltd ");
+
+  const tokens: string[] = [];
+  for (const raw of text.split(/[^a-z0-9]+/)) {
+    if (!raw || CONNECTOR_WORDS.has(raw)) continue;
+    tokens.push(ENTITY_TOKEN_ALIASES[raw] ?? raw);
+  }
+
+  // `Pty Ltd` is one suffix written as two words, and each maps to its own token.
+  // Collapsing the pair is what makes it identical to `P/L`, which is one word.
+  const out: string[] = [];
+  for (const token of tokens) {
+    if (token === "ltd" && out[out.length - 1] === "ptyltd") continue;
+    out.push(token);
+  }
+  return out;
+}
+
+/**
+ * Does this placement-sheet `CLIENT NAME` refer to the same party as the hint
+ * (an account holder resolved from the database, or a trade-file name)?
+ *
+ * Tolerant about how a name is *written* — case, punctuation, entity-suffix
+ * spelling, a trailing `ATF …` — and strict about what it *says*. A false
+ * positive here fills a client's row from a stranger's parcel.
  */
 export function isClientMatch(clientName: string, fileStem: string): boolean {
   if (!clientName || !fileStem) return false;
-  const c = clientName.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const s = fileStem.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  const clientTokens = entityTokens(clientName);
+  const stemTokens = entityTokens(fileStem);
+  const c = clientTokens.join("");
+  const s = stemTokens.join("");
+  if (!c || !s) return false;
 
   if (c.includes(s) || s.includes(c)) return true;
 
-  // Also check individual words (e.g. "Akshit" and "Verma")
-  const stemWords = fileStem
-    .toLowerCase()
-    .split(/[\s\-_]+/)
-    .filter((w) => w.length > 2 && !["trade", "ledger", "contract", "note", "notes", "xlsx", "csv", "xls"].includes(w));
+  // Also check individual words (e.g. "Akshit" and "Verma"), which is what lets a
+  // re-ordered or partial name match. Suffix tokens stay REQUIRED here: they are
+  // short and shared, and excusing them is how "Smith Pty Ltd" starts matching
+  // "Smith Super Fund".
+  const stemWords = stemTokens.filter((w) => w.length > 2 && !FILE_NOISE_WORDS.has(w));
 
-  if (stemWords.length > 0 && stemWords.every((w) => clientName.toLowerCase().includes(w))) {
+  if (stemWords.length > 0 && stemWords.every((w) => c.includes(w))) {
     return true;
   }
 
@@ -1993,9 +2125,24 @@ function applyDerivedComment(item: PnlSummaryItem): void {
   if (item.placementYearUnresolved) notes.push("Check Placement Year");
   if (item.isPartialBuy) notes.push("Partial Buy");
   if (item.isPartialExit) notes.push("Partial Exit");
-  // "DB Holding" already implies an open position valued off the snapshot, so it
-  // stands alone rather than reading "Open · DB Holding".
-  else if (item.isDbOnly) notes.push("DB Holding");
+  // Both notes below already imply an open position valued off the snapshot, so
+  // they stand alone rather than reading "Open · …".
+  //
+  // "DB Holding" named the mechanism — which table the row came out of — and that
+  // is the one thing a reader of a P&L does not need. What they need is why the
+  // row has no trades behind it:
+  //
+  //   OPTION → `Listed Options`. It reached the snapshot at all, and a snapshot
+  //     carries only coded instruments, so it is listed — which reads directly
+  //     against the modelled `Unlisted Options` rows sitting beside it. That is
+  //     the distinction that actually matters here: a real holding versus a
+  //     Black-Scholes estimate.
+  //   EQUITY → `Open - no ledger history`, the wording the client profile's Type
+  //     column has always used for exactly this case (`lib/export/order-history.ts`).
+  //     One vocabulary across both surfaces beats two names for one fact.
+  else if (item.isDbOnly) {
+    notes.push(isOptionRow(item) ? "Listed Options" : "Open - no ledger history");
+  }
   else if (item.isDbOpenValued) notes.push("Open");
   if (notes.length > 0) item.comment = notes.join(" · ");
 }
@@ -2061,6 +2208,19 @@ function rowTradeYears(row: PnlSummaryItem): number[] {
  * the account holder has been resolved. A placement with several participants and no
  * match is `ambiguous`: filling from it would sum strangers' allocations.
  *
+ * **`allowSoleFallback` exists because that rule assumes one thing that is not always
+ * true: that the client being merged IS in this placement.** On the calculator page it
+ * holds — a human uploaded one client's ledger and is watching the result, so a lone
+ * name in the sheet is almost certainly a different spelling of them. In the unattended
+ * recompute it does not: that runs over EVERY client against ONE tracker, the hint came
+ * from the database rather than a filename, and "the name does not match" is evidence,
+ * not noise. Filling there would put a stranger's parcel on a client's row and store it.
+ * So the recompute passes `false` and takes an unfilled, reported row instead.
+ *
+ * This mattered more once `isNonClientAllocationRow` started dropping `Total
+ * Confirmation`: sheets that used to look like they had two participants now correctly
+ * have one, which is exactly when this fallback fires.
+ *
  * The year is a TIE-BREAK, not the primary key, and only bites when the client's
  * placements span more than one year: then the ledger's Contract Date has to name one,
  * and if it cannot, `unresolvedYear` sends the row to blank-and-red. Two placements in
@@ -2070,7 +2230,8 @@ function rowTradeYears(row: PnlSummaryItem): number[] {
 function selectClientPlacements(
   info: PlacementTickerInfo,
   row: PnlSummaryItem,
-  hints: string[]
+  hints: string[],
+  allowSoleFallback = true
 ): {
   entries: PlacementYearCandidate[];
   allocations: PlacementClientAllocation[];
@@ -2093,11 +2254,14 @@ function selectClientPlacements(
   const perEntry = byName.some((p) => p.matched.length > 0)
     ? byName
     : entries.map((entry) => {
-        // One participant — no question about whose allocation this is.
-        if (entry.clientAllocations.length === 1) {
+        // One participant — no question about whose allocation this is, PROVIDED the
+        // caller is in a position to assume the client is in this placement at all.
+        if (allowSoleFallback && entry.clientAllocations.length === 1) {
           return { entry, matched: entry.clientAllocations, ambiguous: false };
         }
-        return { entry, matched: [], ambiguous: entry.clientAllocations.length > 1 };
+        // Without that assumption a lone unmatched name is a stranger, and a stranger
+        // is exactly what `ambiguous` reports rather than fills.
+        return { entry, matched: [], ambiguous: entry.clientAllocations.length > 0 };
       });
 
   let inPlay = perEntry.filter((p) => p.matched.length > 0);
@@ -2259,6 +2423,22 @@ function describeYearMismatch(info: PlacementTickerInfo, row: PnlSummaryItem): s
 }
 
 /**
+ * Would a placement allocation have changed this row at all?
+ *
+ * Exactly the three conditions the fill branches below test, in one place, so the
+ * "left unfilled" report can never name a row that was already complete. A row
+ * with both sides recorded by the contract notes needs no placement: the client
+ * bought it on-market, and the placement sheet naming other people is simply the
+ * truth about a stock they were not placed in.
+ */
+function needsPlacementFill(item: PnlSummaryItem): boolean {
+  if (item.buyQty === 0 || item.buyPrice === 0) return true;
+  // A short buy side: more sold than the ledger ever saw bought, so a parcel is
+  // genuinely missing even though the row is not blank.
+  return item.sellQty > 0 && item.buyQty < item.sellQty;
+}
+
+/**
  * Merges parsed Placement Tracker data into an existing PNL Summary.
  * Fills missing Buy Qty (from Round Shares) & Buy Price (from ACTUAL $) from the
  * allocation rows belonging to the account holder(s) whose trades the summary
@@ -2272,8 +2452,9 @@ function describeYearMismatch(info: PlacementTickerInfo, row: PnlSummaryItem): s
  *
  * When the hints match nothing, a ticker is only merged if it has a single
  * allocation (where "which client" is not in question). Otherwise it is left
- * untouched and reported in `ambiguousTickers` so the caller can ask which
- * account holder to use, rather than filling in a wrong number.
+ * untouched and — **if the row actually needed filling** (`needsPlacementFill`) —
+ * reported in `ambiguousTickers`, so the caller can ask which account holder to
+ * use rather than filling in a wrong number.
  *
  * Two fill modes, mirroring `mergeDbHoldingsIntoSummary` on the sell side:
  *
@@ -2287,7 +2468,19 @@ function describeYearMismatch(info: PlacementTickerInfo, row: PnlSummaryItem): s
 export function mergePlacementTrackerIntoSummary(
   summary: PnlSummaryItem[],
   placementData: Map<string, PlacementTickerInfo>,
-  clientHints?: string | string[]
+  clientHints?: string | string[],
+  options: {
+    /**
+     * Use a placement whose ONE participant did not match the hints.
+     *
+     * True for the calculator page, where a human uploaded a single client's ledger
+     * and a lone name in the sheet is almost certainly them spelled differently.
+     * **False for the unattended recompute**, which runs every client against one
+     * tracker: there an unmatched name is a stranger, and filling from it would
+     * store their parcel on someone else's row. See `selectClientPlacements`.
+     */
+    soleParticipantFallback?: boolean;
+  } = {}
 ): {
   summary: PnlSummaryItem[];
   mergedCount: number;
@@ -2319,7 +2512,12 @@ export function mergePlacementTrackerIntoSummary(
       // WHICH PLACEMENTS is this client in? Everything else follows from that — the
       // parcels to fill with AND the option grants, which are read off the very rows
       // the client was found in rather than off the ticker as a whole.
-      const selection = selectClientPlacements(info, existing, hints);
+      const selection = selectClientPlacements(
+        info,
+        existing,
+        hints,
+        options.soleParticipantFallback ?? true
+      );
 
       if (selection.unresolvedYear) {
         // Nothing defensible to fill with. The row is left alone and flagged, so the
@@ -2332,7 +2530,18 @@ export function mergePlacementTrackerIntoSummary(
         continue;
       }
 
-      if (selection.ambiguous) ambiguousTickers.push(parentTicker);
+      // Reported only when the failure to identify the client actually COST
+      // something. A row whose buy side the contract notes already record in full
+      // would not have been filled by a perfect match either — the client simply
+      // bought on-market in a stock that was also placed to other people, and the
+      // sheet listing strangers is the expected answer, not a problem.
+      //
+      // Reporting those swamped the real ones: one account showed 24 tickers
+      // "left unfilled" of which most needed nothing, so the message read as a
+      // data disaster and could not be acted on.
+      if (selection.ambiguous && needsPlacementFill(existing)) {
+        ambiguousTickers.push(parentTicker);
+      }
 
       // Set even when nothing is filled — a client whose parcel the ledger already
       // records in full still earns that placement's options, and a placement with an
@@ -2628,16 +2837,30 @@ export function resolvePlacementClientHints(args: {
   autoSentinel: string;
   /** Account number → holder name, resolved from the database. */
   accountHolders: Record<string, string>;
+  /**
+   * Account number → the other names the tracker calls that holder
+   * (`clients.placement_aliases`).
+   *
+   * Carried beside the holder name rather than merged into it because the UI
+   * labels an account with ONE name while the merge may match on any of them.
+   * Aliases only ever ADD candidates — an account that resolves to a holder still
+   * resolves to that holder — so they cannot change which source won.
+   */
+  accountAliases?: Record<string, string[]>;
   /** How a file name is reduced to a candidate name. */
   filenameStem: (name: string) => string;
 }): { hints: string[]; source: "override" | "account" | "filename" | "none" } {
-  const { files, override, autoSentinel, accountHolders, filenameStem } = args;
+  const { files, override, autoSentinel, accountHolders, accountAliases, filenameStem } = args;
 
   if (override !== autoSentinel) return { hints: [override], source: "override" };
 
   const fromAccounts = [
     ...new Set(
-      files.flatMap((f) => (f.accounts || []).map((ref) => accountHolders[ref]).filter(Boolean))
+      files.flatMap((f) =>
+        (f.accounts || []).flatMap((ref) =>
+          [accountHolders[ref], ...(accountAliases?.[ref] ?? [])].filter(Boolean)
+        )
+      )
     ),
   ];
   if (fromAccounts.length > 0) return { hints: fromAccounts, source: "account" };
@@ -2953,9 +3176,11 @@ export function mergeDbHoldingsIntoSummary(
       isDbMarketValued: true,
       isDbOpenValued: true,
       // Nothing in the uploaded ledger backs this row — its cost basis is the
-      // snapshot's, which the Comments column has to say out loud.
+      // snapshot's, which the Comments column has to say out loud. An option is
+      // named for what it is (`Listed Options`, against the modelled unlisted
+      // rows); an equity for why it has no trades.
       isDbOnly: true,
-      comment: "DB Holding",
+      comment: isOption ? "Listed Options" : "Open - no ledger history",
       openQty: 0,
       tradeCount: 0,
     });

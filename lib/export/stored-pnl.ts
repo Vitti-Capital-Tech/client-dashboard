@@ -18,8 +18,8 @@ import type { PnlOverride, OverriddenFields, PnlSummaryRow } from "./order-histo
  * The status cell.
  *
  * Deliberately the same wording, in the same precedence order, as the
- * calculator's `exportStatus`: a row that reads "DB Holding" on the calculator
- * page must not read "Open" on the client profile. Re-stated here rather than
+ * calculator's `exportStatus`: a row that reads "Listed Options" on the
+ * calculator page must not read "Open" on the client profile. Re-stated here rather than
  * imported because the flags arrive already flattened onto the stored row, and
  * reconstructing a `PnlSummaryItem` just to ask it a question would be worse.
  */
@@ -29,8 +29,12 @@ function statusOf(r: StoredPnlRow): string {
   if (r.buySideUnknown) return "Buy Side Unknown";
   // Before `isMatched`, because a DB-only row trivially reconciles — both legs
   // came from the same held quantity — and "Matched" would imply a trade
-  // reconciliation that never happened.
-  if (r.isDbOnly) return "DB Holding";
+  // reconciliation that never happened. Both wordings say WHY there are no trades
+  // behind the row: an option reached the snapshot with a code, so it is listed
+  // (reading against the modelled `Unlisted Option` rows); an equity is an open
+  // holding the ledger never recorded, which is the wording `buildPnlSummary` has
+  // always used for the same case.
+  if (r.isDbOnly) return r.isOption ? "Listed Options" : "Open - no ledger history";
   if (r.isUnlistedOption) return "Unlisted Option";
   if (r.isMatched) return "Matched";
   if (r.isOption) return "Option";

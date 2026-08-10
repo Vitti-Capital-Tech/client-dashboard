@@ -51,6 +51,15 @@ import {
 
 export type { UploadedPlacementFile, UploadedTradeFile } from "@/store/usePnlCalculatorStore";
 
+/**
+ * Comments that state a fact about the position rather than flag something to
+ * look at, so they render neutrally instead of amber.
+ *
+ * `Unlisted Options` is deliberately NOT here: that row's value is a model
+ * estimate, and the colour is how the table says so at a glance.
+ */
+const NEUTRAL_COMMENTS = new Set(["Open", "Open - no ledger history", "Listed Options"]);
+
 export function PnlCalculatorClient() {
   /**
    * Everything worth keeping when the user leaves the tab lives in a module-scope
@@ -85,6 +94,7 @@ export function PnlCalculatorClient() {
   const setSearchQuery = usePnlCalculatorStore((s) => s.setSearchQuery);
   const accountHolders = usePnlCalculatorStore((s) => s.accountHolders);
   const setAccountHolders = usePnlCalculatorStore((s) => s.setAccountHolders);
+  const setAccountAliases = usePnlCalculatorStore((s) => s.setAccountAliases);
   // Read through `live()` where it is needed, not as a selector — the guard must reflect
   // the value at call time, not at render time.
   const setConfiguredTrackersAttempted = usePnlCalculatorStore(
@@ -212,7 +222,10 @@ export function PnlCalculatorClient() {
     files: UploadedTradeFile[] = tradeFiles,
     override: string = placementClient,
     holders: Record<string, string> = accountHolders,
-    activeAccount: string = live().selectedAccount
+    activeAccount: string = live().selectedAccount,
+    // Read live rather than from the render closure: these are resolved in the
+    // same tick as the holders, before state has flushed.
+    aliases: Record<string, string[]> = live().accountAliases
   ): string[] => {
     // Scope to the account being viewed. Uploading two clients' files and then
     // filtering to one of them must NOT keep the other's name as a hint: a ticker both
@@ -238,6 +251,7 @@ export function PnlCalculatorClient() {
       override,
       autoSentinel: AUTO_CLIENT,
       accountHolders: holders,
+      accountAliases: aliases,
       filenameStem: getFilenameStem,
     }).hints;
   };
@@ -399,7 +413,7 @@ export function PnlCalculatorClient() {
               ? ` ${merged.partialExitCount} of them were partial exits — the still-held parcel was added on top of the realised sale.`
               : "") +
             (merged.createdCount > 0
-              ? ` Added ${merged.createdCount} row(s) for holdings the trade file never mentioned (mostly free placement options, which have no contract note) — their cost basis comes from the snapshot, so they are tagged "DB Holding".`
+              ? ` Added ${merged.createdCount} row(s) for holdings the trade file never mentioned (mostly free placement options, which have no contract note) — their cost basis comes from the snapshot, so they are tagged "Listed Options" (or "Open - no ledger history" for an equity line).`
               : "") +
             (windowed
               ? " While a reporting period is set, a holding the trade file never mentions is only added when the period's own trades touched the same underlying (GED traded in the window brings back the GEDO held against it) — the snapshot has no date of its own to place the rest in the period."
@@ -854,7 +868,9 @@ export function PnlCalculatorClient() {
   const recalculateTradeFiles = (
     activeTradeFiles: UploadedTradeFile[],
     targetAcc?: string,
-    holders?: Record<string, string>
+    holders?: Record<string, string>,
+    /** Passed for the same reason as `holders`: resolved in this very tick. */
+    aliases?: Record<string, string[]>
   ) => {
     if (activeTradeFiles.length === 0) {
       setResult(null);
@@ -889,7 +905,8 @@ export function PnlCalculatorClient() {
       activeTradeFiles,
       live().placementClient,
       holders ?? live().accountHolders,
-      accToUse
+      accToUse,
+      aliases ?? live().accountAliases
     );
 
     const activePlacementFiles = live().placementFiles;
@@ -1005,12 +1022,22 @@ export function PnlCalculatorClient() {
         // the file happens to be called.
         const refs = [...new Set(updatedTradeFileList.flatMap((tf) => tf.accounts || []))];
         let holders = live().accountHolders;
+        let aliases = live().accountAliases;
         if (refs.length > 0) {
           const resolved = await resolveAccountHoldersAction(refs);
           if (resolved.ok && resolved.holders.length > 0) {
             holders = { ...live().accountHolders };
-            for (const h of resolved.holders) holders[h.accountRef] = h.clientName;
+            // The tracker's own spellings for this holder, carried separately so
+            // the account is still LABELLED with one name while the merge may
+            // match on any of them — and so this page matches exactly what the
+            // stored recompute does.
+            aliases = { ...live().accountAliases };
+            for (const h of resolved.holders) {
+              holders[h.accountRef] = h.clientName;
+              if (h.aliases.length > 0) aliases[h.accountRef] = h.aliases;
+            }
             setAccountHolders(holders);
+            setAccountAliases(aliases);
           }
           const unresolved = refs.filter((r) => !holders[r]);
           if (unresolved.length > 0) {
@@ -1024,7 +1051,7 @@ export function PnlCalculatorClient() {
           }
         }
 
-        recalculateTradeFiles(updatedTradeFileList, "all", holders);
+        recalculateTradeFiles(updatedTradeFileList, "all", holders, aliases);
 
         // Only now: the standing trackers are ~48s of CPU on a cold cache, and starting
         // them any earlier starved this upload's own server actions.
@@ -2304,11 +2331,11 @@ export function PnlCalculatorClient() {
                               <span
                                 className={`text-3xs px-1.5 py-0.5 rounded border font-semibold whitespace-nowrap ${
                                   // Red for a row whose figures cannot be trusted at
-                                  // all; "Open" is a statement of fact and stays
-                                  // neutral; the merges get the amber in between.
+                                  // all; a plain statement of fact stays neutral;
+                                  // the merges get the amber in between.
                                   item.placementYearUnresolved
                                     ? "bg-loss-bg text-loss-d border-loss-d"
-                                    : item.comment === "Open"
+                                    : NEUTRAL_COMMENTS.has(item.comment ?? "")
                                     ? "bg-paper-2 text-mut border-paper-border"
                                     : "bg-amber-bg text-amber-d border-amber-200"
                                 }`}

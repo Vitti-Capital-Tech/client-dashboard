@@ -53,7 +53,11 @@ type PositionRow = {
 type AccountHolderRow = {
   id: string;
   label: string | null;
-  clients: { display_name: string | null } | null;
+  clients: {
+    display_name: string | null;
+    /** Extra spellings the Placement Tracker uses — see `loadAccountHolders`. */
+    placement_aliases: string[] | null;
+  } | null;
 };
 
 /** A `trades` row as PostgREST returns it. */
@@ -301,11 +305,22 @@ export async function loadDbHoldings(
 }
 
 /**
- * The account holders behind these accounts.
+ * The names a Placement Tracker sheet might call the holders of these accounts.
  *
- * Needed because a Placement Tracker sheet lists every participant in the
- * placement; merging without knowing WHOSE allocation to read sums everyone's
- * and inflates the client's Buy Qty by the number of participants.
+ * Needed because a sheet lists every participant in the placement; merging
+ * without knowing WHOSE allocation to read sums everyone's and inflates the
+ * client's Buy Qty by the number of participants.
+ *
+ * `clients.placement_aliases` is returned alongside `display_name` and carries
+ * equal weight. The tracker is hand-typed, so one party is written several ways —
+ * and the differences that remain after normalising spelling are not spelling at
+ * all: the real workbooks contain `PSG Capital Ltd` and `PSG Super` against two
+ * SEPARATE clients. Which is which is a fact about the desk's records, so it is
+ * stated in that column rather than inferred by a looser matcher, which would
+ * move a parcel between two real clients without anything downstream noticing.
+ *
+ * Read live on every recompute, so correcting an alias needs a Recalculate and
+ * nothing else — no tracker re-parse, since the sheets have not changed.
  */
 export async function loadAccountHolders(
   db: AdminDb,
@@ -315,14 +330,21 @@ export async function loadAccountHolders(
 
   const { data, error } = await db
     .from("accounts")
-    .select("id, label, clients(display_name)")
+    .select("id, label, clients(display_name, placement_aliases)")
     .in("id", accountIds);
   if (error) throw error;
 
   const names = new Set<string>();
   for (const a of (data ?? []) as unknown as AccountHolderRow[]) {
+    // The account label is a fallback for an account with no client row at all;
+    // it is a desk label rather than a legal name, so it never wins.
     const name = a.clients?.display_name || a.label;
     if (name) names.add(String(name).trim());
+
+    for (const alias of a.clients?.placement_aliases ?? []) {
+      const trimmed = String(alias ?? "").trim();
+      if (trimmed) names.add(trimmed);
+    }
   }
   return [...names];
 }

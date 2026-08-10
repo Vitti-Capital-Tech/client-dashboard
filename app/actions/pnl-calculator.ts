@@ -536,6 +536,12 @@ export interface AccountHolder {
   accountRef: string;
   /** `clients.display_name` — the account name the broker export carried. */
   clientName: string;
+  /**
+   * `clients.placement_aliases` — the other names the Placement Tracker uses for
+   * this client, carried separately from `clientName` because the UI labels the
+   * account with one name while the merge may match on any of them.
+   */
+  aliases: string[];
 }
 
 /**
@@ -564,12 +570,19 @@ export async function resolveAccountHoldersAction(
 
     const [accRes, clientRes] = await Promise.all([
       supabase.from("accounts").select("external_ref, ref, client_id"),
-      supabase.from("clients").select("id, display_name"),
+      // `placement_aliases` rides along so this page matches placement sheets the
+      // same way the stored recompute does. Without it the two surfaces would fill
+      // different rows from the same tracker, which is the one thing the shared
+      // engine exists to prevent.
+      supabase.from("clients").select("id, display_name, placement_aliases"),
     ]);
 
     if (accRes.error) return { ok: false, holders: [], error: accRes.error.message };
 
     const nameById = new Map((clientRes.data || []).map((c) => [c.id, c.display_name as string]));
+    const aliasesById = new Map(
+      (clientRes.data || []).map((c) => [c.id, (c.placement_aliases ?? []) as string[]])
+    );
     const wantedByNorm = new Map(wanted.map((r) => [normalizeAccountNo(r), r]));
 
     const holders: AccountHolder[] = [];
@@ -582,7 +595,13 @@ export async function resolveAccountHoldersAction(
         if (!original || seen.has(original)) continue;
         const clientName = nameById.get(a.client_id as string);
         if (!clientName) continue;
-        holders.push({ accountRef: original, clientName });
+        holders.push({
+          accountRef: original,
+          clientName,
+          aliases: (aliasesById.get(a.client_id as string) ?? [])
+            .map((s) => String(s ?? "").trim())
+            .filter(Boolean),
+        });
         seen.add(original);
       }
     }
