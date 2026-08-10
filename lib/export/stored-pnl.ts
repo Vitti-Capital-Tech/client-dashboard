@@ -117,6 +117,12 @@ export function storedToSummaryRows(
       // Correcting the buy side by hand is exactly how such a row rejoins the
       // total, so this tracks the value in force rather than the stored flag.
       excludedFromTotal: r.buySideUnknown && buyPrice === 0 && buyQty === 0,
+      isMatched: r.isMatched,
+      isOption: r.isOption,
+      isUnlistedOption: r.isUnlistedOption,
+      isDbOpenValued: r.isDbOpenValued,
+      isDbOnly: r.isDbOnly,
+      openQty: r.openQty,
     };
   });
 

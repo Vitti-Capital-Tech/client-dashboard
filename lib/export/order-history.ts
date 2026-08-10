@@ -102,6 +102,12 @@ export type PnlSummaryRow = {
     sellOrCurrent: number;
     pnl: number;
   };
+  isMatched?: boolean;
+  isOption?: boolean;
+  isUnlistedOption?: boolean;
+  isDbOpenValued?: boolean;
+  isDbOnly?: boolean;
+  openQty?: number;
 };
 
 /**

@@ -25,6 +25,7 @@ import {
   pnlSummaryFilename,
   SUMMARY_HEADERS,
   type PnlOverride,
+  type PnlSummaryRow,
 } from "@/lib/export/order-history";
 import { storedToSummaryRows } from "@/lib/export/stored-pnl";
 import type { StoredPnlRow, PnlRunRow } from "@/lib/data/pnl";
@@ -119,6 +120,27 @@ const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; 
   );
 };
 
+const TABS = [
+  { id: "holdings", label: "Holdings" },
+  { id: "historical p&l", label: "Historical P&L" },
+  { id: "options", label: "Options" },
+  { id: "bids", label: "Bids" },
+  { id: "alerts", label: "Alerts" },
+] as const;
+
+type TabId = (typeof TABS)[number]["id"];
+
+type HistoricalPnlFilter =
+  | "all"
+  | "equity"
+  | "options"
+  | "unlisted"
+  | "open"
+  | "matched"
+  | "profit"
+  | "loss"
+  | "unmatched";
+
 export function ClientDetailClient({
   client,
   accounts,
@@ -147,9 +169,9 @@ export function ClientDetailClient({
   pnlRuns: PnlRunRow[];
 }) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<
-    "holdings" | "order history" | "options" | "bids" | "alerts"
-  >("holdings");
+  const [activeTab, setActiveTab] = useState<TabId>("holdings");
+  const [pnlFilter, setPnlFilter] = useState<HistoricalPnlFilter>("all");
+  const [pnlSearch, setPnlSearch] = useState<string>("");
   // Account filter: "all" aggregates across the client's accounts, else scope
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
@@ -211,7 +233,70 @@ export function ClientDetailClient({
   const visibleStoredPnl = storedPnl.filter((r) => inAcct(r.accountId));
   const summaryRows = storedToSummaryRows(visibleStoredPnl, overrideMap);
 
-  const summaryTotal = grandTotal(summaryRows);
+  const isRowOption = (r: PnlSummaryRow) =>
+    Boolean(
+      r.isOption ||
+      r.isUnlistedOption ||
+      r.ticker.endsWith("-UO") ||
+      r.type.toLowerCase().includes("option")
+    );
+
+  const isRowUnlistedOption = (r: PnlSummaryRow) =>
+    Boolean(
+      r.isUnlistedOption ||
+      r.ticker.endsWith("-UO") ||
+      r.type.toLowerCase().includes("unlisted")
+    );
+
+  const isRowMatched = (r: PnlSummaryRow) =>
+    Boolean(r.isMatched || r.type.startsWith("Matched"));
+
+  const isRowOpen = (r: PnlSummaryRow) =>
+    Boolean(
+      r.openPosition ||
+      (r.openQty !== undefined && r.openQty > 0) ||
+      r.isDbOpenValued ||
+      r.type.startsWith("Open")
+    );
+
+  const isRowUnmatched = (r: PnlSummaryRow) =>
+    !isRowMatched(r) && !isRowOption(r);
+
+  const isRowEquity = (r: PnlSummaryRow) => !isRowOption(r);
+
+  const pnlTabCounts: Record<HistoricalPnlFilter, number> = {
+    all: summaryRows.length,
+    equity: summaryRows.filter(isRowEquity).length,
+    options: summaryRows.filter(isRowOption).length,
+    unlisted: summaryRows.filter(isRowUnlistedOption).length,
+    open: summaryRows.filter(isRowOpen).length,
+    matched: summaryRows.filter(isRowMatched).length,
+    profit: summaryRows.filter((r) => r.pnl > 0).length,
+    loss: summaryRows.filter((r) => r.pnl < 0).length,
+    unmatched: summaryRows.filter(isRowUnmatched).length,
+  };
+
+  const filteredSummaryRows = summaryRows.filter((r) => {
+    const query = pnlSearch.trim().toLowerCase();
+    const matchesSearch =
+      !query ||
+      r.ticker.toLowerCase().includes(query) ||
+      r.name.toLowerCase().includes(query);
+
+    if (!matchesSearch) return false;
+
+    if (pnlFilter === "matched") return isRowMatched(r);
+    if (pnlFilter === "profit") return r.pnl > 0;
+    if (pnlFilter === "loss") return r.pnl < 0;
+    if (pnlFilter === "unmatched") return isRowUnmatched(r);
+    if (pnlFilter === "options") return isRowOption(r);
+    if (pnlFilter === "unlisted") return isRowUnlistedOption(r);
+    if (pnlFilter === "open") return isRowOpen(r);
+    if (pnlFilter === "equity") return isRowEquity(r);
+    return true;
+  });
+
+  const filteredSummaryTotal = grandTotal(filteredSummaryRows);
 
   /**
    * When these figures were produced, and anything the desk should read before
@@ -269,7 +354,7 @@ export function ClientDetailClient({
     );
 
   const exportCsv = () =>
-    download(buildPnlSummaryCsv(summaryRows), exportName("csv"), "text/csv");
+    download(buildPnlSummaryCsv(filteredSummaryRows), exportName("csv"), "text/csv");
 
   /**
    * Rebuild the stored figures now.
@@ -345,7 +430,7 @@ export function ClientDetailClient({
     setExporting(true);
     try {
       const base64 = await buildPnlSummaryXlsx(
-        summaryRows,
+        filteredSummaryRows,
         `${client.name} — P&L summary`,
       );
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -446,13 +531,17 @@ export function ClientDetailClient({
 
         {/* Tab Selection */}
         <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
-          {(["holdings", "order history", "options", "bids", "alerts"] as const).map(t => (
+          {TABS.map((t) => (
             <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              className={`text-xs font-semibold px-3.5 py-1.5 rounded-[7px] cursor-pointer capitalize transition-colors ${activeTab === t ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              className={`text-xs font-semibold px-3.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
+                activeTab === t.id
+                  ? "bg-white text-ink shadow-shadow"
+                  : "text-mut hover:text-ink"
+              }`}
             >
-              {t}
+              {t.label}
             </button>
           ))}
         </div>
@@ -556,7 +645,7 @@ export function ClientDetailClient({
         </div>
       )}
 
-      {activeTab === "order history" && (
+      {activeTab === "historical p&l" && (
         <div className="space-y-3">
           {/* Ledger totals. Realised P&L is NOT sold − bought: most of what was
               bought is still held, so the two are not comparable. It comes from
@@ -612,12 +701,21 @@ export function ClientDetailClient({
           )}
 
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-            <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-baseline justify-between">
+            <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex flex-col md:flex-row md:items-baseline justify-between gap-3">
               <div>
                 <b className="text-sm font-semibold text-ink">P&amp;L by company</b>
                 <div className="text-[11px] text-mut mt-0.5">
-                  {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"} from{" "}
-                  {settledTrades.length} settled trade
+                  {filteredSummaryRows.length !== summaryRows.length ? (
+                    <>
+                      <span className="font-semibold text-ink">{filteredSummaryRows.length}</span> of{" "}
+                      {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"}
+                    </>
+                  ) : (
+                    <>
+                      {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"}
+                    </>
+                  )}{" "}
+                  from {settledTrades.length} settled trade
                   {settledTrades.length === 1 ? "" : "s"}
                   {visibleTrades.length !== settledTrades.length &&
                     ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed excluded`}
@@ -635,7 +733,7 @@ export function ClientDetailClient({
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
                 <button
                   onClick={previewCsv}
                   disabled={previewing}
@@ -656,16 +754,14 @@ export function ClientDetailClient({
                     cannot carry a fill. */}
                 <button
                   onClick={exportCsv}
-                  disabled={summaryRows.length === 0}
+                  disabled={filteredSummaryRows.length === 0}
                   className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
                   Export CSV
                 </button>
                 <button
                   onClick={exportExcel}
-                  disabled={
-                    exporting || summaryRows.length === 0
-                  }
+                  disabled={exporting || filteredSummaryRows.length === 0}
                   title="Same rows as an .xlsx, colour-coded: amber = still open, green = fully exited, red = needs checking"
                   className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                 >
@@ -673,6 +769,131 @@ export function ClientDetailClient({
                 </button>
               </div>
             </div>
+
+            {/* Filter Tabs & Search Controls Bar */}
+            <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
+              {/* Full-width Segmented Filter Tabs */}
+              <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap border border-line/60">
+                {(
+                  [
+                    "all",
+                    "equity",
+                    "options",
+                    "unlisted",
+                    "open",
+                    "matched",
+                    "profit",
+                    "loss",
+                    "unmatched",
+                  ] as const
+                ).map((f) => {
+                  const active = pnlFilter === f;
+                  const count = pnlTabCounts[f];
+                  const labels: Record<HistoricalPnlFilter, string> = {
+                    all: "All Tickers",
+                    equity: "Equity",
+                    options: "Options",
+                    unlisted: "Unlisted Options",
+                    open: "Open",
+                    matched: "Matched P&L",
+                    profit: "Profit Only",
+                    loss: "Loss Only",
+                    unmatched: "Unmatched",
+                  };
+                  return (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setPnlFilter(f)}
+                      className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
+                        active
+                          ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
+                          : "text-mut hover:text-ink font-medium hover:bg-white/50"
+                      }`}
+                    >
+                      <span>{labels[f]}</span>
+                      <span
+                        className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
+                          active
+                            ? f === "profit"
+                              ? "bg-gain-bg text-gain"
+                              : f === "loss"
+                              ? "bg-loss-bg text-loss-d"
+                              : "bg-paper-2 text-ink"
+                            : f === "profit"
+                            ? "bg-gain-bg/50 text-gain"
+                            : f === "loss"
+                            ? "bg-loss-bg/50 text-loss-d"
+                            : "bg-line/40 text-mut"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Search & Quick Controls Row */}
+              <div className="flex items-center justify-between gap-3 pt-0.5">
+                <div className="relative flex-1 max-w-sm">
+                  <svg
+                    className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                    />
+                  </svg>
+                  <input
+                    type="text"
+                    placeholder="Search ticker or company..."
+                    value={pnlSearch}
+                    onChange={(e) => setPnlSearch(e.target.value)}
+                    className="w-full bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
+                  />
+                  {pnlSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPnlSearch("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
+                      title="Clear search"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {(pnlFilter !== "all" || pnlSearch) && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] text-mut">
+                      Showing <strong className="text-ink">{filteredSummaryRows.length}</strong> of {summaryRows.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPnlFilter("all");
+                        setPnlSearch("");
+                      }}
+                      className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
+                    >
+                      <svg className="w-3 h-3 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                      Reset Filter
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-left text-xs font-medium">
                 <thead>
@@ -689,15 +910,17 @@ export function ClientDetailClient({
                   </tr>
                 </thead>
                 <tbody>
-                  {summaryRows.length === 0 ? (
+                  {filteredSummaryRows.length === 0 ? (
                     <tr>
                       <td colSpan={10} className="px-4.5 py-10 text-center text-mut">
-                        No contract notes imported for this client.
+                        {summaryRows.length === 0
+                          ? "No contract notes imported for this client."
+                          : "No company records match the current filter or search."}
                       </td>
                     </tr>
                   ) : (
                     <>
-                      {summaryRows.map((r) => (
+                      {filteredSummaryRows.map((r) => (
                         <PnlRow
                           // Remount when the editor opens or closes, so its
                           // inputs always re-seed from the values currently in
@@ -718,21 +941,21 @@ export function ClientDetailClient({
                           companies are not the same thing. */}
                       <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
                         <td className="px-4.5 py-3" colSpan={2}>
-                          Grand Total
+                          Grand Total{filteredSummaryRows.length !== summaryRows.length ? ` (${filteredSummaryRows.length} filtered)` : ""}
                         </td>
                         <td className="px-4.5 py-3" />
                         <td className="px-4.5 py-3" />
                         <td className="px-4.5 py-3 text-right font-mono">
-                          ${money2(summaryTotal.buyPrice)}
+                          ${money2(filteredSummaryTotal.buyPrice)}
                         </td>
                         <td className="px-4.5 py-3 text-right font-mono">
-                          ${money2(summaryTotal.sellOrCurrent)}
+                          ${money2(filteredSummaryTotal.sellOrCurrent)}
                         </td>
                         <td
-                          className={`px-4.5 py-3 text-right font-mono ${summaryTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                          className={`px-4.5 py-3 text-right font-mono ${filteredSummaryTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
                         >
-                          {summaryTotal.pnl < 0 ? "-" : ""}$
-                          {money2(Math.abs(summaryTotal.pnl))}
+                          {filteredSummaryTotal.pnl < 0 ? "-" : ""}$
+                          {money2(Math.abs(filteredSummaryTotal.pnl))}
                         </td>
                         <td className="px-4.5 py-3" colSpan={3} />
                       </tr>
