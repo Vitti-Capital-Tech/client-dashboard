@@ -180,3 +180,43 @@ test("dialect: a round trip through the dialect reduces to the right P&L", () =>
   assert.equal(rollup.unitsSold, 1000);
   assert.equal(rollup.realizedPl, 3000, "not 102000 — the reversal is excluded");
 });
+
+// ---------------------------------------------------------------------------
+// Foreign listings
+// ---------------------------------------------------------------------------
+
+test("foreign: an exchange-qualified code is its own parent", () => {
+  // `BRAI` is a whole NASDAQ ticker, not `BRA` plus a derivative suffix.
+  // Slicing to three would file Braiin under an invented `BRA` and merge it
+  // with any ASX code that happens to start the same way.
+  const { trades, errors } = parseTradeCsv(csv(row({ security: "BRAI:NAS" })));
+  assert.equal(errors.length, 0, "a US holding must not be rejected");
+  assert.equal(trades[0].rawSecurity, "BRAI:NAS");
+  assert.equal(trades[0].parent, "BRAI:NAS");
+});
+
+test("foreign: a US ticker is never read as an ASX option", () => {
+  // The "an O after the third character" tell is an ASX convention. On a
+  // foreign ticker it is a coincidence — `SONO:NAS` is not an option on `SON`.
+  const { trades } = parseTradeCsv(csv(row({ security: "SONO:NAS" })));
+  assert.equal(trades[0].parent, "SONO:NAS");
+});
+
+test("foreign: ASX codes are untouched by the foreign-listing rule", () => {
+  const { trades } = parseTradeCsv(
+    csv(
+      row({ cnote: "1", security: "EOS" }),
+      row({ cnote: "2", security: "EOSXX" }),
+      row({ cnote: "3", security: "AT4" }),
+    ),
+  );
+  assert.deepEqual(trades.map((t) => t.parent), ["EOS", "EOS", "AT4"]);
+});
+
+test("foreign: genuinely unreadable codes are still refused", () => {
+  // Widening for `:NAS` must not turn the check into a rubber stamp — a code
+  // that is neither shape is still an error rather than a silent import.
+  const { errors } = parseTradeCsv(csv(row({ security: "??" })));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].reason, /Unrecognised security code/);
+});

@@ -5,6 +5,11 @@ import {
   yearsToExpiry,
   UNLISTED_OPTION_ASSUMPTIONS,
 } from "./black-scholes.ts";
+// One definition of "is this an ASX code or a foreign listing", shared with the
+// broker importer. Two copies of that rule would drift, and the two subsystems
+// disagreeing about what a security IS is exactly the kind of split that shows
+// up as a P&L discrepancy nobody can explain.
+import { isExchangeQualified } from "./import/normalize.ts";
 
 export interface ParsedTradeRow {
   cnote?: string;
@@ -262,6 +267,11 @@ function normHeader(h: string): string {
  */
 export function getParentTicker(rawCode: string): string {
   const code = String(rawCode || "").trim().toUpperCase();
+  // A foreign listing is its own parent — `BRAI:NAS` is a whole NASDAQ ticker,
+  // not `BRA` plus a suffix. Slicing it would merge unrelated instruments under
+  // an invented ASX-shaped code. Shared with the importer so the two cannot
+  // disagree about what a security IS.
+  if (isExchangeQualified(code)) return code;
   if (code.length >= 3) {
     return code.slice(0, 3);
   }
@@ -273,6 +283,11 @@ export function getParentTicker(rawCode: string): string {
  */
 export function isOptionCode(rawCode: string): boolean {
   const code = String(rawCode || "").trim().toUpperCase();
+  // The "an O after the third character" tell is an ASX convention and means
+  // nothing on a foreign ticker — it would read `SONO:NAS` as an option on
+  // `SON`. Today's three US holdings happen to have no O in that position, so
+  // this guards a bug that has not fired yet rather than one that has.
+  if (isExchangeQualified(code)) return false;
   if (code.length > 3) {
     const suffix = code.slice(3);
     return suffix.includes("O");

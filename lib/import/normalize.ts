@@ -25,8 +25,31 @@
  * literal suffixes would mangle real three-letter codes (LDX is Lumos
  * Diagnostics, not LD + X) and would miss the option suffixes entirely.
  */
+/**
+ * A foreign listing, qualified by its exchange — `RKLB:NAS`, `BRAI:NAS`.
+ *
+ * These behave nothing like an ASX code. `BRAI` is a whole NASDAQ ticker, not
+ * `BRA` plus a derivative suffix, so every rule below that slices to three
+ * characters has to step aside for them: doing otherwise would invent a parent
+ * (`BRA`) and silently merge unrelated instruments under it.
+ *
+ * Deliberately permissive about the exchange part. Only `:NAS` appears today,
+ * and hard-coding it would mean the next market the desk touches fails the same
+ * way this one did — as an unreadable code, with the holding dropped.
+ */
+export const EXCHANGE_QUALIFIED = /^[A-Z0-9.]{1,12}:[A-Z]{2,4}$/;
+
+/** True for `RKLB:NAS` and the like; false for every ASX code. */
+export function isExchangeQualified(rawCode: string): boolean {
+  return EXCHANGE_QUALIFIED.test(String(rawCode ?? "").trim().toUpperCase());
+}
+
 export function parentCode(rawCode: string): string {
   const code = rawCode.trim().toUpperCase();
+
+  // A foreign listing is its own parent — there is no ordinary underneath it.
+  if (EXCHANGE_QUALIFIED.test(code)) return code;
+
   if (!/^[A-Z0-9]{3,6}$/.test(code)) {
     throw new Error(`Unrecognised security code: "${rawCode}"`);
   }
@@ -35,7 +58,11 @@ export function parentCode(rawCode: string): string {
 
 /** True when the code is a derivative of its parent rather than the ordinary itself. */
 export function isDerivative(rawCode: string): boolean {
-  return rawCode.trim().length > 3;
+  const code = rawCode.trim().toUpperCase();
+  // Length is the ASX tell (`ADNOD` is longer than `ADN`). A foreign ticker is
+  // simply longer than three characters and means nothing by it.
+  if (EXCHANGE_QUALIFIED.test(code)) return false;
+  return code.length > 3;
 }
 
 /**
