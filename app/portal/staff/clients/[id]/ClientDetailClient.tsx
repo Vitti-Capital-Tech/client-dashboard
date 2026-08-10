@@ -470,9 +470,9 @@ export function ClientDetailClient({
   const headerS708 =
     acctFilter === "all"
       ? (accounts
-          .map((a) => a.s708Expiry)
-          .filter((d): d is string => !!d)
-          .sort()[0] ?? null)
+        .map((a) => a.s708Expiry)
+        .filter((d): d is string => !!d)
+        .sort()[0] ?? null)
       : (selected?.s708Expiry ?? null);
 
   const unlisted = unlistedValue(visibleOptions);
@@ -508,7 +508,7 @@ export function ClientDetailClient({
       {/* Back to registry */}
       <div className="select-none">
         <button
-          onClick={() => router.push("/portal/staff")}
+          onClick={() => router.push("/portal/staff/clients")}
           className="text-green-d font-semibold text-xs underline underline-offset-2 cursor-pointer hover:opacity-85"
         >
           &larr; Client Register
@@ -535,11 +535,10 @@ export function ClientDetailClient({
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id)}
-              className={`text-xs font-semibold px-3.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
-                activeTab === t.id
+              className={`text-xs font-semibold px-3.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${activeTab === t.id
                   ? "bg-white text-ink shadow-shadow"
                   : "text-mut hover:text-ink"
-              }`}
+                }`}
             >
               {t.label}
             </button>
@@ -555,11 +554,10 @@ export function ClientDetailClient({
             <button
               key={a.id}
               onClick={() => setAcctFilter(a.id)}
-              className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${
-                acctFilter === a.id
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${acctFilter === a.id
                   ? "bg-navy text-white border-navy"
                   : "bg-white text-mut border-line hover:border-navy hover:text-ink"
-              }`}
+                }`}
             >
               {a.label}
             </button>
@@ -692,9 +690,8 @@ export function ClientDetailClient({
 
           {recalcNote && (
             <div
-              className={`bg-white border border-line rounded-[14px] shadow-shadow px-4.5 py-3 text-[11px] ${
-                recalcNote.tone === "ok" ? "text-mut" : "text-loss-d"
-              }`}
+              className={`bg-white border border-line rounded-[14px] shadow-shadow px-4.5 py-3 text-[11px] ${recalcNote.tone === "ok" ? "text-mut" : "text-loss-d"
+                }`}
             >
               {recalcNote.text}
             </div>
@@ -805,27 +802,25 @@ export function ClientDetailClient({
                       key={f}
                       type="button"
                       onClick={() => setPnlFilter(f)}
-                      className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
-                        active
+                      className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${active
                           ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
                           : "text-mut hover:text-ink font-medium hover:bg-white/50"
-                      }`}
+                        }`}
                     >
                       <span>{labels[f]}</span>
                       <span
-                        className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
-                          active
+                        className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${active
                             ? f === "profit"
                               ? "bg-gain-bg text-gain"
                               : f === "loss"
-                              ? "bg-loss-bg text-loss-d"
-                              : "bg-paper-2 text-ink"
+                                ? "bg-loss-bg text-loss-d"
+                                : "bg-paper-2 text-ink"
                             : f === "profit"
-                            ? "bg-gain-bg/50 text-gain"
-                            : f === "loss"
-                            ? "bg-loss-bg/50 text-loss-d"
-                            : "bg-line/40 text-mut"
-                        }`}
+                              ? "bg-gain-bg/50 text-gain"
+                              : f === "loss"
+                                ? "bg-loss-bg/50 text-loss-d"
+                                : "bg-line/40 text-mut"
+                          }`}
                       >
                         {count}
                       </span>
