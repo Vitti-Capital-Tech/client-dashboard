@@ -10,7 +10,8 @@
     "test": "node --test \"lib/**/*.test.ts\" \"store/**/*.test.ts\"",
     "import:holdings": "node --env-file=.env.local scripts/import-holdings.mjs",
     "import:trades": "node --env-file=.env.local scripts/import-trades.mjs",
-    "diff:pnl": "node scripts/diff-pnl-csv.mjs"
+    "diff:pnl": "node scripts/diff-pnl-csv.mjs",
+    "suggest:aliases": "node --env-file=.env.local scripts/suggest-placement-aliases.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

@@ -278,7 +278,7 @@ function normHeader(h: string): string {
  * ways (`Total`, `Totals`, `Total Confirmation`, `Total Allocation`). The rest are
  * exact, since a prefix rule there could swallow a real name.
  */
-function isNonClientAllocationRow(name: string): boolean {
+export function isNonClientAllocationRow(name: string): boolean {
   const n = normHeader(name);
   if (!n) return true;
   if (n.startsWith("total") || n.startsWith("grandtotal") || n.startsWith("subtotal")) return true;
@@ -2052,7 +2052,7 @@ const CONNECTOR_WORDS = new Set(["and"]);
  * A name reduced to comparable tokens: lower-cased, punctuation dropped, and each
  * known abbreviation replaced by its canonical spelling.
  */
-function entityTokens(name: string): string[] {
+export function entityTokens(name: string): string[] {
   const text = String(name ?? "")
     .toLowerCase()
     // `P/L` is the one abbreviation that lives INSIDE the punctuation, so it has
@@ -2785,7 +2785,7 @@ export function combinePlacementMaps(
 }
 
 /** Every placement behind a ticker — the `candidates` list, or the info itself. */
-function placementEntries(info: PlacementTickerInfo): PlacementYearCandidate[] {
+export function placementEntries(info: PlacementTickerInfo): PlacementYearCandidate[] {
   if (info.candidates?.length) return info.candidates;
   return [
     {

@@ -113,6 +113,8 @@ client-dashboard/
 │   │   ├── batch.ts            #   Many accounts, ONE cached tracker read + one memoised quote per
 │   │   │                       #   ticker; a deadline defers rather than half-finishes
 │   │   ├── queue.ts            #   pnl_recompute_queue — work a run could not finish, kept visible
+│   ├── alias-suggest.ts    #   Proposes clients.placement_aliases from ledger shortfalls —
+│   │                       #   propose only, never apply (+ 10 tests)
 │   │   ├── tracker-cache.ts    #   The refresh half (~17s parse), staff-triggered only
 │   │   ├── tracker-cache-store.ts # The storage/read half — no server-only, so the DB path can read it
 │   │   └── recompute.test.ts   #   12 tests
@@ -146,6 +148,9 @@ client-dashboard/
 │   ├── _import-common.mjs      # CLI plumbing only: argv, file reads, console rendering
 │   ├── import-holdings.mjs     # Thin CLI over lib/import/run-holdings.ts
 │   ├── diff-pnl-csv.mjs        # Compare two P&L exports ticker-by-ticker (npm run diff:pnl)
+│   ├── suggest-placement-aliases.mjs
+│   │                           # READ-ONLY: proposes clients.placement_aliases from the
+│   │                           #   ledger's own shortfalls (npm run suggest:aliases)
 │   └── import-trades.mjs       # Thin CLI over lib/import/run-trades.ts
 ├── db/
 │   └── schema.sql              # Canonical schema reference (= the first migration)
@@ -177,7 +182,7 @@ client-dashboard/
 - **Scheduled ingest:** the broker mails both files each weekday; Supabase `pg_cron` POSTs to `app/api/ingest/morning/route.ts`, which reads that mailbox over Microsoft Graph, imports what it carries, queues the affected accounts and recomputes as many as its time budget allows. `pg_cron` rather than the host's scheduler because Hobby allows one cron a day and one fixed UTC time cannot cover a 9am Sydney mail across daylight saving. Guarded by a constant-time `CRON_SECRET` comparison, because there is no user here and the work behind it writes across every client's rows. See §4.6.
 - **Stored P&L:** `pnl_summary` + `pnl_runs` hold the calculator's output per account, rebuilt by `lib/pnl/recompute.ts`. There is deliberately **one P&L engine** — `lib/pnl-calculator.ts`, written for an uploaded file — and `lib/pnl/from-db.ts` feeds it the database instead of reimplementing it, so the calculator page and the client profile cannot disagree.
 - **The two tables the first real cron run made necessary** (`…_recompute_queue_and_tracker_cache.sql`): **`placement_tracker_cache`** holds the parsed Placement Trackers in Postgres (~0.23 MB of JSON against ~17s of parsing), refreshed by a staff **Refresh trackers** button and never by the cron — every cron invocation is a cold function, so an in-process cache never hits and the job paid the parse daily for a workbook nobody had edited. An **empty** cache stops the recompute outright rather than storing rows missing every placement buy side. **`pnl_recompute_queue`** decouples importing from recomputing: the ingest always imports, enqueues what it touched, then recomputes as much as its time budget allows, leaving the rest visibly owed.
-- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts" "store/**/*.test.ts"`. 246 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, the export's exit classification, an xlsx generate-and-read-back round trip that asserts on what Excel would actually show, Black-Scholes (against a textbook reference value, plus the degenerate inputs that must collapse to intrinsic rather than `NaN`), the add-on spec parser against every shape the real workbooks contain — both column spellings, the `Unisted` typo, and the expiry-less cells dated off settlement — and the P&L Calculator store's `useState`-compatible setters. The newer suites cover what only appears once a **database** is involved, against an in-memory PostgREST stand-in (`lib/test-support/fake-db.ts`) rather than a live project: which rows a full replace may delete, whether re-running a file double-counts it, that a ticker dropped by both sources leaves the stored P&L, that a cancelled trade never moves it, that a truncated snapshot is quarantined instead of emptying the book, that the ledger replay **reads past PostgREST's 1,000-row cap**, that accounts are queued *before* a recompute is attempted, that an empty tracker cache stops the recompute but not the import, that a **failed or quarantined** attachment is retried rather than treated as done, and that a byte-identical file is imported once rather than once per copy.
+- **Testing:** Node's built-in runner, no framework and no dev-dependency — `npm test` runs `node --test "lib/**/*.test.ts" "store/**/*.test.ts"`. 263 tests cover the money-critical paths: day-first date parsing, ticker parent codes, the weighted-average-cost reducer, reconciliation, the export's exit classification, an xlsx generate-and-read-back round trip that asserts on what Excel would actually show, Black-Scholes (against a textbook reference value, plus the degenerate inputs that must collapse to intrinsic rather than `NaN`), the add-on spec parser against every shape the real workbooks contain — both column spellings, the `Unisted` typo, and the expiry-less cells dated off settlement — and the P&L Calculator store's `useState`-compatible setters. The newer suites cover what only appears once a **database** is involved, against an in-memory PostgREST stand-in (`lib/test-support/fake-db.ts`) rather than a live project: which rows a full replace may delete, whether re-running a file double-counts it, that a ticker dropped by both sources leaves the stored P&L, that a cancelled trade never moves it, that a truncated snapshot is quarantined instead of emptying the book, that the ledger replay **reads past PostgREST's 1,000-row cap**, that accounts are queued *before* a recompute is attempted, that an empty tracker cache stops the recompute but not the import, that a **failed or quarantined** attachment is retried rather than treated as done, and that a byte-identical file is imported once rather than once per copy.
 - **Spreadsheets:** `exceljs` is the one non-Supabase runtime dependency, and it is confined to a **server action** (`app/actions/exports.ts`) — a build check confirms it appears in no client chunk, so the browser only ever receives the finished bytes.
 - **Charts:** hand-written SVG, no charting library — a diverging bar chart for realised P&L (`RealizedPnlChart.tsx`). The `--color-gain`/`--color-loss` pair was validated for colour-vision deficiency and lands in the ΔE 6–8 floor band, so polarity is carried by **bar direction and signed value labels** as well as hue.
 - **Styling:** Tailwind CSS v4 with custom post-css and raw theme bindings inside `app/globals.css`.
@@ -377,11 +382,27 @@ The client profile warns when a row's **buy side is missing and a placement coul
 
 When a real one appears, it is almost always the name. The tracker's `CLIENT NAME` column is hand-typed and `clients.display_name` is not. Spelling is handled automatically — case, punctuation, `Pty Ltd` ≡ `P/L`, `Inv` ≡ `Investments`, `&` ≡ `and`, a trailing `ATF …` — and that is deliberately as far as inference goes, because the same workbooks contain `PSG Capital Ltd` and `PSG Super` against **two different clients**. A matcher loose enough to bridge the one would bridge the other, and a placement parcel would land on the wrong client's P&L.
 
-So the rest is stated rather than guessed. List the tracker's spellings on the client:
+So the rest is stated rather than guessed — in `clients.placement_aliases`. You do not have to hunt for the candidates:
+
+```bash
+npm run suggest:aliases          # read-only; add --all to see the weak guesses too
+```
+
+It reads the tracker cache and each client's **ledger** (the contract notes, before any merge), and for every row with a missing buy side asks which unclaimed participant in that placement holds exactly the missing units:
+
+```
+── R Chawla & G Vijan PTY LTD ──────────────────────────────────
+  "RG Vijan Super Fund"
+     HIGH   (quantities agree AND the names share a word)
+     AKN   ledger short    833,333 · sheet allocates    833,333  ← exact match  · shared word
+     RMI   ledger short    238,095 · sheet allocates    238,095  ← exact match  · shared word
+```
+
+It **writes nothing** — it prints `UPDATE` statements to read and run yourself, and only for suggestions carrying both an exact quantity *and* a shared word that no other client also claims. A name two clients both want is printed with the other client named and left out of the SQL; a quantity match with no name signal is printed but never offered, because placement parcels are round numbers and collide by coincidence.
 
 ```sql
 UPDATE clients
-   SET placement_aliases = ARRAY['PSG Capital Pty Ltd', 'PSG Capital Ltd', 'PSG Investments']
+   SET placement_aliases = ARRAY(SELECT DISTINCT unnest(placement_aliases || ARRAY['PSG Investments']))
  WHERE display_name = 'Psg Capital Investments PTY LTD';
 ```
 

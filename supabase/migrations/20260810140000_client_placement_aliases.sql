@@ -55,5 +55,9 @@ COMMENT ON COLUMN clients.placement_aliases IS
 --
 -- To find the candidates, look at what the unfilled rows actually list — the
 -- client profile names the tickers, and the tracker sheet names its participants.
--- Then press "Refresh trackers" is NOT required (aliases are read live from this
--- table); just Recalculate the client.
+--
+-- Aliases are read LIVE from this table, so changing one needs a Recalculate on
+-- that client and nothing else — no "Refresh trackers", since the workbooks have
+-- not changed. (The release that added this column also changed the tracker
+-- PARSER, which does need one refresh to take effect. That is a one-off and has
+-- nothing to do with aliases.)
