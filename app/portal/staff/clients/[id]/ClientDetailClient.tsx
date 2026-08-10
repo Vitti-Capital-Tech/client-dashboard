@@ -511,7 +511,7 @@ export function ClientDetailClient({
           onClick={() => router.push("/portal/staff/clients")}
           className="text-green-d font-semibold text-xs underline underline-offset-2 cursor-pointer hover:opacity-85"
         >
-          &larr; Client Register
+          &larr; Clients
         </button>
       </div>
 
@@ -536,8 +536,8 @@ export function ClientDetailClient({
               key={t.id}
               onClick={() => setActiveTab(t.id)}
               className={`text-xs font-semibold px-3.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${activeTab === t.id
-                  ? "bg-white text-ink shadow-shadow"
-                  : "text-mut hover:text-ink"
+                ? "bg-white text-ink shadow-shadow"
+                : "text-mut hover:text-ink"
                 }`}
             >
               {t.label}
@@ -555,8 +555,8 @@ export function ClientDetailClient({
               key={a.id}
               onClick={() => setAcctFilter(a.id)}
               className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${acctFilter === a.id
-                  ? "bg-navy text-white border-navy"
-                  : "bg-white text-mut border-line hover:border-navy hover:text-ink"
+                ? "bg-navy text-white border-navy"
+                : "bg-white text-mut border-line hover:border-navy hover:text-ink"
                 }`}
             >
               {a.label}
@@ -803,23 +803,23 @@ export function ClientDetailClient({
                       type="button"
                       onClick={() => setPnlFilter(f)}
                       className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${active
-                          ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
-                          : "text-mut hover:text-ink font-medium hover:bg-white/50"
+                        ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
+                        : "text-mut hover:text-ink font-medium hover:bg-white/50"
                         }`}
                     >
                       <span>{labels[f]}</span>
                       <span
                         className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${active
-                            ? f === "profit"
-                              ? "bg-gain-bg text-gain"
-                              : f === "loss"
-                                ? "bg-loss-bg text-loss-d"
-                                : "bg-paper-2 text-ink"
-                            : f === "profit"
-                              ? "bg-gain-bg/50 text-gain"
-                              : f === "loss"
-                                ? "bg-loss-bg/50 text-loss-d"
-                                : "bg-line/40 text-mut"
+                          ? f === "profit"
+                            ? "bg-gain-bg text-gain"
+                            : f === "loss"
+                              ? "bg-loss-bg text-loss-d"
+                              : "bg-paper-2 text-ink"
+                          : f === "profit"
+                            ? "bg-gain-bg/50 text-gain"
+                            : f === "loss"
+                              ? "bg-loss-bg/50 text-loss-d"
+                              : "bg-line/40 text-mut"
                           }`}
                       >
                         {count}
