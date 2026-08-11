@@ -298,6 +298,62 @@ test("recompute: an unmatched placement row is counted, not just described", asy
   assert.ok(res.warnings.some((w) => w.includes("incomplete buy side")));
 });
 
+for (const holder of [
+  "Placement - Vitti Capital PTY LTD",
+  "Errors - Vitt - Suspense",
+]) {
+  test(`recompute: ${holder} is not a client, so no alias warning`, async () => {
+    // Same unfillable row as the test above, but the account holder is one of
+    // the broker's own internal accounts. A tracker lists the CLIENTS in a
+    // placement, so it will never name these — reporting that as a spelling
+    // problem sends the desk after an alias that must not be added, and buries
+    // the real gaps: the house account showed 134 tickers in one message.
+    const { db, tables } = seeded();
+    tables.clients[0].display_name = holder;
+
+    tables.trades.length = 0;
+    tables.trades.push({
+      cnote: "3001",
+      account_id: ACCOUNT,
+      raw_security: "ABE",
+      security_code: "ABE",
+      parent_code: "ABE",
+      instrument: "FPO",
+      side: "SELL",
+      trade_date: "2026-05-21",
+      units: "100000",
+      avg_price: "0.10",
+      consideration: "10000",
+      value: "10000",
+      status: "SETTLED",
+    });
+    tables.securities.push({ code: "ABE", parent_code: null, name: "ABE", last_price: 0.1 });
+
+    const placements = new Map([
+      [
+        "ABE",
+        {
+          ticker: "ABE",
+          totalShares: 200000,
+          totalActualDollar: 20000,
+          clientAllocations: [
+            { clientName: "Zidiplus Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 10000, roundShares: 100000, actualDollar: 10000 },
+            { clientName: "Ikigai Consortium Pty Ltd", advisor: "VTC", askingBid: 0, allocationDollar: 10000, roundShares: 100000, actualDollar: 10000 },
+          ],
+        },
+      ],
+    ]);
+
+    const res = await recomputeAccountPnl(db, ACCOUNT, { placements });
+
+    assert.equal(res.unfilledPlacements, 0);
+    assert.ok(!res.warnings.some((w) => w.includes("incomplete buy side")));
+    // Suppressing the warning must not fill anything: the stranger's parcel is
+    // still refused, the row still reads blank.
+    assert.equal(tables.pnl_summary.find((r) => r.ticker === "ABE")?.buy_qty, 0);
+  });
+}
+
 test("recompute: a holding with no contract note still appears", async () => {
   // Free attaching options are never bought, so nothing in the ledger names
   // them. They exist only in the snapshot, and must not vanish from the P&L.

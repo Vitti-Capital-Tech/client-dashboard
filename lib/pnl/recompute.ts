@@ -32,6 +32,7 @@ import {
   type SpotSource,
 } from "../pnl-calculator.ts";
 import { upsertChunked, type AdminDb } from "../import/runner.ts";
+import { isNonClientAccount } from "../import/normalize.ts";
 import {
   loadAccountHolders,
   loadCalculatorTrades,
@@ -152,9 +153,23 @@ export async function recomputeAccountPnl(
     });
     summary = merged.summary;
 
-    unfilledPlacements = merged.ambiguousTickers.length;
+    /**
+     * The broker's suspense and house placement accounts are not clients, so a
+     * tracker's participant list will never name them — that is what those
+     * accounts ARE, not a spelling problem someone can fix.
+     *
+     * Reporting them anyway made the message useless where it matters: the house
+     * account holds parcels on their way out to clients, so almost every ticker
+     * has a buy side the contract notes never recorded, and one profile listed
+     * 134 tickers "left unfilled". An alias is the documented remedy and is the
+     * one thing that must NOT be applied here — filling from a participant row
+     * would store a real client's parcel against the house account.
+     */
+    const houseAccount = holders.some(isNonClientAccount);
 
-    if (merged.ambiguousTickers.length > 0) {
+    unfilledPlacements = houseAccount ? 0 : merged.ambiguousTickers.length;
+
+    if (!houseAccount && merged.ambiguousTickers.length > 0) {
       // Only rows a placement could actually have completed reach this list — a
       // holding bought on-market in a stock that was placed to other people is
       // not a problem and is no longer reported as one. So what is left is a

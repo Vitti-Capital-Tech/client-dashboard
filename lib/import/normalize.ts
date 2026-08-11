@@ -197,6 +197,26 @@ export function titleCase(value: string): string {
     .join(" ");
 }
 
+/**
+ * True for the broker's own internal accounts rather than a client's.
+ *
+ * Two of them reach the platform as ordinary accounts:
+ *
+ *   ERRORS - VITT - …            the suspense account
+ *   PLACEMENT - VITTI CAPITAL …  the house account placements are transacted
+ *                                through before being journalled out to clients
+ *
+ * Matched on the NAME, for the same reason `run-trades.ts` does: `ERRVITT` and
+ * `PLACEVITT` are both non-numeric, so a rule based on the reference's shape
+ * cannot tell either of them from the other — or from a real account.
+ *
+ * Names arrive here title-cased (`titleCase` runs before an account is created)
+ * as often as SHOUTING from the raw file, hence the case-insensitive test.
+ */
+export function isNonClientAccount(name: string | null | undefined): boolean {
+  return /^(ERRORS|PLACEMENT)\b/i.test(clean(name ?? ""));
+}
+
 /** Two-letter avatar initials from a display name. */
 export function initialsOf(name: string): string {
   const words = clean(name)
