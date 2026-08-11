@@ -176,6 +176,8 @@ export function ClientDetailClient({
   const [activeTab, setActiveTab] = useState<TabId>("holdings");
   const [pnlFilter, setPnlFilter] = useState<HistoricalPnlFilter>("all");
   const [pnlSearch, setPnlSearch] = useState<string>("");
+  const [optionsTabFilter, setOptionsTabFilter] = useState<"all" | "listed" | "unlisted">("all");
+  const [optionsSearch, setOptionsSearch] = useState<string>("");
   // Account filter: "all" aggregates across the client's accounts, else scope
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
@@ -205,6 +207,8 @@ export function ClientDetailClient({
     setPnlPage(1);
     setOptionsPage(1);
     setBidsPage(1);
+    setOptionsSearch("");
+    setOptionsTabFilter("all");
   };
 
   const cid = client.id;
@@ -511,11 +515,47 @@ export function ClientDetailClient({
     return filteredSummaryRows.slice(start, start + pnlPageSize);
   }, [filteredSummaryRows, pnlPage, pnlPageSize]);
 
+  // Option rows derived from the Historical P&L summary rows (which includes both
+  // listed options and unlisted options with Black-Scholes valuation).
+  const allOptionSummaryRows = useMemo(() => {
+    return summaryRows.filter(isRowOption);
+  }, [summaryRows]);
+
+  const optionTabCounts: Record<"all" | "listed" | "unlisted", number> = {
+    all: allOptionSummaryRows.length,
+    listed: allOptionSummaryRows.filter((r) => !isRowUnlistedOption(r)).length,
+    unlisted: allOptionSummaryRows.filter(isRowUnlistedOption).length,
+  };
+
+  const filteredOptionRows = useMemo(() => {
+    return allOptionSummaryRows.filter((r) => {
+      const query = optionsSearch.trim().toLowerCase();
+      const matchesSearch =
+        !query ||
+        r.ticker.toLowerCase().includes(query) ||
+        r.name.toLowerCase().includes(query) ||
+        (r.note && r.note.toLowerCase().includes(query));
+
+      if (!matchesSearch) return false;
+
+      if (optionsTabFilter === "listed") return !isRowUnlistedOption(r);
+      if (optionsTabFilter === "unlisted") return isRowUnlistedOption(r);
+      return true;
+    });
+  }, [allOptionSummaryRows, optionsTabFilter, optionsSearch]);
+
   const paginatedOptions = useMemo(() => {
-    if (optionsPageSize >= visibleOptions.length) return visibleOptions;
+    if (optionsPageSize >= filteredOptionRows.length) return filteredOptionRows;
     const start = (optionsPage - 1) * optionsPageSize;
-    return visibleOptions.slice(start, start + optionsPageSize);
-  }, [visibleOptions, optionsPage, optionsPageSize]);
+    return filteredOptionRows.slice(start, start + optionsPageSize);
+  }, [filteredOptionRows, optionsPage, optionsPageSize]);
+
+  const filteredOptionTotal = useMemo(() => {
+    const buyPrice = filteredOptionRows.reduce((s, r) => s + r.buyPrice, 0);
+    const sellOrCurrent = filteredOptionRows.reduce((s, r) => s + r.sellOrCurrent, 0);
+    const pnl = filteredOptionRows.reduce((s, r) => s + r.pnl, 0);
+    return { buyPrice, sellOrCurrent, pnl };
+  }, [filteredOptionRows]);
 
   const paginatedBids = useMemo(() => {
     if (bidsPageSize >= bidRows.length) return bidRows;
@@ -1088,63 +1128,237 @@ export function ClientDetailClient({
       )}
 
       {activeTab === "options" && (
-        <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-          <div className="px-4.5 py-3.5 border-b border-line bg-white select-none">
-            <b className="text-sm font-semibold text-ink">Client option register</b>
+        <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden space-y-0">
+          <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <b className="text-sm font-semibold text-ink">Client option register</b>
+              <div className="text-[11px] text-mut mt-0.5">
+                Listed exchange-traded and unlisted placement options with Black-Scholes carry valuation
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono px-2 py-0.5 rounded-[6px] bg-paper-2 border border-line/60 font-semibold text-ink">
+                {filteredOptionRows.length} {filteredOptionRows.length === 1 ? "option" : "options"}
+              </span>
+            </div>
           </div>
+
+          {/* Filter Tabs & Search Controls Bar */}
+          <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
+            {/* Segmented Filter Pills */}
+            <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto flex-wrap sm:flex-nowrap border border-line/60">
+              {(
+                [
+                  { id: "all", label: "All Options" },
+                  { id: "listed", label: "Listed Options" },
+                  { id: "unlisted", label: "Unlisted Options" },
+                ] as const
+              ).map((t) => {
+                const active = optionsTabFilter === t.id;
+                const count = optionTabCounts[t.id];
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setOptionsTabFilter(t.id);
+                      setOptionsPage(1);
+                    }}
+                    className={`flex-1 flex items-center justify-center gap-2 px-3 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
+                      active
+                        ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
+                        : "text-mut hover:text-ink font-medium hover:bg-white/50"
+                    }`}
+                  >
+                    <span>{t.label}</span>
+                    <span
+                      className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
+                        active
+                          ? "bg-paper-2 text-ink"
+                          : "bg-line/40 text-mut"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Search & Quick Controls Row */}
+            <div className="flex items-center justify-between gap-3 pt-0.5">
+              <div className="relative flex-1 max-w-sm">
+                <svg
+                  className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                  />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Search series, company, terms..."
+                  value={optionsSearch}
+                  onChange={(e) => {
+                    setOptionsSearch(e.target.value);
+                    setOptionsPage(1);
+                  }}
+                  className="w-full bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
+                />
+                {optionsSearch && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOptionsSearch("");
+                      setOptionsPage(1);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
+                    title="Clear search"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+
+              {(optionsTabFilter !== "all" || optionsSearch) && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-mut">
+                    Showing <strong className="text-ink">{filteredOptionRows.length}</strong> of {allOptionSummaryRows.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOptionsTabFilter("all");
+                      setOptionsSearch("");
+                      setOptionsPage(1);
+                    }}
+                    className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
+                  >
+                    <svg className="w-3 h-3 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    Reset Filter
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left text-xs font-medium">
               <thead>
                 <tr className="border-b border-line text-mut select-none">
-                  <th className="px-4.5 py-2.5">Series</th>
-                  <th className="px-4.5 py-2.5">Type</th>
-                  <th className="px-4.5 py-2.5 text-right">Qty</th>
-                  <th className="px-4.5 py-2.5 text-right">Strike</th>
-                  <th className="px-4.5 py-2.5 text-right">Underlying</th>
-                  <th className="px-4.5 py-2.5 text-center">Moneyness</th>
-                  <th className="px-4.5 py-2.5">Expiry window</th>
-                  <th className="px-4.5 py-2.5 text-right">Status</th>
+                  <th className="px-4.5 py-2.5 whitespace-nowrap">Series</th>
+                  <th className="px-4.5 py-2.5">Underlying</th>
+                  <th className="px-4.5 py-2.5 whitespace-nowrap">Type</th>
+                  <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Qty</th>
+                  <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Cost ($)</th>
+                  <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Current Value ($)</th>
+                  <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L ($)</th>
+                  <th className="px-4.5 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {visibleOptions.length === 0 ? (
+                {filteredOptionRows.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center text-mut py-6">No option assets on record.</td>
+                    <td colSpan={8} className="text-center text-mut py-8">
+                      {allOptionSummaryRows.length === 0
+                        ? "No option holdings or placement grants on record for this account."
+                        : "No options match the current filter or search."}
+                    </td>
                   </tr>
                 ) : (
-                  paginatedOptions.map(o => {
-                    const isItmVal = isITM(o);
-                    return (
-                      <tr key={o.id} className="hover:bg-[#faf9f5]">
-                        <td className="px-4.5 py-3">
-                          <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{o.code}</span>
-                          <span className="text-[10px] text-mut ml-2">{o.listed ? "Listed" : "Unlisted"}</span>
-                        </td>
-                        <td className="px-4.5 py-3 text-mut">{o.type}</td>
-                        <td className="px-4.5 py-3 text-right font-mono">{o.qty ? o.qty.toLocaleString("en-AU") : "—"}</td>
-                        <td className="px-4.5 py-3 text-right font-mono">${o.strike.toFixed(2)}</td>
-                        <td className="px-4.5 py-3 text-right font-mono">${o.under.toFixed(2)}</td>
-                        <td className="px-4.5 py-3 text-center">
-                          <div className="inline-flex items-center gap-1.5">
-                            <MoneynessBar strike={o.strike} under={o.under} type={o.type} />
-                            <span className={`pill text-[10px] font-bold rounded-full px-1.5 py-0.5 ${isItmVal ? "bg-green-bg text-green-d" : "bg-paper-2 text-mut"}`}>
-                              {isItmVal ? "ITM" : "OTM"}
+                  <>
+                    {paginatedOptions.map((o) => {
+                      const isUnlisted = isRowUnlistedOption(o);
+                      const displayQty =
+                        o.openQty !== undefined && o.openQty > 0
+                          ? o.openQty
+                          : o.buyQty > 0
+                          ? o.buyQty
+                          : o.sellQty;
+                      const isUp = o.pnl >= 0;
+
+                      return (
+                        <tr key={o.ticker} className="hover:bg-[#faf9f5]">
+                          <td className="px-4.5 py-3 whitespace-nowrap">
+                            <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink whitespace-nowrap inline-block">
+                              {o.ticker}
                             </span>
-                          </div>
-                        </td>
-                        <td className="px-4.5 py-3">
-                          <ExpiryRail dte={o.dte} />
-                        </td>
-                        <td className="px-4.5 py-3 text-right capitalize text-mut font-semibold">{o.status}</td>
-                      </tr>
-                    );
-                  })
+                          </td>
+                          <td className="px-4.5 py-3 text-ink font-semibold min-w-[200px]">{o.name}</td>
+                          <td className="px-4.5 py-3 whitespace-nowrap">
+                            <span
+                              className={`pill text-[10.5px] font-semibold rounded-full px-2.5 py-0.5 whitespace-nowrap inline-block ${
+                                isUnlisted
+                                  ? "bg-[#ece9f3] text-[#5c5775]"
+                                  : "bg-paper-2 text-ink border border-line/60"
+                              }`}
+                            >
+                              {isUnlisted ? "Unlisted Option" : "Listed Option"}
+                            </span>
+                          </td>
+                          <td className="px-4.5 py-3 text-right font-mono text-ink whitespace-nowrap">
+                            {displayQty > 0 ? displayQty.toLocaleString("en-AU") : "—"}
+                          </td>
+                          <td className="px-4.5 py-3 text-right font-mono text-mut whitespace-nowrap">
+                            ${money2(o.buyPrice)}
+                          </td>
+                          <td className="px-4.5 py-3 text-right font-mono font-semibold text-ink whitespace-nowrap">
+                            ${money2(o.sellOrCurrent)}
+                          </td>
+                          <td
+                            className={`px-4.5 py-3 text-right font-mono font-semibold whitespace-nowrap ${
+                              isUp ? "text-gain" : "text-loss-d"
+                            }`}
+                          >
+                            {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
+                          </td>
+                          <td className="px-4.5 py-3 text-mut text-[11px] font-mono leading-relaxed max-w-sm truncate" title={o.note || o.type}>
+                            {o.note || o.type}
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {/* Options Grand Total */}
+                    <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
+                      <td className="px-4.5 py-3" colSpan={3}>
+                        Grand Total ({filteredOptionRows.length} {filteredOptionRows.length === 1 ? "option" : "options"})
+                      </td>
+                      <td className="px-4.5 py-3" />
+                      <td className="px-4.5 py-3 text-right font-mono">
+                        ${money2(filteredOptionTotal.buyPrice)}
+                      </td>
+                      <td className="px-4.5 py-3 text-right font-mono">
+                        ${money2(filteredOptionTotal.sellOrCurrent)}
+                      </td>
+                      <td
+                        className={`px-4.5 py-3 text-right font-mono ${
+                          filteredOptionTotal.pnl >= 0 ? "text-gain" : "text-loss-d"
+                        }`}
+                      >
+                        {filteredOptionTotal.pnl < 0 ? "-" : "+"}$
+                        {money2(Math.abs(filteredOptionTotal.pnl))}
+                      </td>
+                      <td className="px-4.5 py-3" />
+                    </tr>
+                  </>
                 )}
               </tbody>
             </table>
           </div>
+
           <TablePagination
-            totalItems={visibleOptions.length}
+            totalItems={filteredOptionRows.length}
             currentPage={optionsPage}
             pageSize={optionsPageSize}
             onPageChange={setOptionsPage}
