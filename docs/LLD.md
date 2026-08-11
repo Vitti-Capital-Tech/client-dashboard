@@ -924,4 +924,40 @@ Two properties worth stating:
 - The emitted SQL **appends** (`placement_aliases || ARRAY[…]`, de-duplicated), so a name entered by hand survives a later run.
 
 **Knowing there is work to do.** `RecomputeResult.unfilledPlacements` carries the count as a number rather than leaving it inside `warnings`, so **Rebuild all P&L** can report `N placement row(s) across M account(s) could not be matched` the moment it finishes. Without it the warnings sit one-per-run in `pnl_runs` and the question "who still needs an alias" costs opening every client profile — which is exactly the question the operator has at that moment, and exactly the one nobody would go and answer.
+
+
+### 8.24 Centralized Mismatched Qty in P&L Workspace (`/portal/staff/mismatches`, `lib/data/pnl.ts`, `app/actions/pnl-overrides.ts`)
+
+**Motivation.** In a firm managing dozens of wholesale accounts with multi-year placement activities, investigating quantity discrepancies by visiting each single client page individually created severe operational drag. The **Mismatched Qty** workspace provides a firm-wide control tower for identifying and fixing all unbalanced positions.
+
+- **Data Fetching:**
+  - `getAllStoredPnl()` (`lib/data/pnl.ts`): Reads all stored `pnl_summary` rows across all accounts using `pagedSelect` to bypass PostgREST limits.
+  - `getAllPnlOverrides()` (`lib/data/holdings.ts`): Reads all manual override records from `pnl_overrides` using `pagedSelect`.
+  - `getClients()` & `getAccounts()` (`lib/data/queries.ts`): Provides denormalized client names, initials, external broker account refs (`#114716`), and account type labels.
+- **Discrepancy Categorization Rules:**
+  - `buy_unknown`: `buySideUnknown === true || (buyQty === 0 && sellQty > 0)` (units sold without matching buy ledger entries).
+  - `short_buy`: `buyQty < sellQty` (recorded buy volume is lower than sold volume, requiring placement allocation top-ups).
+  - `short_sell`: `sellQty < buyQty && openQty === 0 && buyQty > 0` (excess buy units with no open holding).
+  - `year_unresolved`: `placementYearUnresolved === true` (placement year conflicts flagged by the engine).
+  - `unmatched`: `!isMatched && buyQty !== sellQty`.
+- **In-Place Inline Override Editing (`MismatchRow.tsx`):**
+  - Staff can click **Fix Qty** on any discrepancy row to trigger inline editing without leaving the page.
+  - Edits are validated and saved via `savePnlOverride` (`app/actions/pnl-overrides.ts`), writing to the `pnl_overrides` table with `note` and `updated_by` audit fields.
+  - Overrides are applied at read-time over `pnl_summary`, guaranteeing that desk corrections remain permanent across morning automated ingests.
+  - A **Revert** action allows clearing an override back to computed values when ledger corrections are imported.
+
+
+### 8.25 Unified Client Option Register & Universal Table Pagination (`app/components/TablePagination.tsx`, `/portal/staff/clients/[id]`)
+
+- **Client Options Register (`/portal/staff/clients/[id]` Options tab):**
+  - Unifies both **Listed Options** (exchange-traded option lines from holdings/trades) and **Unlisted Placement Options** (free grants with Black-Scholes carry valuations) directly from the client's P&L summary rows (`summaryRows.filter(isRowOption)`).
+  - Segmented filter controls allow toggling between `All Options`, `Listed Options`, and `Unlisted Options` with live count badges and search query matching.
+  - Single-line formatting (`whitespace-nowrap inline-block`) prevents awkward badge or ticker wrapping on hyphenated codes (`AVR-UO`).
+- **Universal Table Pagination Component (`app/components/TablePagination.tsx`):**
+  - Encapsulates clean client-side pagination with item range counters (`Showing 1–10 of 54 clients`).
+  - Provides segmented pill rows-per-page selector (`10`, `25`, `50`, `100`, `All`).
+  - Features smart ellipsis page jumping (`1`, `2`, `...`, `10`) and chevron navigation buttons with disabled boundary states.
+  - Automatically hides when `totalItems === 0`.
+  - Integrated across Overview Wholesale Client Register, Clients Register, Client Detail sub-route tabs (Holdings, Historical P&L, Options, Bids, Alerts), and the Mismatched Qty workspace.
+
 

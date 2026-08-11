@@ -61,6 +61,33 @@ export const getClientPnlOverrides = cache(
 );
 
 /**
+ * All manual desk corrections across all clients and accounts.
+ */
+export const getAllPnlOverrides = cache(
+  async (): Promise<PnlOverrideRow[]> => {
+    const supabase = await createClient();
+    const data = await pagedSelect<Record<string, any>>(
+      supabase,
+      "pnl_overrides",
+      "*",
+      (b) => b.order("updated_at", { ascending: false }),
+    );
+
+    return data.map((r) => ({
+      accountId: r.account_id,
+      parent: r.parent_code,
+      buyQty: r.buy_qty,
+      sellQty: r.sell_qty,
+      buyPrice: r.buy_price,
+      sellOrCurrent: r.sell_price,
+      note: r.note,
+      updatedBy: r.updated_by,
+      updatedAt: r.updated_at,
+    }));
+  },
+);
+
+/**
  * Realized P&L for one client, left at account grain so the caller can apply
  * the same account filter the rest of the client view uses. Drives the Order
  * History tab: it is what lets a SELL be marked as having no cost basis, which

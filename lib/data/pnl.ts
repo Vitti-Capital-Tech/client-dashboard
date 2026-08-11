@@ -146,3 +146,52 @@ export const getClientLatestPnlRuns = cache(
     return [...latestByAccount.values()];
   },
 );
+
+/**
+ * All stored P&L rows across all accounts and clients.
+ */
+export const getAllStoredPnl = cache(
+  async (): Promise<StoredPnlRow[]> => {
+    const supabase = await createClient();
+    const data = await pagedSelect<Record<string, any>>(
+      supabase,
+      "pnl_summary",
+      "*",
+      (b) => b.order("ticker"),
+    );
+
+    return data.map((r) => ({
+      accountId: r.account_id,
+      clientId: r.client_id,
+      ticker: r.ticker,
+      parentTicker: r.parent_ticker,
+      company: r.company ?? "",
+      instrument: r.instrument,
+
+      buyQty: num(r.buy_qty),
+      sellQty: num(r.sell_qty),
+      openQty: num(r.open_qty),
+      buyPrice: num(r.buy_price),
+      sellPrice: num(r.sell_price),
+      pnl: num(r.pnl),
+      tradeCount: num(r.trade_count),
+
+      isMatched: !!r.is_matched,
+      isOption: !!r.is_option,
+      isEnriched: !!r.is_enriched,
+      isDbMarketValued: !!r.is_db_market_valued,
+      isDbOpenValued: !!r.is_db_open_valued,
+      isDbOnly: !!r.is_db_only,
+      isPartialExit: !!r.is_partial_exit,
+      isPartialBuy: !!r.is_partial_buy,
+      isUnlistedOption: !!r.is_unlisted_option,
+      placementYearUnresolved: !!r.placement_year_unresolved,
+      placementYearNote: r.placement_year_note,
+      buySideUnknown: !!r.buy_side_unknown,
+
+      comment: r.comment,
+      computedAt: r.computed_at,
+    }));
+  },
+);
+
