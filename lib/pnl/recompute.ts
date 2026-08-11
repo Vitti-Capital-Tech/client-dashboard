@@ -37,6 +37,7 @@ import {
   loadAccountHolders,
   loadCalculatorTrades,
   loadDbHoldings,
+  type SecurityCatalogue,
 } from "./from-db.ts";
 
 /** Bump when the maths changes, so an old row is never compared to a new one. */
@@ -56,6 +57,14 @@ export type RecomputeOptions = {
   placements?: Map<string, PlacementTickerInfo> | null;
   /** Omit to skip option pricing entirely (rows are still built, valued at 0). */
   fetchSpots?: SpotFetcher;
+  /**
+   * The security catalogue, resolved once by the caller.
+   *
+   * Third of the shared inputs, and the one that was missing. Omitted, the two
+   * loaders below each read the whole `securities` table themselves — which in
+   * a batch is that table read twice per account.
+   */
+  securities?: SecurityCatalogue;
   /** What caused this run: 'ingest' | 'manual' | 'backfill'. */
   trigger?: string;
   /** Groups the per-account runs of a single trigger. */
@@ -114,6 +123,7 @@ export async function recomputeAccountPnl(
   const {
     placements = null,
     fetchSpots,
+    securities,
     trigger = "manual",
     batchId = null,
     dryRun = false,
@@ -125,8 +135,8 @@ export async function recomputeAccountPnl(
   const accountIds = [accountId];
 
   const [loaded, holdings, holders] = await Promise.all([
-    loadCalculatorTrades(db, accountIds),
-    loadDbHoldings(db, accountIds),
+    loadCalculatorTrades(db, accountIds, securities),
+    loadDbHoldings(db, accountIds, new Map(), securities),
     loadAccountHolders(db, accountIds),
   ]);
 

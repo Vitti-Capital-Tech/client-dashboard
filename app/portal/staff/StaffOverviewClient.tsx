@@ -3,7 +3,8 @@
 import React from "react";
 import { useRouter } from "next/navigation";
 import { setViewClient } from "@/app/actions/session";
-import type { PlacementRow, AlertRow, AuditRow } from "@/lib/data/queries";
+import type { PlacementRow, AlertRow } from "@/lib/data/queries";
+import type { RegisterEntry } from "@/lib/data/ingest";
 
 export type ClientRegisterRow = {
   id: string;
@@ -27,7 +28,7 @@ export function StaffOverviewClient({
   clientCount: number;
   placements: PlacementRow[];
   alerts: AlertRow[];
-  audit: AuditRow[];
+  audit: RegisterEntry[];
   registerRows: ClientRegisterRow[];
 }) {
   const router = useRouter();
@@ -212,8 +213,8 @@ export function StaffOverviewClient({
           </div>
 
           <div className="p-4 flex-1 overflow-y-auto space-y-3.5 max-h-75">
-            {audit.slice(0, 5).map((log, idx) => (
-              <div key={idx} className="space-y-0.5 text-xs">
+            {audit.slice(0, 5).map((log) => (
+              <div key={log.key} className="space-y-0.5 text-xs">
                 <div className="flex justify-between items-baseline font-mono text-[9.5px] text-mut select-none">
                   <span>{log.actor}</span>
                   <span>{new Date(log.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}</span>

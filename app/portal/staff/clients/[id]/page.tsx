@@ -11,6 +11,7 @@ import {
 } from "@/lib/data/queries";
 import { getClientRealized, getClientPnlOverrides } from "@/lib/data/holdings";
 import { getClientStoredPnl, getClientLatestPnlRuns } from "@/lib/data/pnl";
+import { getQueuedAccountIds } from "@/lib/data/ingest";
 import { ClientDetailClient } from "./ClientDetailClient";
 
 // Server Component: single client register view. Fetches the client and all of
@@ -40,6 +41,7 @@ export default async function Page({
     overrides,
     storedPnl,
     pnlRuns,
+    queuedAccountIds,
   ] = await Promise.all([
     getAccounts(id),
     getClientPositions(id),
@@ -55,6 +57,10 @@ export default async function Page({
     // Placement Trackers, neither of which a page render can reproduce.
     getClientStoredPnl(id),
     getClientLatestPnlRuns(id),
+    // Which of this client's accounts a run could not finish. Without it a
+    // figure the morning never got to looks identical to one it confirmed —
+    // both simply carry an older "Calculated" stamp.
+    getQueuedAccountIds(id),
   ]);
 
   const clientBids: PlacementRow[] = placements.filter((p) =>
@@ -79,6 +85,7 @@ export default async function Page({
       overrides={overrides}
       storedPnl={storedPnl}
       pnlRuns={pnlRuns}
+      queuedAccountIds={queuedAccountIds}
     />
   );
 }

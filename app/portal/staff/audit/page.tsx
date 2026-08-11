@@ -1,9 +1,13 @@
-import { getAuditLog } from "@/lib/data/queries";
+import { getOperationsRegister } from "@/lib/data/ingest";
 import { ExportButton } from "./ExportButton";
 
-// Server Component: audit trail from the DAL (append-only audit_log table).
+// Server Component: the operations register — the append-only `audit_log` and
+// the morning ingest's own runs, merged into one chronology. The unattended
+// work belongs here for the same reason the human actions do: it is the record
+// of what touched the book, and a morning that never ran is only visible as a
+// gap in a list that would otherwise have had an entry.
 export default async function StaffAuditLog() {
-  const audit = await getAuditLog(200);
+  const audit = await getOperationsRegister(200);
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -38,7 +42,7 @@ export default async function StaffAuditLog() {
                 </tr>
               ) : (
                 audit.map((e) => (
-                  <tr key={e.id} className="hover:bg-[#faf9f5]">
+                  <tr key={e.key} className="hover:bg-[#faf9f5]">
                     <td className="px-4.5 py-3 font-mono text-mut whitespace-nowrap text-[11.5px]">
                       {new Date(e.ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot;{" "}
                       {new Date(e.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -48,7 +52,13 @@ export default async function StaffAuditLog() {
                       <div className="text-[10px] text-mut uppercase font-semibold mt-0.5">{e.role}</div>
                     </td>
                     <td className="px-4.5 py-3 font-semibold text-ink">{e.action}</td>
-                    <td className="px-4.5 py-3 text-mut leading-relaxed hidden md:table-cell truncate max-w-75">
+                    {/* `title` because the cell truncates: a run's notes carry
+                        the part that matters — how many accounts it left owed —
+                        at the END, which is exactly what truncation eats. */}
+                    <td
+                      title={e.detail ?? undefined}
+                      className="px-4.5 py-3 text-mut leading-relaxed hidden md:table-cell truncate max-w-75"
+                    >
                       {e.detail}
                     </td>
                   </tr>

@@ -154,6 +154,7 @@ export function ClientDetailClient({
   overrides,
   storedPnl,
   pnlRuns,
+  queuedAccountIds,
 }: {
   client: ClientRow;
   accounts: AccountRow[];
@@ -167,6 +168,8 @@ export function ClientDetailClient({
   overrides: PnlOverrideRow[];
   storedPnl: StoredPnlRow[];
   pnlRuns: PnlRunRow[];
+  /** Accounts a run could not finish — still owed a recompute. */
+  queuedAccountIds: string[];
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("holdings");
@@ -312,6 +315,21 @@ export function ClientDetailClient({
     null,
   );
   const runWarnings = [...new Set(visibleRuns.flatMap((r) => r.warnings))];
+
+  /**
+   * Accounts in view that are still QUEUED for a recompute.
+   *
+   * The stamp above cannot say this on its own. A morning that ran out of
+   * budget leaves accounts owed — 19 of 43 on one real run — and their figures
+   * then carry yesterday's "Calculated" time, which reads as "nothing has
+   * changed since" when it actually means "this morning's contract notes are
+   * imported but not yet in this number". Those are opposite conclusions from
+   * identical-looking UI, so the queue is asked directly.
+   *
+   * Scoped by the same account filter as everything else, so switching to a
+   * single account does not report another account's backlog.
+   */
+  const pendingRecomputes = queuedAccountIds.filter((id) => inAcct(id)).length;
 
   // The chart needs realised P&L WITH dates on it, which the per-ticker rollup
   // cannot supply. Replaying the visible ledger through the same cost-basis
@@ -720,12 +738,25 @@ export function ClientDetailClient({
                 </div>
                 {/* A stored figure is only as good as its age, so the age is not
                     hidden. */}
-                <div className="text-[11px] text-mut mt-0.5">
+                <div className="text-[11px] text-mut mt-0.5 flex items-center gap-2 flex-wrap">
                   {lastComputedAt ? (
                     <>Calculated {stamp(lastComputedAt)}</>
                   ) : (
                     <span className="text-loss-d">
                       Never calculated — press Recalculate to build this client&apos;s P&amp;L.
+                    </span>
+                  )}
+                  {pendingRecomputes > 0 && (
+                    <span
+                      title={
+                        "The morning ingest imported this client's data but ran out of time " +
+                        "before rebuilding their P&L. The next scheduled run will take it, or " +
+                        "press Recalculate now."
+                      }
+                      className="bg-amber-bg text-amber-d font-semibold rounded-[6px] px-1.5 py-0.5 text-[10px] whitespace-nowrap"
+                    >
+                      Recompute pending
+                      {pendingRecomputes > 1 ? ` · ${pendingRecomputes} accounts` : ""}
                     </span>
                   )}
                 </div>

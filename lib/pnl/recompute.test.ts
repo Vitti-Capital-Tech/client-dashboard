@@ -6,6 +6,7 @@ import {
   dbTradesToParsedRows,
   loadAccountHolders,
   loadDbHoldings,
+  loadSecurityCatalogue,
   type DbTradeRow,
 } from "./from-db.ts";
 import { recomputeAccountPnl } from "./recompute.ts";
@@ -353,6 +354,38 @@ for (const holder of [
     assert.equal(tables.pnl_summary.find((r) => r.ticker === "ABE")?.buy_qty, 0);
   });
 }
+
+test("recompute: a shared catalogue is read once for a batch, not twice per account", async () => {
+  // `securities` is the same table for everyone, and both loaders read it whole.
+  // Left to themselves that is TWO full reads per account — 86 across a 43-account
+  // morning, and the reason one account cost ~5.8s against a 40s budget. What is
+  // pinned here is the count, because the rows are identical either way: a
+  // regression would be invisible in every other assertion in this file.
+  const { db, tables, reads } = seeded();
+  tables.clients.push({ id: "c2", external_ref: "114717", display_name: "JONES ANNE" });
+  tables.accounts.push({
+    id: "a2",
+    external_ref: "114717",
+    ref: "A2",
+    client_id: "c2",
+    label: "Jones",
+  });
+
+  const securities = await loadSecurityCatalogue(db);
+  assert.equal(reads.securities, 1);
+
+  await recomputeAccountPnl(db, ACCOUNT, { securities });
+  await recomputeAccountPnl(db, "a2", { securities });
+
+  // Still one: four loader calls across two accounts, none of which went back
+  // to the database for a catalogue it had already been handed.
+  assert.equal(reads.securities, 1);
+
+  // Omit it and the loaders still fetch their own — the backfill CLI and the
+  // alias-suggest script both call them with no batch around them.
+  await recomputeAccountPnl(db, ACCOUNT);
+  assert.equal(reads.securities, 3);
+});
 
 test("recompute: a holding with no contract note still appears", async () => {
   // Free attaching options are never bought, so nothing in the ledger names

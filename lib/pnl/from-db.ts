@@ -134,6 +134,37 @@ export function dbTradesToParsedRows(
   return parsed;
 }
 
+/**
+ * Every security's display name and last traded price, keyed by code.
+ *
+ * A CATALOGUE, not a per-account fact: it is the same table for every account
+ * in a batch, and it is read whole because the loaders below look codes up
+ * rather than filter by them.
+ *
+ * That is exactly why it is worth passing in. Both loaders used to read this
+ * table themselves, so a batch of 43 accounts read the whole of `securities`
+ * **86 times** — and it is the read that made a single account cost ~5.8s,
+ * which is what kept a morning from finishing inside its 40s budget. Resolving
+ * it once per batch is the same bargain `batch.ts` already strikes for the
+ * Placement Trackers and for spot prices.
+ */
+export type SecurityCatalogue = Map<string, { name: string; lastClose: number }>;
+
+/** Read the catalogue once. Callers in a batch should do this and share it. */
+export async function loadSecurityCatalogue(db: AdminDb): Promise<SecurityCatalogue> {
+  const rows = await selectAll<SecurityRow>(db, "securities", "code, name, last_price");
+
+  const out: SecurityCatalogue = new Map();
+  for (const s of rows) {
+    if (!s.code) continue;
+    out.set(String(s.code).trim().toUpperCase(), {
+      name: s.name || s.code,
+      lastClose: Number(s.last_price) || 0,
+    });
+  }
+  return out;
+}
+
 export type LoadedTrades = {
   trades: ParsedTradeRow[];
   /** Broker account numbers, in the shape the engine's account filter wants. */
@@ -154,6 +185,8 @@ export type LoadedTrades = {
 export async function loadCalculatorTrades(
   db: AdminDb,
   accountIds: string[],
+  /** Share one across a batch; omitted, this reads its own. */
+  securities?: SecurityCatalogue,
 ): Promise<LoadedTrades> {
   if (accountIds.length === 0) {
     return {
@@ -167,7 +200,7 @@ export async function loadCalculatorTrades(
   // All three are paged. The trade read is the one that matters most — a
   // truncated ledger gives the engine a complete-looking, wrong P&L — but
   // securities passed a thousand rows long ago and positions will.
-  const [accounts, tradeRows, securities] = await Promise.all([
+  const [accounts, tradeRows, catalogue] = await Promise.all([
     selectAll<AccountRow>(db, "accounts", "id, external_ref, ref, client_id", (q) =>
       q.in("id", accountIds),
     ),
@@ -178,7 +211,7 @@ export async function loadCalculatorTrades(
         "side, trade_date, units, avg_price, consideration, value, status",
       (q) => q.in("account_id", accountIds),
     ),
-    selectAll<SecurityRow>(db, "securities", "code, name"),
+    securities ?? loadSecurityCatalogue(db),
   ]);
 
   const accountRefById = new Map<string, string>();
@@ -192,9 +225,7 @@ export async function loadCalculatorTrades(
   }
 
   const securityNames = new Map<string, string>();
-  for (const s of securities) {
-    if (s.code) securityNames.set(String(s.code).trim().toUpperCase(), s.name || s.code);
-  }
+  for (const [code, s] of catalogue) securityNames.set(code, s.name);
 
   return {
     trades: dbTradesToParsedRows(tradeRows, accountRefById, securityNames),
@@ -242,24 +273,17 @@ export async function loadDbHoldings(
   db: AdminDb,
   accountIds: string[],
   accountRefById: Map<string, string> = new Map(),
+  /** Share one across a batch; omitted, this reads its own. */
+  securities?: SecurityCatalogue,
 ): Promise<DbHolding[]> {
   if (accountIds.length === 0) return [];
 
-  const [positions, securities] = await Promise.all([
+  const [positions, secMap] = await Promise.all([
     selectAll<PositionRow>(db, "positions", "account_id, security_code, qty, avg_cost", (q) =>
       q.in("account_id", accountIds),
     ),
-    selectAll<SecurityRow>(db, "securities", "code, name, last_price"),
+    securities ?? loadSecurityCatalogue(db),
   ]);
-
-  const secMap = new Map<string, { name: string; lastClose: number }>();
-  for (const s of securities) {
-    if (!s.code) continue;
-    secMap.set(String(s.code).trim().toUpperCase(), {
-      name: s.name || s.code,
-      lastClose: Number(s.last_price) || 0,
-    });
-  }
 
   const byGroup = new Map<string, DbHolding>();
 

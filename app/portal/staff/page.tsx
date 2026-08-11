@@ -2,11 +2,11 @@ import {
   getClients,
   getPlacements,
   getAlerts,
-  getAuditLog,
   getClientPositions,
   getAccounts,
   type AccountRow,
 } from "@/lib/data/queries";
+import { getOperationsRegister } from "@/lib/data/ingest";
 import { portfolioValue } from "@/lib/data/compute";
 import { StaffOverviewClient, type ClientRegisterRow } from "./StaffOverviewClient";
 
@@ -40,7 +40,9 @@ export default async function StaffOverview() {
     getClients(),
     getPlacements(),
     getAlerts(),
-    getAuditLog(5),
+    // The register, not the raw audit table — so the morning ingest's own runs
+    // surface on the overview card without a second widget to read.
+    getOperationsRegister(5),
   ]);
 
   const [positionsByClient, accountsByClient] = await Promise.all([

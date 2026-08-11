@@ -2,6 +2,7 @@ import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { AdminDb } from "@/lib/import/runner";
 import { fetchSpots, loadCachedPlacements } from "./providers";
+import { loadSecurityCatalogue } from "./from-db";
 import { clearRecomputes, noteRecomputeFailures } from "./queue";
 import { recomputeAccountPnl, type RecomputeResult, type SpotFetcher } from "./recompute";
 
@@ -127,6 +128,10 @@ export async function recomputeAccounts(
     };
   }
 
+  // The third shared input. Same table for every account, so reading it here
+  // turns 2 whole-table reads PER ACCOUNT into one for the batch.
+  const securities = await loadSecurityCatalogue(db);
+
   const spots = memoiseSpots(fetchSpots);
 
   const results: RecomputeResult[] = [];
@@ -152,6 +157,7 @@ export async function recomputeAccounts(
           await recomputeAccountPnl(db, accountId, {
             placements: placements.map,
             fetchSpots: spots,
+            securities,
             trigger,
             batchId,
             dryRun,

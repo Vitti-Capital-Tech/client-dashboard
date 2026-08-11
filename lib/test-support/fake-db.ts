@@ -250,9 +250,26 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
     ...seed,
   };
 
+  /**
+   * How many SELECTs each table has served.
+   *
+   * Counting queries rather than checking results, because the thing worth
+   * pinning here is not WHAT came back but HOW OFTEN it was asked for: a
+   * catalogue read once per batch and one read twice per account return exactly
+   * the same rows, and the difference between them is a morning that finishes
+   * and one that does not.
+   *
+   * Only top-level reads count. `.insert(…).select("id")` chains off the
+   * builder, not off `from`, so a write's returning clause is not a read.
+   */
+  const reads: Record<string, number> = {};
+
   const db = {
     from: (table: string) => ({
-      select: (cols?: string) => new FakeBuilder(tables, table, "select", cols),
+      select: (cols?: string) => {
+        reads[table] = (reads[table] ?? 0) + 1;
+        return new FakeBuilder(tables, table, "select", cols);
+      },
       insert: (rows: Row | Row[]) => new FakeBuilder(tables, table, "insert", rows),
       upsert: (rows: Row[], opts: any) =>
         new FakeBuilder(tables, table, "upsert", rows, opts),
@@ -261,5 +278,5 @@ export function fakeDb(seed: Record<string, Row[]> = {}) {
     }),
   };
 
-  return { db: db as unknown as AdminDb, tables };
+  return { db: db as unknown as AdminDb, tables, reads };
 }

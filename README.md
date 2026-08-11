@@ -380,6 +380,8 @@ The script reads either export format, matches on ticker, and reports rows prese
 
 The client profile warns when a row's **buy side is missing and a placement could have filled it** but the sheet's participants include nobody recognisable as this client. Rows the contract notes already complete are not counted — a stock bought on-market that was *also* placed to other people will always list strangers, and reporting that buried the real gaps under two dozen non-events.
 
+Two accounts never raise it, because they are not clients: the broker's suspense account (`ERRORS - VITT - …`) and the house account placements pass through on their way out to clients (`PLACEMENT - VITTI CAPITAL …`). A tracker lists the clients in a placement, so it will never name either, and the house account is full of parcels with no matching contract note — it reported **134 tickers** before this. Do **not** answer it with an alias: an alias there would store a real client's parcel against the house account, which is precisely what the unattended recompute refuses to do.
+
 When a real one appears, it is almost always the name. The tracker's `CLIENT NAME` column is hand-typed and `clients.display_name` is not. Spelling is handled automatically — case, punctuation, `Pty Ltd` ≡ `P/L`, `Inv` ≡ `Investments`, `&` ≡ `and`, a trailing `ATF …` — and that is deliberately as far as inference goes, because the same workbooks contain `PSG Capital Ltd` and `PSG Super` against **two different clients**. A matcher loose enough to bridge the one would bridge the other, and a placement parcel would land on the wrong client's P&L.
 
 So the rest is stated rather than guessed — in `clients.placement_aliases`. You do not have to hunt for the candidates:
