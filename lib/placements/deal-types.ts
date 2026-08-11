@@ -33,4 +33,26 @@ export type PromotionTerms = {
   minBid: number;
   opts?: string | null;
   closeDate?: string | null;
+  /**
+   * Settlement, as `yyyy-mm-dd`. Not a term a bid is measured against, but the
+   * date the client portal counts a payment down to ("By 19 Aug · $12,000") and
+   * the one the allocation notice quotes — left null it reads as an em dash.
+   */
+  settleDate?: string | null;
+  /**
+   * The first bid, booked as the deal opens — the desk usually promotes a raise
+   * BECAUSE a client wants in, so the alternative is opening the deal and then
+   * going to find it again in the book.
+   *
+   * An account, not a client: bids are unique per `(placement_id, account_id)`
+   * and a client can hold several, so a client name alone does not say where the
+   * bid lands. Null when a deal is opened with no bid in hand.
+   */
+  openingBid?: OpeningBid | null;
+};
+
+/** In SHARES, like every other adviser-entered bid — see `bookBidForAccount`. */
+export type OpeningBid = {
+  accountId: string;
+  qty: number;
 };

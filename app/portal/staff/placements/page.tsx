@@ -9,7 +9,8 @@ import { DealMailInbox } from "./DealMailInbox";
 //
 // `accounts` is every account, not one client's: a bid is booked against an
 // ACCOUNT (bids are unique per placement × account), and a client can hold
-// several, so the booking control has to name which one.
+// several, so the booking control has to name which one. Both the deal book and
+// the mail inbox book bids, so both get the list.
 export default async function StaffPlacementsPage() {
   const [placements, clients, accounts, candidates] = await Promise.all([
     getPlacements(),
@@ -20,7 +21,7 @@ export default async function StaffPlacementsPage() {
 
   return (
     <div className="space-y-4">
-      <DealMailInbox candidates={candidates} />
+      <DealMailInbox candidates={candidates} clients={clients} accounts={accounts} />
       <StaffPlacementsClient
         placements={placements}
         clients={clients}

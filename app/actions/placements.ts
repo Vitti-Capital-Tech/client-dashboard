@@ -25,6 +25,32 @@ function money(n: number): string {
   return n.toLocaleString("en-AU");
 }
 
+/** qty × price to the cent: what a share instruction is worth in money. */
+function bidCost(qty: number, price: number): number {
+  return Math.round(qty * price * 100) / 100;
+}
+
+/**
+ * The minimum, checked in one place.
+ *
+ * Both entry points into an adviser bid need this — booking from the deal book
+ * and booking as a deal is promoted — and the message quotes both figures
+ * because the operator entered neither the dollars nor the minimum.
+ */
+function belowMinimum(
+  qty: number,
+  price: number,
+  minBid: number,
+  code: string,
+): string | null {
+  const amount = bidCost(qty, price);
+  if (amount >= minBid) return null;
+  return (
+    `${qty.toLocaleString("en-AU")} shares is $${money(amount)}, below the ` +
+    `$${money(minBid)} minimum for ${code}.`
+  );
+}
+
 async function placementCode(
   supabase: Awaited<ReturnType<typeof createClient>>,
   placementId: string,
@@ -285,6 +311,11 @@ export async function notifyBpayPayment(placementId: string) {
  *
  * The candidate is kept and linked rather than consumed, so the trail from the
  * mail to the deal survives.
+ *
+ * `terms.openingBid` books the first bid in the same trip, because the reason a
+ * deal gets promoted is usually that a client already wants in. It is booked
+ * through `bookBidForAccount` rather than inserted here, so an adviser bid is
+ * costed, minimum-checked and audited the same way wherever it is entered.
  */
 export async function promoteCandidate(candidateId: string, terms: PromotionTerms) {
   const supabase = await createClient();
@@ -294,6 +325,27 @@ export async function promoteCandidate(candidateId: string, terms: PromotionTerm
   if (!terms.code?.trim()) return { ok: false as const, error: "A code is required." };
   if (!(terms.price > 0)) return { ok: false as const, error: "Price must be above zero." };
   if (!(terms.minBid > 0)) return { ok: false as const, error: "Minimum bid must be above zero." };
+
+  // The bid is checked BEFORE the placement is written. `bookBidForAccount`
+  // catches all of this a moment later, but by then the deal exists — and an
+  // open placement with the bid it was opened for missing is a worse state to
+  // hand back than a form that has not been submitted yet.
+  const opening = terms.openingBid ?? null;
+  if (opening) {
+    if (!opening.accountId) {
+      return { ok: false as const, error: "Choose the account the bid belongs to." };
+    }
+    if (!(opening.qty > 0)) {
+      return { ok: false as const, error: "Bid quantity must be above zero." };
+    }
+    const under = belowMinimum(
+      opening.qty,
+      terms.price,
+      terms.minBid,
+      terms.code.trim().toUpperCase(),
+    );
+    if (under) return { ok: false as const, error: under };
+  }
 
   const { data: candidate, error: candErr } = await supabase
     .from("placement_candidates")
@@ -319,6 +371,7 @@ export async function promoteCandidate(candidateId: string, terms: PromotionTerm
       min_bid: terms.minBid,
       opts: terms.opts?.trim() || null,
       close_date: terms.closeDate || null,
+      settle_date: terms.settleDate || null,
       // Open, not upcoming: the desk promotes a deal when it is ready to take
       // bids, and a deal nobody can bid on is not what this button is for.
       stage: "open",
@@ -347,8 +400,20 @@ export async function promoteCandidate(candidateId: string, terms: PromotionTerm
       `min $${money(terms.minBid)} · from "${candidate.subject || candidate.ticker}"`,
   });
 
+  // Reported separately rather than folded into `ok`. The deal IS open at this
+  // point, so calling the whole promotion a failure would send the operator back
+  // to a queue that no longer lists it; the bid is the part that needs doing
+  // again, and only from the book.
+  let bid: { amount: number } | undefined;
+  let bidError: string | undefined;
+  if (opening) {
+    const res = await bookBidForAccount(placement.id, opening.accountId, opening.qty);
+    if (res.ok) bid = { amount: res.amount };
+    else bidError = res.error;
+  }
+
   revalidatePath("/portal", "layout");
-  return { ok: true as const, placementId: placement.id };
+  return { ok: true as const, placementId: placement.id, bid, bidError };
 }
 
 /** Not every deal in the mail is one this desk will offer. */
@@ -431,19 +496,17 @@ export async function bookBidForAccount(
     .maybeSingle();
   if (!account) return { ok: false as const, error: "That account no longer exists." };
 
-  const amount = Math.round(qty * Number(placement.price) * 100) / 100;
+  const amount = bidCost(qty, Number(placement.price));
 
   // The minimum is a term of the deal, so it is enforced rather than displayed
-  // and hoped for. Reported back with both figures, since the operator entered
-  // neither of them directly.
-  if (amount < Number(placement.min_bid)) {
-    return {
-      ok: false as const,
-      error:
-        `${qty.toLocaleString("en-AU")} shares is $${money(amount)}, below the ` +
-        `$${money(Number(placement.min_bid))} minimum for ${placement.code}.`,
-    };
-  }
+  // and hoped for.
+  const under = belowMinimum(
+    qty,
+    Number(placement.price),
+    Number(placement.min_bid),
+    placement.code,
+  );
+  if (under) return { ok: false as const, error: under };
 
   const { data: existing } = await supabase
     .from("bids")
