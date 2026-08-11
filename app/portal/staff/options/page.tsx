@@ -1,14 +1,32 @@
-import { getClients, getClientOptions } from "@/lib/data/queries";
+import { getClients, getAccounts, getAllOptions } from "@/lib/data/queries";
+import { getAllStoredPnl } from "@/lib/data/pnl";
+import { getAllPnlOverrides } from "@/lib/data/holdings";
 import { StaffOptionsClient } from "./StaffOptionsClient";
 
-// Server Component: options tracker across all clients (all their accounts),
-// fetched via the DAL. All interactivity (filters, modal) lives in the island.
-export default async function StaffOptionsPage() {
-  const clients = await getClients();
-  const optionsByClient = await Promise.all(
-    clients.map((c) => getClientOptions(c.id)),
-  );
-  const options = optionsByClient.flat();
+export const metadata = {
+  title: "Options Register | Vitti Staff Console",
+};
 
-  return <StaffOptionsClient options={options} clients={clients} />;
+/**
+ * Server Component: Centralized options tracker displaying all Listed and Unlisted
+ * Options across all client accounts.
+ */
+export default async function StaffOptionsPage() {
+  const [storedPnl, optionHoldings, clients, accounts, overrides] = await Promise.all([
+    getAllStoredPnl(),
+    getAllOptions(),
+    getClients(),
+    getAccounts(),
+    getAllPnlOverrides(),
+  ]);
+
+  return (
+    <StaffOptionsClient
+      storedPnl={storedPnl}
+      optionHoldings={optionHoldings}
+      clients={clients}
+      accounts={accounts}
+      overrides={overrides}
+    />
+  );
 }

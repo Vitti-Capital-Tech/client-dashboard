@@ -1,400 +1,818 @@
 "use client";
 
-import React, { useState } from "react";
-import type { ClientRow, OptionRow } from "@/lib/data/queries";
-import { isITM } from "@/lib/data/compute";
+import React, { useState, useMemo } from "react";
+import type { ClientRow, AccountRow, OptionRow } from "@/lib/data/queries";
+import type { StoredPnlRow } from "@/lib/data/pnl";
+import type { PnlOverrideRow } from "@/lib/data/holdings";
+import { TablePagination } from "@/app/components/TablePagination";
 
-// Expiry Rail Component
-const ExpiryRail = ({ dte }: { dte: number }) => {
-  const thresholds = [30, 14, 7, 3, 1];
-  const isDanger = dte <= 3 && dte >= 0;
-  const isWarn = dte <= 14 && dte > 3;
-  const cls = isDanger ? "danger" : isWarn ? "warn" : "";
-
-  const segs = thresholds.map((t, idx) => {
-    const lit = dte <= t && dte >= 0;
-    const colorClass = lit ? (dte <= 3 ? "lit-red" : "lit-amber") : "";
-    return (
-      <div key={idx} className={`seg ${colorClass}`}>
-        <span className="tk" />
-      </div>
-    );
-  });
-
-  return (
-    <div className={`rail ${cls} select-none`}>
-      <div className="dleft">{dte < 0 ? "expired" : `${dte}d`}</div>
-      <div className="ticks">{segs}</div>
-    </div>
-  );
+export type OptionTableItem = {
+  id: string;
+  accountId: string;
+  clientId: string;
+  ticker: string;
+  parentTicker: string | null;
+  company: string;
+  isUnlisted: boolean;
+  isListed: boolean;
+  quantity: number;
+  costBasis: number;
+  marketValue: number;
+  pnl: number;
+  strike: number | null;
+  underlyingPrice: number | null;
+  expiryDate: string | null;
+  dte: number | null;
+  pricingMethod: string | null;
+  termsNote: string | null;
+  source: string | null;
+  status: "live" | "expired" | "exercised" | "pending";
 };
 
-// Moneyness Bar Component
-const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; type: "Call" | "Put" }) => {
-  let m = under - strike;
-  if (type === "Put") m = -m;
-  const span = strike * 0.5 || 0.5;
-  const frac = Math.max(-1, Math.min(1, m / span));
-  const w = Math.abs(frac) * 27;
-  const col = m > 0 ? "var(--color-green)" : "var(--color-loss)";
+type OptionFilterTab = "all" | "listed" | "unlisted" | "gain" | "loss";
 
-  return (
-    <span className="mbar select-none">
-      <i />
-      <b
-        style={{
-          backgroundColor: col,
-          width: `${w}px`,
-          left: m > 0 ? "50%" : "auto",
-          right: m > 0 ? "auto" : "50%"
-        }}
-      />
-    </span>
-  );
-};
+const money2 = (n: number) =>
+  n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export function StaffOptionsClient({ options, clients }: { options: OptionRow[]; clients: ClientRow[] }) {
-  const clientMap: Record<string, ClientRow> = {};
-  for (const c of clients) clientMap[c.id] = c;
+const fmtQty = (n: number) =>
+  Math.round(n).toLocaleString("en-AU");
 
-  // Filters state
-  const [filterClient, setFilterClient] = useState("all");
-  const [filterType, setFilterType] = useState("all");
-  const [filterExpiry, setFilterExpiry] = useState("all");
-  const [filterMoney, setFilterMoney] = useState("all");
+/**
+ * Parses expiry date and calculates days-to-expiry from date or security name.
+ */
+function parseExpiry(
+  dateStr?: string | null,
+  companyName?: string | null,
+): { date: string | null; dte: number | null } {
+  if (dateStr) {
+    const d = new Date(dateStr);
+    if (!isNaN(d.getTime())) {
+      const now = new Date();
+      const diffDays = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      return { date: dateStr, dte: diffDays };
+    }
+  }
 
-  const [showAddModal, setShowAddModal] = useState(false);
+  if (companyName) {
+    const match = companyName.match(/OPTION\s+(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/i);
+    if (match) {
+      const day = parseInt(match[1], 10);
+      const monStr = match[2].toUpperCase();
+      let year = parseInt(match[3], 10);
+      if (year < 100) year += 2000;
+      const months: Record<string, number> = {
+        JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+        JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
+      };
+      if (monStr in months) {
+        const d = new Date(year, months[monStr], day);
+        const now = new Date();
+        const diffDays = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const formatted = `${year}-${String(months[monStr] + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        return { date: formatted, dte: diffDays };
+      }
+    }
+  }
 
-  // Form states for manually adding options
-  const [uoClient, setUoClient] = useState(clients[0]?.id ?? "");
-  const [uoCode, setUoCode] = useState("XYZO");
-  const [uoQty, setUoQty] = useState("20,000");
-  const [uoStrike, setUoStrike] = useState("1.00");
-  const [uoUnder, setUoUnder] = useState("1.10");
-  const [uoDte, setUoDte] = useState("20");
+  return { date: null, dte: null };
+}
 
-  const activeOptions = options.filter(o => {
-    if (o.status !== "open") return false;
-    if (filterClient !== "all" && o.clientId !== filterClient) return false;
-    if (filterType === "listed" && !o.listed) return false;
-    if (filterType === "unlisted" && o.listed) return false;
-    if (filterExpiry === "7" && !(o.dte <= 7 && o.dte >= 0)) return false;
-    if (filterExpiry === "30" && !(o.dte <= 30 && o.dte >= 0)) return false;
-    if (filterMoney === "itm" && !isITM(o)) return false;
-    if (filterMoney === "otm" && isITM(o)) return false;
+/**
+ * Identify internal broker / suspense / house accounts
+ */
+function isHouseOrSuspenseAccount(
+  clientName?: string | null,
+  accountExternalRef?: string | null,
+  accountLabel?: string | null,
+): boolean {
+  const n = (clientName || "").toLowerCase();
+  const ref = (accountExternalRef || "").toLowerCase();
+  const label = (accountLabel || "").toLowerCase();
+
+  if (
+    n.includes("placement - vitti") ||
+    n.includes("placement-vitti") ||
+    (n.includes("vitti capital") && n.includes("placement"))
+  ) {
     return true;
-  });
+  }
 
-  const lapsedExpiredOptions = options.filter(o => {
-    if (o.status === "open") return false;
-    if (filterClient !== "all" && o.clientId !== filterClient) return false;
+  if (
+    n.includes("errvitti") ||
+    n.includes("err vitti") ||
+    n.includes("errors - vitt") ||
+    n.includes("errors - vitti") ||
+    n.includes("suspense") ||
+    ref.includes("errvitti") ||
+    ref.includes("suspense") ||
+    label.includes("errvitti") ||
+    label.includes("suspense")
+  ) {
     return true;
-  });
+  }
 
-  const handleClearFilters = () => {
-    setFilterClient("all");
-    setFilterType("all");
-    setFilterExpiry("all");
-    setFilterMoney("all");
+  return false;
+}
+
+export function StaffOptionsClient({
+  storedPnl,
+  optionHoldings = [],
+  clients,
+  accounts,
+  overrides = [],
+}: {
+  storedPnl: StoredPnlRow[];
+  optionHoldings?: OptionRow[];
+  clients: ClientRow[];
+  accounts: AccountRow[];
+  overrides?: PnlOverrideRow[];
+}) {
+  // Client and Account lookup maps
+  const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
+  const accountMap = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
+
+  // Build unified options list across all accounts
+  const allOptionItems: OptionTableItem[] = useMemo(() => {
+    const items: OptionTableItem[] = [];
+    const seenKeys = new Set<string>();
+
+    // 1. Options from stored P&L (both listed & unlisted option models)
+    for (const r of storedPnl) {
+      const isOption = Boolean(
+        r.isOption ||
+        r.isUnlistedOption ||
+        r.ticker.endsWith("-UO") ||
+        (r.instrument && r.instrument.toLowerCase().includes("option"))
+      );
+      if (!isOption) continue;
+
+      const isUnlisted = Boolean(r.isUnlistedOption || r.ticker.endsWith("-UO"));
+      const key = `${r.accountId}:${r.ticker}`;
+      seenKeys.add(key);
+
+      const quantity =
+        r.openQty !== 0
+          ? Math.abs(r.openQty)
+          : r.buyQty > 0
+          ? r.buyQty
+          : r.sellQty;
+
+      const uo = (r as any).unlisted_option || (r as any).unlistedOption;
+      const strike = uo?.addOn?.strike ?? null;
+      const underlyingPrice = uo?.spot ?? null;
+      const expiryRaw = uo?.addOn?.expiry ?? null;
+      const { date: expiryDate, dte } = parseExpiry(expiryRaw, r.company);
+      const pricingMethod = uo?.pricingMethod
+        ? uo.pricingMethod === "black-scholes"
+          ? "Black-Scholes model"
+          : "Intrinsic value"
+        : isUnlisted
+        ? "Modelled grant"
+        : "Listed feed";
+
+      const termsNote =
+        uo?.addOn?.raw ||
+        r.comment ||
+        (isUnlisted
+          ? "Free unlisted placement options"
+          : r.company || "Exchange traded listed options");
+
+      items.push({
+        id: `pnl-${key}`,
+        accountId: r.accountId,
+        clientId: r.clientId,
+        ticker: r.ticker,
+        parentTicker: r.parentTicker,
+        company: r.company || r.ticker,
+        isUnlisted,
+        isListed: !isUnlisted,
+        quantity,
+        costBasis: r.buyPrice,
+        marketValue: r.sellPrice,
+        pnl: r.pnl,
+        strike,
+        underlyingPrice,
+        expiryDate,
+        dte,
+        pricingMethod,
+        termsNote,
+        source: isUnlisted ? "Placement grant" : "Broker feed",
+        status: "live",
+      });
+    }
+
+    // 2. Options from option_holdings table
+    for (const o of optionHoldings) {
+      const acctId = o.accountId || "";
+      const key = `${acctId}:${o.code}`;
+      if (seenKeys.has(key)) continue;
+
+      const isUnlisted = !o.listed;
+      const { date: expiryDate, dte } = parseExpiry(o.expiryDate, o.name);
+
+      items.push({
+        id: `opt-${o.id}`,
+        accountId: acctId,
+        clientId: o.clientId,
+        ticker: o.code,
+        parentTicker: o.code.replace(/O[A-Z]?$/, ""),
+        company: o.name || o.code,
+        isUnlisted,
+        isListed: o.listed,
+        quantity: o.qty,
+        costBasis: 0,
+        marketValue: o.qty * Math.max(0, o.under - o.strike),
+        pnl: o.qty * Math.max(0, o.under - o.strike),
+        strike: o.strike,
+        underlyingPrice: o.under,
+        expiryDate,
+        dte,
+        pricingMethod: o.listed ? "Listed feed" : "Manual registry",
+        termsNote: o.source || (o.listed ? "Listed option series" : "Unlisted placement option"),
+        source: o.source || (o.listed ? "Broker feed" : "Manual register"),
+        status: o.status === "open" ? "live" : (o.status as any),
+      });
+    }
+
+    return items;
+  }, [storedPnl, optionHoldings]);
+
+  // Count options per account
+  const optionsCountByAccount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const it of allOptionItems) {
+      counts.set(it.accountId, (counts.get(it.accountId) || 0) + 1);
+    }
+    return counts;
+  }, [allOptionItems]);
+
+  // Build sorted accounts for dropdown: accounts with options first, then alphabetical
+  const sortedAccounts = useMemo(() => {
+    return [...accounts].sort((a, b) => {
+      const countA = optionsCountByAccount.get(a.id) || 0;
+      const countB = optionsCountByAccount.get(b.id) || 0;
+      if (countA > 0 && countB === 0) return -1;
+      if (countA === 0 && countB > 0) return 1;
+
+      const cA = clientMap.get(a.clientId)?.name || "";
+      const cB = clientMap.get(b.clientId)?.name || "";
+      const comp = cA.localeCompare(cB);
+      if (comp !== 0) return comp;
+      return (a.label || "").localeCompare(b.label || "");
+    });
+  }, [accounts, optionsCountByAccount, clientMap]);
+
+  // Filter states (defaulting to "all")
+  const [filterTab, setFilterTab] = useState<OptionFilterTab>("all");
+  const [selectedAccount, setSelectedAccount] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [hideSuspense, setHideSuspense] = useState<boolean>(true);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(15);
+
+  // Options scoped to currently selected account
+  const scopedAccountItems = useMemo(() => {
+    return allOptionItems.filter((it) => {
+      const client = clientMap.get(it.clientId);
+      const acct = accountMap.get(it.accountId);
+      const clientName = client?.name ?? "";
+      const acctRef = acct?.externalRef ?? acct?.ref ?? "";
+      const acctLabel = acct?.label ?? "";
+
+      if (hideSuspense && isHouseOrSuspenseAccount(clientName, acctRef, acctLabel)) {
+        return false;
+      }
+
+      if (selectedAccount !== "all" && it.accountId !== selectedAccount) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [allOptionItems, selectedAccount, hideSuspense, clientMap, accountMap]);
+
+  // Dynamic KPI Metrics for current account scope
+  const metrics = useMemo(() => {
+    let totalListedVal = 0;
+    let totalUnlistedVal = 0;
+    let totalPnl = 0;
+    let totalUnits = 0;
+    let listedCount = 0;
+    let unlistedCount = 0;
+    let gainCount = 0;
+    let lossCount = 0;
+    const accountsSet = new Set<string>();
+
+    for (const it of scopedAccountItems) {
+      accountsSet.add(it.accountId);
+      totalUnits += it.quantity;
+      totalPnl += it.pnl;
+
+      if (it.isUnlisted) {
+        unlistedCount++;
+        totalUnlistedVal += it.marketValue;
+      } else {
+        listedCount++;
+        totalListedVal += it.marketValue;
+      }
+
+      if (it.pnl > 0) gainCount++;
+      else if (it.pnl < 0) lossCount++;
+    }
+
+    return {
+      totalCount: scopedAccountItems.length,
+      listedCount,
+      unlistedCount,
+      gainCount,
+      lossCount,
+      totalListedVal,
+      totalUnlistedVal,
+      totalMarketVal: totalListedVal + totalUnlistedVal,
+      totalPnl,
+      totalUnits,
+      accountsCount: accountsSet.size,
+    };
+  }, [scopedAccountItems]);
+
+  // Filtered items based on active tab and search query
+  const filteredItems = useMemo(() => {
+    const items = scopedAccountItems.filter((it: OptionTableItem) => {
+      // 1. Category tab filter
+      if (filterTab === "listed" && !it.isListed) return false;
+      if (filterTab === "unlisted" && !it.isUnlisted) return false;
+      if (filterTab === "gain" && it.pnl <= 0) return false;
+      if (filterTab === "loss" && it.pnl >= 0) return false;
+
+      // 2. Search query
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const client = clientMap.get(it.clientId);
+        const acct = accountMap.get(it.accountId);
+        const clientName = client?.name ?? "";
+        const acctLabel = acct?.label ?? "";
+        const acctRef = acct?.externalRef ?? acct?.ref ?? "";
+
+        const matches =
+          it.ticker.toLowerCase().includes(q) ||
+          (it.parentTicker && it.parentTicker.toLowerCase().includes(q)) ||
+          it.company.toLowerCase().includes(q) ||
+          clientName.toLowerCase().includes(q) ||
+          acctLabel.toLowerCase().includes(q) ||
+          acctRef.toLowerCase().includes(q) ||
+          (it.termsNote && it.termsNote.toLowerCase().includes(q));
+
+        if (!matches) return false;
+      }
+
+      return true;
+    });
+
+    // Grouping & Sorting:
+    // When "All Accounts" is selected, group options by Client Name -> Account Label / Ref -> Series Ticker
+    // When a single account is selected, sort options by Series Ticker
+    return items.sort((a: OptionTableItem, b: OptionTableItem) => {
+      if (selectedAccount === "all") {
+        const clientA = clientMap.get(a.clientId)?.name || "";
+        const clientB = clientMap.get(b.clientId)?.name || "";
+        const clientComp = clientA.localeCompare(clientB);
+        if (clientComp !== 0) return clientComp;
+
+        const acctA = accountMap.get(a.accountId);
+        const acctB = accountMap.get(b.accountId);
+        const labelA = `${acctA?.label || ""}-${acctA?.externalRef || ""}`;
+        const labelB = `${acctB?.label || ""}-${acctB?.externalRef || ""}`;
+        const acctComp = labelA.localeCompare(labelB);
+        if (acctComp !== 0) return acctComp;
+      }
+
+      return a.ticker.localeCompare(b.ticker);
+    });
+  }, [scopedAccountItems, selectedAccount, filterTab, searchQuery, clientMap, accountMap]);
+
+  // Paginated items
+  const paginatedItems = useMemo(() => {
+    if (pageSize >= filteredItems.length) return filteredItems;
+    const start = (currentPage - 1) * pageSize;
+    return filteredItems.slice(start, start + pageSize);
+  }, [filteredItems, currentPage, pageSize]);
+
+  // Filtered Totals
+  const filteredTotals = useMemo(() => {
+    let val = 0;
+    let pnl = 0;
+    let qty = 0;
+
+    for (const it of filteredItems) {
+      val += it.marketValue;
+      pnl += it.pnl;
+      qty += it.quantity;
+    }
+
+    return { val, pnl, qty };
+  }, [filteredItems]);
+
+  // Reset filters
+  const handleResetFilters = () => {
+    setFilterTab("all");
+    setSearchQuery("");
+    setCurrentPage(1);
   };
 
-  const handleAddOptionSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Export CSV
+  const handleExportCsv = () => {
+    const headers = [
+      "Series Ticker",
+      "Parent Ordinary",
+      "Company / Description",
+      "Option Type",
+      "Quantity",
+      "Current Value ($)",
+      "Unrealized P&L ($)",
+      "Terms / Valuation Notes",
+      "Account Name",
+      "Client Name",
+    ];
 
-    // Simulate addition (normally we would call a DB mutator, but since we are doing controlled mocks we can alert)
-    alert(`Unlisted option ${uoCode.toUpperCase()} added on register for ${clientMap[uoClient]?.name || uoClient}.`);
-    setShowAddModal(false);
+    const rows = filteredItems.map((it) => {
+      const client = clientMap.get(it.clientId)?.name ?? "";
+      const acct = accountMap.get(it.accountId);
+      const acctName = `${acct?.label || "Account"}${acct?.externalRef ? ` (#${acct.externalRef})` : ""}`;
+
+      return [
+        `"${it.ticker.replace(/"/g, '""')}"`,
+        `"${(it.parentTicker || "").replace(/"/g, '""')}"`,
+        `"${it.company.replace(/"/g, '""')}"`,
+        `"${it.isUnlisted ? "Unlisted Option" : "Listed Option"}"`,
+        it.quantity,
+        it.marketValue.toFixed(2),
+        it.pnl.toFixed(2),
+        `"${(it.termsNote || "").replace(/"/g, '""')}"`,
+        `"${acctName.replace(/"/g, '""')}"`,
+        `"${client.replace(/"/g, '""')}"`,
+      ].join(",");
+    });
+
+    const csvContent = "\uFEFF" + [headers.join(","), ...rows].join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Options_${selectedAccount === "all" ? "All_Accounts" : "Account"}_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
-      {/* Page Header */}
-      <div className="flex justify-between items-end gap-3 flex-wrap">
+      {/* Top Header & Account Switcher Row (ABOVE KPI CARDS) */}
+      <div className="flex justify-between items-center gap-4 flex-wrap pb-1 border-b border-line/60">
         <div>
-          <div className="font-mono text-xs tracking-wider uppercase text-mut font-semibold">All clients &middot; listed feed + manual unlisted</div>
-          <h1 className="font-disp font-medium text-[26px] mt-0.5">Options tracker</h1>
-        </div>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 px-4.5 rounded-[10px] text-xs cursor-pointer"
-        >
-          + Add unlisted option
-        </button>
-      </div>
-
-      {/* Filters Strip */}
-      <div className="flex flex-wrap gap-3 items-center text-xs font-semibold bg-white border border-line rounded-xl p-3.5 shadow-shadow">
-        <div className="flex items-center gap-1.5">
-          <span className="text-mut uppercase text-[10px]">Client</span>
-          <select
-            value={filterClient}
-            onChange={e => setFilterClient(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
-          >
-            <option value="all">All clients</option>
-            {clients.map(c => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+          <h1 className="font-disp font-medium text-[24px] tracking-tight text-ink">
+            Options
+          </h1>
+          <p className="text-xs text-mut mt-0.5">
+            Overview of listed and unlisted options across accounts.
+          </p>
         </div>
 
-        <div className="flex items-center gap-1.5">
-          <span className="text-mut uppercase text-[10px]">Type</span>
-          <select
-            value={filterType}
-            onChange={e => setFilterType(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
-          >
-            <option value="all">All</option>
-            <option value="listed">Listed</option>
-            <option value="unlisted">Unlisted</option>
-          </select>
-        </div>
+        {/* Account Selector & Export shifted to the TOP */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2 bg-white border border-line rounded-lg px-3 py-1.5 shadow-2xs">
+            <span className="text-mut text-xs font-semibold uppercase tracking-wider">Account:</span>
+            <select
+              value={selectedAccount}
+              onChange={(e) => {
+                setSelectedAccount(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="bg-transparent text-xs font-semibold text-ink focus:outline-none cursor-pointer max-w-[320px]"
+            >
+              <option value="all">All Accounts ({accounts.length})</option>
+              {sortedAccounts.map((a) => {
+                const client = clientMap.get(a.clientId);
+                const clientName = client?.name || "Client";
+                const ref = a.externalRef ? ` #${a.externalRef}` : "";
+                const count = optionsCountByAccount.get(a.id) || 0;
+                const label = `${clientName} — ${a.label || "Account"}${ref} (${count} ${count === 1 ? "option" : "options"})`;
+                return (
+                  <option key={a.id} value={a.id}>
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
 
-        <div className="flex items-center gap-1.5">
-          <span className="text-mut uppercase text-[10px]">Expiry</span>
-          <select
-            value={filterExpiry}
-            onChange={e => setFilterExpiry(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
-          >
-            <option value="all">Any</option>
-            <option value="7">&le; 7 days</option>
-            <option value="30">&le; 30 days</option>
-          </select>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <span className="text-mut uppercase text-[10px]">Moneyness</span>
-          <select
-            value={filterMoney}
-            onChange={e => setFilterMoney(e.target.value)}
-            className="border border-line bg-paper px-2 py-1 rounded-md focus:outline-none"
-          >
-            <option value="all">All</option>
-            <option value="itm">In the money</option>
-            <option value="otm">Out of money</option>
-          </select>
-        </div>
-
-        {(filterClient !== "all" || filterType !== "all" || filterExpiry !== "all" || filterMoney !== "all") && (
           <button
-            onClick={handleClearFilters}
-            className="btn ghost sm text-[11px] font-semibold py-1.5 px-3 border border-line rounded-lg bg-paper hover:bg-white cursor-pointer ml-auto"
+            type="button"
+            onClick={handleExportCsv}
+            className="inline-flex items-center gap-1.5 bg-white hover:bg-paper-2 border border-line text-ink font-semibold py-1.5 px-3 rounded-lg text-xs transition-colors shadow-2xs cursor-pointer"
           >
-            Clear filters
+            <svg className="w-3.5 h-3.5 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export
           </button>
-        )}
+        </div>
       </div>
 
-      {/* Active Options Table */}
-      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-        <div className="px-4.5 py-4 border-b border-line bg-white select-none">
-          <b className="text-sm font-semibold text-ink">Live client options ({activeOptions.length})</b>
+      {/* KPI Cards Row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {/* Total Options */}
+        <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
+          <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Total Options</div>
+          <div className="font-disp font-semibold text-xl mt-1 text-ink flex items-baseline gap-2">
+            {metrics.totalCount}
+            <span className="font-body text-xs font-normal text-mut">
+              {selectedAccount === "all" ? `(${metrics.accountsCount} accounts)` : "holdings"}
+            </span>
+          </div>
+          <div className="text-[11px] text-mut mt-0.5 font-mono">{fmtQty(metrics.totalUnits)} units</div>
         </div>
 
+        {/* Listed Options */}
+        <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
+          <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Listed Options</div>
+          <div className="font-disp font-semibold text-xl mt-1 text-ink">{metrics.listedCount}</div>
+          <div className="text-[11px] text-mut mt-0.5 font-mono">${money2(metrics.totalListedVal)} value</div>
+        </div>
+
+        {/* Unlisted Options */}
+        <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
+          <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Unlisted Options</div>
+          <div className="font-disp font-semibold text-xl mt-1 text-ink">{metrics.unlistedCount}</div>
+          <div className="text-[11px] text-mut mt-0.5 font-mono">${money2(metrics.totalUnlistedVal)} modelled</div>
+        </div>
+
+        {/* Unrealized P&L */}
+        <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
+          <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Unrealized P&amp;L</div>
+          <div className={`font-disp font-semibold text-xl mt-1 ${metrics.totalPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {metrics.totalPnl >= 0 ? "+" : ""}${money2(metrics.totalPnl)}
+          </div>
+          <div className="text-[11px] text-mut mt-0.5">
+            {metrics.gainCount} gain &middot; {metrics.lossCount} loss / unquoted
+          </div>
+        </div>
+      </div>
+
+      {/* Main Table Card */}
+      <div className="bg-white border border-line rounded-xl shadow-2xs overflow-hidden">
+        {/* Controls Bar: Tabs & Search */}
+        <div className="p-3.5 border-b border-line bg-white space-y-3">
+          {/* Segmented Filter Pills (All Options, Listed Options, Unlisted Options, Gain, Loss) */}
+          <div className="bg-paper rounded-lg p-1 flex items-center gap-1 overflow-x-auto border border-line/60">
+            {(
+              [
+                { id: "all", label: "All Options", count: metrics.totalCount },
+                { id: "listed", label: "Listed Options", count: metrics.listedCount },
+                { id: "unlisted", label: "Unlisted Options", count: metrics.unlistedCount },
+                { id: "gain", label: "Gain", count: metrics.gainCount },
+                { id: "loss", label: "Loss", count: metrics.lossCount },
+              ] as const
+            ).map((t) => {
+              const active = filterTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setFilterTab(t.id);
+                    setCurrentPage(1);
+                  }}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-xs cursor-pointer transition-all whitespace-nowrap ${
+                    active
+                      ? "bg-white text-ink font-semibold shadow-xs border border-line/70"
+                      : "text-mut hover:text-ink font-medium hover:bg-white/40"
+                  }`}
+                >
+                  <span>{t.label}</span>
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-semibold ${
+                      active ? "bg-paper-2 text-ink" : "bg-line/40 text-mut"
+                    }`}
+                  >
+                    {t.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Search Bar & Reset */}
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <svg
+                className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              <input
+                type="text"
+                placeholder="Search series, company, terms, client, account..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full bg-paper/60 hover:bg-paper focus:bg-white border border-line rounded-lg pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setCurrentPage(1);
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-ink cursor-pointer"
+                >
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+
+            {/* Clear Filter Button */}
+            {(filterTab !== "all" || searchQuery) && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="text-[11px] font-semibold text-mut hover:text-ink px-2.5 py-1.5 border border-line rounded-lg bg-paper hover:bg-white transition-colors cursor-pointer whitespace-nowrap"
+              >
+                Reset Filters
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Clean Options Table */}
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs font-medium">
+          <table className="w-full border-collapse text-left text-xs">
             <thead>
-              <tr className="border-b border-line text-mut select-none">
-                <th className="px-4.5 py-2.5">Client</th>
-                <th className="px-4.5 py-2.5">Series</th>
-                <th className="px-4.5 py-2.5 text-right">Qty</th>
-                <th className="px-4.5 py-2.5 text-right">Strike</th>
-                <th className="px-4.5 py-2.5 text-right hidden sm:table-cell">Underlying</th>
-                <th className="px-4.5 py-2.5 text-center">Moneyness</th>
-                <th className="px-4.5 py-2.5 hidden sm:table-cell">Expiry date</th>
-                <th className="px-4.5 py-2.5">Window</th>
+              <tr className="border-b border-line text-mut select-none bg-paper/40 font-medium">
+                {/* Conditionally show Account column when All Accounts is selected */}
+                {selectedAccount === "all" && (
+                  <th className="px-4 py-2.5 whitespace-nowrap">Account</th>
+                )}
+                <th className="px-4 py-2.5 whitespace-nowrap">Series</th>
+                <th className="px-4 py-2.5">Company / Description</th>
+                <th className="px-4 py-2.5 whitespace-nowrap">Type</th>
+                <th className="px-4 py-2.5 text-right whitespace-nowrap">Quantity</th>
+                <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
+                <th className="px-4 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L</th>
+                <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#f0ede5]">
-              {activeOptions.length === 0 ? (
+            <tbody className="divide-y divide-line/60">
+              {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="text-center text-mut py-6">No matching live options found.</td>
+                  <td colSpan={selectedAccount === "all" ? 8 : 7} className="text-center text-mut py-12">
+                    <p className="font-semibold text-ink">No options found</p>
+                    <p className="text-xs text-mut mt-0.5">
+                      {scopedAccountItems.length === 0
+                        ? "There are no options on record for this selection."
+                        : "No options match the active tab or search filter."}
+                    </p>
+                    {(filterTab !== "all" || searchQuery) && (
+                      <button
+                        type="button"
+                        onClick={handleResetFilters}
+                        className="mt-2 text-xs font-semibold text-navy hover:underline cursor-pointer"
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ) : (
-                activeOptions.map(o => {
-                  const isItmVal = isITM(o);
-                  return (
-                    <tr key={o.id} className="hover:bg-[#faf9f5]">
-                      <td className="px-4.5 py-3 select-none">
-                        <span className="w-6.5 h-6.5 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[9.5px] text-ink uppercase">
-                          {clientMap[o.clientId]?.initials || o.clientId}
-                        </span>
-                      </td>
-                      <td className="px-4.5 py-3">
-                        <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{o.code}</span>
-                        <div className="text-[10px] text-mut mt-1">{o.listed ? "Listed" : "Unlisted"}</div>
-                      </td>
-                      <td className="px-4.5 py-3 text-right font-mono">{o.qty ? o.qty.toLocaleString("en-AU") : "—"}</td>
-                      <td className="px-4.5 py-3 text-right font-mono">${o.strike.toFixed(2)}</td>
-                      <td className="px-4.5 py-3 text-right font-mono hidden sm:table-cell">${o.under.toFixed(2)}</td>
-                      <td className="px-4.5 py-3 text-center">
-                        <div className="inline-flex items-center gap-1.5">
-                          <MoneynessBar strike={o.strike} under={o.under} type={o.type} />
-                          <span className={`pill text-[10px] font-bold rounded-full px-1.5 py-0.5 ${isItmVal ? "bg-green-bg text-green-d" : "bg-paper-2 text-mut"}`}>
-                            {isItmVal ? "ITM" : "OTM"}
+                <>
+                  {paginatedItems.map((o) => {
+                    const client = clientMap.get(o.clientId);
+                    const acct = accountMap.get(o.accountId);
+                    const isUp = o.pnl >= 0;
+
+                    return (
+                      <tr key={o.id} className="hover:bg-paper/50 transition-colors">
+                        {/* Account column displayed only when All Accounts is selected */}
+                        {selectedAccount === "all" && (
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="font-semibold text-ink text-[11.5px]">
+                              {client?.name || "Client"}
+                            </div>
+                            <div className="text-[10.5px] text-mut">
+                              {acct?.label || "Account"}
+                              {acct?.externalRef ? ` · #${acct.externalRef}` : ""}
+                            </div>
+                          </td>
+                        )}
+
+                        {/* Series / Ticker */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono px-1.5 py-0.5 rounded bg-paper-2 border border-line/60 font-bold text-ink text-[11.5px]">
+                              {o.ticker}
+                            </span>
+                            {o.parentTicker && o.parentTicker !== o.ticker && (
+                              <span className="text-[10px] font-mono text-mut">
+                                &rarr; {o.parentTicker}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Company / Description */}
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-ink truncate max-w-xs" title={o.company}>
+                            {o.company}
+                          </div>
+                        </td>
+
+                        {/* Type */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span
+                            className={`text-[10.5px] font-semibold rounded-full px-2.5 py-0.5 inline-block ${
+                              o.isUnlisted
+                                ? "bg-[#ece9f3] text-[#5c5775] border border-[#d8d3e5]"
+                                : "bg-paper-2 text-ink border border-line/60"
+                            }`}
+                          >
+                            {o.isUnlisted ? "Unlisted Option" : "Listed Option"}
                           </span>
-                        </div>
-                      </td>
-                      <td className="px-4.5 py-3 hidden sm:table-cell font-mono text-[11px] text-mut">
-                        {new Date(o.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-                      </td>
-                      <td className="px-4.5 py-3">
-                        <ExpiryRail dte={o.dte} />
-                      </td>
-                    </tr>
-                  );
-                })
+                        </td>
+
+                        {/* Quantity */}
+                        <td className="px-4 py-3 text-right font-mono text-ink whitespace-nowrap font-medium">
+                          {o.quantity > 0 ? fmtQty(o.quantity) : "—"}
+                        </td>
+
+                        {/* Current Value */}
+                        <td className="px-4 py-3 text-right font-mono font-semibold text-ink whitespace-nowrap">
+                          ${money2(o.marketValue)}
+                        </td>
+
+                        {/* Unrealized P&L */}
+                        <td
+                          className={`px-4 py-3 text-right font-mono font-semibold whitespace-nowrap ${
+                            isUp ? "text-gain" : "text-loss-d"
+                          }`}
+                        >
+                          {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
+                        </td>
+
+                        {/* Terms & Valuation Notes */}
+                        <td className="px-4 py-3 text-mut text-[11px] font-mono max-w-sm truncate" title={o.termsNote || o.company}>
+                          {o.termsNote || o.pricingMethod || "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* Grand Total Row */}
+                  <tr className="border-t-2 border-line bg-paper/60 font-semibold select-none">
+                    <td className="px-4 py-3" colSpan={selectedAccount === "all" ? 2 : 1}>
+                      Total ({filteredItems.length})
+                    </td>
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3 text-right font-mono">
+                      {fmtQty(filteredTotals.qty)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-ink">
+                      ${money2(filteredTotals.val)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-right font-mono ${
+                        filteredTotals.pnl >= 0 ? "text-gain" : "text-loss-d"
+                      }`}
+                    >
+                      {filteredTotals.pnl < 0 ? "-" : "+"}${money2(Math.abs(filteredTotals.pnl))}
+                    </td>
+                    <td className="px-4 py-3" />
+                  </tr>
+                </>
               )}
             </tbody>
           </table>
         </div>
+
+        {/* Pagination Footer */}
+        <TablePagination
+          totalItems={filteredItems.length}
+          currentPage={currentPage}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+          pageSizeOptions={[10, 15, 25, 50, 100]}
+          itemLabel="options"
+        />
       </div>
-
-      {/* Lapsed Expired Table */}
-      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-        <div className="px-4.5 py-3.5 border-b border-line bg-white select-none">
-          <b className="text-sm font-semibold text-ink">Exercised / Expired options history log</b>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs font-medium">
-            <thead>
-              <tr className="border-b border-line text-mut select-none">
-                <th className="px-4.5 py-2.5">Client</th>
-                <th className="px-4.5 py-2.5">Series</th>
-                <th className="px-4.5 py-2.5 text-right">Qty</th>
-                <th className="px-4.5 py-2.5 text-right">Strike</th>
-                <th className="px-4.5 py-2.5">Outcome</th>
-                <th className="px-4.5 py-2.5 text-right">Close date</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#f0ede5]">
-              {lapsedExpiredOptions.map(o => (
-                <tr key={o.id} className="hover:bg-[#faf9f5]">
-                  <td className="px-4.5 py-3 select-none">
-                    <span className="w-5.5 h-5.5 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[9px] text-ink uppercase">
-                      {clientMap[o.clientId]?.initials || o.clientId}
-                    </span>
-                  </td>
-                  <td className="px-4.5 py-3 font-bold"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{o.code}</span></td>
-                  <td className="px-4.5 py-3 text-right font-mono">{o.qty.toLocaleString("en-AU")}</td>
-                  <td className="px-4.5 py-3 text-right font-mono">${o.strike.toFixed(2)}</td>
-                  <td className="px-4.5 py-3">
-                    <span className={`pill text-[10.5px] font-bold px-2 py-0.5 rounded-full ${o.status === "expired" ? "bg-paper-2 text-mut" : "bg-green-bg text-green-d"}`}>
-                      {o.status === "expired" ? "Expired OTM" : "Exercised"}
-                    </span>
-                  </td>
-                  <td className="px-4.5 py-3 text-right text-mut font-mono">
-                    {new Date(o.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Manual Unlisted Option Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <form onSubmit={handleAddOptionSubmit} className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
-            <h3 className="font-disp font-medium text-lg text-ink">Add unlisted option</h3>
-            <p className="text-xs text-mut leading-normal">
-              Unlisted options are not on the broker feed. Enter them on the client register manually.
-            </p>
-
-            <div className="space-y-3">
-              <div className="space-y-1">
-                <label className="block text-xs font-semibold text-ink">Client</label>
-                <select
-                  value={uoClient}
-                  onChange={e => setUoClient(e.target.value)}
-                  className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-sm focus:border-green focus:outline-none"
-                >
-                  {clients.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-ink">Code</label>
-                  <input
-                    type="text"
-                    value={uoCode}
-                    onChange={e => setUoCode(e.target.value)}
-                    required
-                    className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-sm focus:border-green"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-ink font-mono">Quantity</label>
-                  <input
-                    type="text"
-                    value={uoQty}
-                    onChange={e => setUoQty(e.target.value.replace(/[^0-9,]/g, ""))}
-                    required
-                    className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-sm focus:border-green"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-ink font-mono">Strike ($)</label>
-                  <input
-                    type="text"
-                    value={uoStrike}
-                    onChange={e => setUoStrike(e.target.value)}
-                    required
-                    className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-sm focus:border-green"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <label className="block text-xs font-semibold text-ink font-mono">Underlying ($)</label>
-                  <input
-                    type="text"
-                    value={uoUnder}
-                    onChange={e => setUoUnder(e.target.value)}
-                    required
-                    className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-sm focus:border-green"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-xs font-semibold text-ink font-mono">Days to expiry</label>
-                <input
-                  type="text"
-                  value={uoDte}
-                  onChange={e => setUoDte(e.target.value.replace(/[^0-9]/g, ""))}
-                  required
-                  className="w-full border border-line-2 bg-white rounded-[9px] px-3.5 py-2 text-sm focus:border-green"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2.5 pt-2 select-none">
-              <button
-                type="button"
-                onClick={() => setShowAddModal(false)}
-                className="btn border border-line rounded-[10px] py-2 px-4 hover:border-mut text-xs font-semibold cursor-pointer flex-1 bg-white"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2 px-4 text-xs font-semibold cursor-pointer flex-1.5"
-              >
-                Add option
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </div>
   );
 }

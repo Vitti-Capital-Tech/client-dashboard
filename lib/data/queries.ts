@@ -520,6 +520,21 @@ export const getClientOptions = cache(
   },
 );
 
+export const getAllOptions = cache(
+  async (): Promise<OptionRow[]> => {
+    const supabase = await createClient();
+    const [{ data, error }, securityMap] = await Promise.all([
+      supabase
+        .from("option_holdings")
+        .select("*")
+        .order("ref"),
+      getSecurityMap(),
+    ]);
+    if (error) throw error;
+    return (data ?? []).map((o) => toOption(o, securityMap));
+  },
+);
+
 /**
  * A client's full contract-note history, newest first, across all of their
  * accounts. Non-settled rows (CANCELLED / REVERSAL / REVERSED) are included
