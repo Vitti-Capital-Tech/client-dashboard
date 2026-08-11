@@ -4,7 +4,6 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PnlSummaryRow } from "@/lib/export/order-history";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
-import { ManageTradesModal } from "@/app/portal/staff/mismatches/ManageTradesModal";
 
 /**
  * One row of the P&L-by-company table, in either display or edit mode.
@@ -58,7 +57,6 @@ export function PnlRow({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showManageModal, setShowManageModal] = useState(false);
 
   // Every field starts filled with the value currently in force (0 when there
   // is nothing), so the desk edits real numbers rather than typing into empty
@@ -186,45 +184,13 @@ export function PnlRow({
             <div className="text-[10px] text-mut-d italic mt-0.5">{row.note}</div>
           )}
         </td>
-        <td className="px-4.5 py-3 text-right select-none">
-          <div className="flex items-center justify-end gap-2">
-            <button
-              onClick={onEdit}
-              className="text-[11px] font-semibold text-mut hover:text-ink underline underline-offset-2 cursor-pointer"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowManageModal(true)}
-              className="p-1 rounded-[5px] text-mut hover:text-loss hover:bg-loss-bg border border-transparent hover:border-loss/30 transition-all cursor-pointer inline-flex items-center justify-center"
-              title="Manage & Delete Transactions"
-            >
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
-              </svg>
-            </button>
-          </div>
-
-          <ManageTradesModal
-            isOpen={showManageModal}
-            onClose={() => setShowManageModal(false)}
-            accountId={accountId || ""}
-            clientId={clientId}
-            clientName={row.name}
-            accountLabel="Account"
-            accountExternalRef={null}
-            ticker={row.ticker}
-            companyName={row.name}
-            discrepancyLabel={row.type}
-            discrepancyType={row.buyQty === 0 && row.sellQty > 0 ? "buy_unknown" : "unmatched"}
-          />
+        <td className="px-4.5 py-3 text-right">
+          <button
+            onClick={onEdit}
+            className="text-[11px] font-semibold text-mut hover:text-ink underline underline-offset-2 cursor-pointer"
+          >
+            Edit
+          </button>
         </td>
       </tr>
     );

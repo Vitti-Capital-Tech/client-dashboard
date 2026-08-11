@@ -955,7 +955,7 @@ Two properties worth stating:
   - Overrides are applied at read-time over `pnl_summary`, guaranteeing that desk corrections remain permanent across morning automated ingests.
   - A **Revert** action allows clearing an override back to computed values when ledger corrections are imported.
 - **Trade Deletion & Position Exclusion Architecture (`app/actions/trades.ts`, `ManageTradesModal.tsx`):**
-  - **Row-End Action Trigger:** A dedicated trash icon button (`🗑️`) at the end of each mismatch row (and `PnlRow.tsx`) opens `ManageTradesModal`.
+  - **Row-End Action Trigger:** A dedicated trash icon button (`🗑️`) at the end of each row in the **Mismatched Qty** workspace (`/portal/staff/mismatches`) opens `ManageTradesModal`.
   - **`getTradesForMismatch(accountId, ticker)`**: Concurrently queries raw broker contract notes from `trades` matching `(security_code = ticker OR parent_code = parent)`.
   - **`deleteTradeAction(tradeId, accountId, clientId)`**:
     1. Fetches the exact trade details (`side`, `units`, `avg_price`, `cnote`, `trade_date`, `security_code`).
