@@ -3,6 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActor, getActiveAccountId } from "@/lib/session";
+// `PLACEMENT_TYPES` lives outside this file on purpose: a `"use server"` module
+// may only export async functions, so a const exported from here reaches a
+// client component as a server reference rather than as an array. See the note
+// in that module — it cost a runtime crash to learn.
+import type { PromotionTerms } from "@/lib/placements/deal-types";
 
 /**
  * Placement mutations (Stage 6). These replace the legacy Zustand mutators
@@ -266,30 +271,6 @@ export async function notifyBpayPayment(placementId: string) {
 // ---------------------------------------------------------------------------
 // Deal-mail candidates → real placements
 // ---------------------------------------------------------------------------
-
-/**
- * The `placements.type` vocabulary, which is NOT the upstream feed's.
- *
- * The deal mail classifies everything as `Placement` or `IPO`; this schema has
- * had `Placement | SPP | Pre-IPO | Rights` since the first migration and no
- * plain `IPO` at all. The mapping is therefore a judgement, not a translation —
- * so the promote form defaults an `IPO` to `Pre-IPO` and leaves it editable
- * rather than deciding silently.
- */
-export const PLACEMENT_TYPES = ["Placement", "SPP", "Pre-IPO", "Rights"] as const;
-export type PlacementType = (typeof PLACEMENT_TYPES)[number];
-
-/** The terms the mail never carried, supplied by whoever promotes the deal. */
-export type PromotionTerms = {
-  code: string;
-  name: string;
-  type: PlacementType;
-  price: number;
-  raiseMillions: number;
-  minBid: number;
-  opts?: string | null;
-  closeDate?: string | null;
-};
 
 
 /**

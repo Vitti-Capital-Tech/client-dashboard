@@ -3,12 +3,8 @@
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { PlacementCandidateRow } from "@/lib/data/placement-candidates";
-import {
-  promoteCandidate,
-  dismissCandidate,
-  PLACEMENT_TYPES,
-  type PlacementType,
-} from "@/app/actions/placements";
+import { promoteCandidate, dismissCandidate } from "@/app/actions/placements";
+import { PLACEMENT_TYPES, type PlacementType } from "@/lib/placements/deal-types";
 
 /**
  * The deal-mail inbox: placements and IPOs the broker mail told us about.
