@@ -39,40 +39,17 @@ export type IngestRunRow = {
   error: string | null;
 };
 
-/** As PostgREST returns it — see the note on the cast below. */
-type IngestRunRecord = {
-  id: string;
-  started_at: string;
-  finished_at: string | null;
-  status: string;
-  messages_seen: number | null;
-  attachments: number | null;
-  imported: number | null;
-  quarantined: number | null;
-  notes: string[] | null;
-  error: string | null;
-};
-
 export const getIngestRuns = cache(
   async (limit = 30): Promise<IngestRunRow[]> => {
     const supabase = await createClient();
-
-    /* eslint-disable-next-line @typescript-eslint/no-explicit-any --
-     * `ingest_runs` is ABSENT from the generated `Database` types: the file
-     * carries 29 tables and neither of the mail-ingest pair is among them, so
-     * the typed client rejects the table name outright rather than mistyping a
-     * column. The escape is deliberately narrow — one `from`, with the row
-     * shape spelled out above so the mapping below is still checked — and the
-     * real fix is `supabase gen types`, which needs project credentials this
-     * repo does not carry. */
-    const { data, error } = await (supabase as any)
+    const { data, error } = await supabase
       .from("ingest_runs")
       .select("*")
       .order("started_at", { ascending: false })
       .limit(limit);
     if (error) throw error;
 
-    return ((data ?? []) as IngestRunRecord[]).map((r) => ({
+    return (data ?? []).map((r) => ({
       id: r.id,
       startedAt: r.started_at,
       finishedAt: r.finished_at,

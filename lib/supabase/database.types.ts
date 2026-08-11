@@ -441,6 +441,116 @@ export type Database = {
         }
         Relationships: []
       }
+      ingest_attachments: {
+        Row: {
+          account_refs: string[]
+          attachment_id: string
+          error: string | null
+          filename: string
+          id: string
+          kind: string
+          message_id: string
+          outcome: string
+          processed_at: string
+          received_at: string
+          rows_parsed: number | null
+          run_id: string | null
+          sender: string | null
+          sha256: string
+          size_bytes: number | null
+          subject: string | null
+        }
+        Insert: {
+          account_refs?: string[]
+          attachment_id: string
+          error?: string | null
+          filename: string
+          id?: string
+          kind: string
+          message_id: string
+          outcome: string
+          processed_at?: string
+          received_at: string
+          rows_parsed?: number | null
+          run_id?: string | null
+          sender?: string | null
+          sha256: string
+          size_bytes?: number | null
+          subject?: string | null
+        }
+        Update: {
+          account_refs?: string[]
+          attachment_id?: string
+          error?: string | null
+          filename?: string
+          id?: string
+          kind?: string
+          message_id?: string
+          outcome?: string
+          processed_at?: string
+          received_at?: string
+          rows_parsed?: number | null
+          run_id?: string | null
+          sender?: string | null
+          sha256?: string
+          size_bytes?: number | null
+          subject?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ingest_attachments_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "ingest_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ingest_runs: {
+        Row: {
+          attachments: number
+          error: string | null
+          finished_at: string | null
+          id: string
+          imported: number
+          messages_seen: number
+          notes: string[]
+          pnl_batch_id: string | null
+          quarantined: number
+          started_at: string
+          status: string
+          watermark: string | null
+        }
+        Insert: {
+          attachments?: number
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          imported?: number
+          messages_seen?: number
+          notes?: string[]
+          pnl_batch_id?: string | null
+          quarantined?: number
+          started_at?: string
+          status?: string
+          watermark?: string | null
+        }
+        Update: {
+          attachments?: number
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          imported?: number
+          messages_seen?: number
+          notes?: string[]
+          pnl_batch_id?: string | null
+          quarantined?: number
+          started_at?: string
+          status?: string
+          watermark?: string | null
+        }
+        Relationships: []
+      }
       investment_ideas: {
         Row: {
           code: string
@@ -636,6 +746,33 @@ export type Database = {
           },
         ]
       }
+      placement_tracker_cache: {
+        Row: {
+          items: Json
+          label: string
+          parse_ms: number | null
+          parsed_at: string
+          ticker_count: number
+          url_hash: string
+        }
+        Insert: {
+          items: Json
+          label: string
+          parse_ms?: number | null
+          parsed_at?: string
+          ticker_count?: number
+          url_hash: string
+        }
+        Update: {
+          items?: Json
+          label?: string
+          parse_ms?: number | null
+          parsed_at?: string
+          ticker_count?: number
+          url_hash?: string
+        }
+        Relationships: []
+      }
       placements: {
         Row: {
           alloc_date: string | null
@@ -698,93 +835,6 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
-      }
-      positions: {
-        Row: {
-          account_id: string | null
-          avg_cost: number
-          client_id: string
-          created_at: string
-          id: string
-          qty: number
-          security_code: string
-          updated_at: string
-        }
-        Insert: {
-          account_id?: string | null
-          avg_cost: number
-          client_id: string
-          created_at?: string
-          id?: string
-          qty: number
-          security_code: string
-          updated_at?: string
-        }
-        Update: {
-          account_id?: string | null
-          avg_cost?: number
-          client_id?: string
-          created_at?: string
-          id?: string
-          qty?: number
-          security_code?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "positions_account_id_fkey"
-            columns: ["account_id"]
-            isOneToOne: false
-            referencedRelation: "accounts"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "positions_client_id_fkey"
-            columns: ["client_id"]
-            isOneToOne: false
-            referencedRelation: "clients"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "positions_security_code_fkey"
-            columns: ["security_code"]
-            isOneToOne: false
-            referencedRelation: "securities"
-            referencedColumns: ["code"]
-          },
-        ]
-      }
-      recommendations: {
-        Row: {
-          move: string | null
-          rating: string
-          security_code: string
-          target_price: number | null
-          updated_at: string
-        }
-        Insert: {
-          move?: string | null
-          rating: string
-          security_code: string
-          target_price?: number | null
-          updated_at?: string
-        }
-        Update: {
-          move?: string | null
-          rating?: string
-          security_code?: string
-          target_price?: number | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "recommendations_security_code_fkey"
-            columns: ["security_code"]
-            isOneToOne: true
-            referencedRelation: "securities"
-            referencedColumns: ["code"]
-          },
-        ]
       }
       pnl_overrides: {
         Row: {
@@ -849,33 +899,6 @@ export type Database = {
             referencedColumns: ["code"]
           },
         ]
-      }
-      placement_tracker_cache: {
-        Row: {
-          items: Json
-          label: string
-          parse_ms: number | null
-          parsed_at: string
-          ticker_count: number
-          url_hash: string
-        }
-        Insert: {
-          items: Json
-          label: string
-          parse_ms?: number | null
-          parsed_at?: string
-          ticker_count?: number
-          url_hash: string
-        }
-        Update: {
-          items?: Json
-          label?: string
-          parse_ms?: number | null
-          parsed_at?: string
-          ticker_count?: number
-          url_hash?: string
-        }
-        Relationships: []
       }
       pnl_recompute_queue: {
         Row: {
@@ -1084,6 +1107,61 @@ export type Database = {
           },
         ]
       }
+      positions: {
+        Row: {
+          account_id: string | null
+          avg_cost: number
+          client_id: string
+          created_at: string
+          id: string
+          qty: number
+          security_code: string
+          updated_at: string
+        }
+        Insert: {
+          account_id?: string | null
+          avg_cost: number
+          client_id: string
+          created_at?: string
+          id?: string
+          qty: number
+          security_code: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string | null
+          avg_cost?: number
+          client_id?: string
+          created_at?: string
+          id?: string
+          qty?: number
+          security_code?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "positions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "positions_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "positions_security_code_fkey"
+            columns: ["security_code"]
+            isOneToOne: false
+            referencedRelation: "securities"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
       realized_pnl: {
         Row: {
           account_id: string
@@ -1164,6 +1242,38 @@ export type Database = {
             foreignKeyName: "realized_pnl_parent_code_fkey"
             columns: ["parent_code"]
             isOneToOne: false
+            referencedRelation: "securities"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
+      recommendations: {
+        Row: {
+          move: string | null
+          rating: string
+          security_code: string
+          target_price: number | null
+          updated_at: string
+        }
+        Insert: {
+          move?: string | null
+          rating: string
+          security_code: string
+          target_price?: number | null
+          updated_at?: string
+        }
+        Update: {
+          move?: string | null
+          rating?: string
+          security_code?: string
+          target_price?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "recommendations_security_code_fkey"
+            columns: ["security_code"]
+            isOneToOne: true
             referencedRelation: "securities"
             referencedColumns: ["code"]
           },
@@ -1634,6 +1744,7 @@ export const Constants = {
       placement_type: ["Placement", "SPP", "Pre-IPO", "Rights"],
       risk_level: ["Low", "Medium", "High"],
       signal_action: ["Add", "Hold", "Trim", "Take profit", "Watch"],
+      trade_side: ["BUY", "SELL"],
     },
   },
 } as const
