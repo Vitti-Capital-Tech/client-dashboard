@@ -1,22 +1,52 @@
 "use client";
 
-import { useState } from "react";
-import { scaleBids, settlePlacement } from "@/app/actions/placements";
-import type { ClientRow, PlacementRow } from "@/lib/data/queries";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { scaleBids, settlePlacement, bookBidForAccount } from "@/app/actions/placements";
+import type { AccountRow, ClientRow, PlacementRow } from "@/lib/data/queries";
 
 export function StaffPlacementsClient({
   placements,
   clients,
+  accounts,
 }: {
   placements: PlacementRow[];
   clients: ClientRow[];
+  /** Every account, for booking on behalf — a bid belongs to an account. */
+  accounts: AccountRow[];
 }) {
+  const router = useRouter();
   const clientsById: Record<string, ClientRow> = {};
   for (const c of clients) {
     clientsById[c.id] = c;
   }
 
   const [selectedPlacementId, setSelectedPlacementId] = useState<string | null>(null);
+
+  // Booking a bid on a client's behalf, in SHARES. Dollars are derived from the
+  // deal price by the action, which is also where the minimum is enforced — the
+  // operator typed neither figure, so neither is checked here and hoped for.
+  const [bookAccountId, setBookAccountId] = useState<string>("");
+  const [bookQty, setBookQty] = useState<string>("");
+  const [bookNote, setBookNote] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  const [booking, startBooking] = useTransition();
+
+  const handleBookBid = (placementId: string) => {
+    setBookNote(null);
+    startBooking(async () => {
+      const res = await bookBidForAccount(placementId, bookAccountId, Number(bookQty));
+      if (!res.ok) {
+        setBookNote({ tone: "bad", text: res.error });
+        return;
+      }
+      setBookNote({
+        tone: "ok",
+        text: `Booked ${Number(bookQty).toLocaleString("en-AU")} shares · $${res.amount.toLocaleString("en-AU")}.`,
+      });
+      setBookQty("");
+      router.refresh();
+    });
+  };
 
   // Allocations publishing states
   const [scalingMethod, setScalingMethod] = useState("pro-rata");
@@ -175,6 +205,71 @@ export function StaffPlacementsClient({
                     )}
                   </tbody>
                 </table>
+
+                {/* Book a bid for a client, in shares.
+                    Quantity rather than dollars because that is how the desk is
+                    instructed; the action costs it at the deal price and stores
+                    both, so the register keeps the number that was actually
+                    given rather than one reconstructed from rounded cents. */}
+                <div className="border-t border-line pt-3 space-y-2">
+                  <b className="text-xs font-semibold block select-none">Book a bid on behalf</b>
+                  <div className="flex flex-wrap gap-2 items-end">
+                    <label className="space-y-1 grow min-w-45">
+                      <span className="text-[10px] uppercase tracking-wider text-mut font-semibold block">
+                        Account
+                      </span>
+                      <select
+                        value={bookAccountId}
+                        onChange={(e) => setBookAccountId(e.target.value)}
+                        className="w-full border border-line rounded-[8px] px-2 py-1.5 text-xs bg-white focus:border-mut outline-none"
+                      >
+                        <option value="">Select an account…</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {clientsById[a.clientId]?.name ?? "—"} · {a.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[10px] uppercase tracking-wider text-mut font-semibold block">
+                        Quantity
+                      </span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={bookQty}
+                        onChange={(e) => setBookQty(e.target.value)}
+                        placeholder="shares"
+                        className="w-32 border border-line rounded-[8px] px-2 py-1.5 text-xs bg-white focus:border-mut outline-none"
+                      />
+                    </label>
+                    <div className="text-[11px] text-mut pb-2">
+                      {Number(bookQty) > 0 && p.price > 0
+                        ? `≈ $${(Math.round(Number(bookQty) * p.price * 100) / 100).toLocaleString("en-AU")} at $${p.price}`
+                        : `$${p.price}/share`}
+                    </div>
+                    <button
+                      onClick={() => handleBookBid(p.id)}
+                      disabled={booking || !bookAccountId || !(Number(bookQty) > 0)}
+                      className="btn bg-navy hover:bg-slate-800 text-white font-semibold px-3.5 py-1.5 rounded-[8px] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {booking ? "Booking…" : "Book bid"}
+                    </button>
+                  </div>
+                  {bookNote && (
+                    <p
+                      className={`text-[11.5px] font-semibold rounded-[8px] px-2.5 py-1.5 ${
+                        bookNote.tone === "bad"
+                          ? "text-loss-d bg-loss-bg"
+                          : "text-green-d bg-green-bg"
+                      }`}
+                    >
+                      {bookNote.text}
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
 

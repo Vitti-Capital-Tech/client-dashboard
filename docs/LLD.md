@@ -1044,4 +1044,25 @@ Two properties worth stating:
   - `npm test`: `270 passed / 270 tests` (100% pass rate).
 
 
-
+
+### 8.28 Deal-mail candidates (`…_placement_candidates.sql`, `lib/placements/candidates.ts`, `/portal/staff/placements`)
+
+Placement and IPO announcements arrive by email into a **separate system**: `Placement_Email` classifies and summarises them into SQLite, and `placement_api.py` serves them from EC2 (`GET /api/placements`, `GET /api/placements/{date}`). The ASX_Dashboard app is a viewer over that feed. This section is how those deals reach the desk's book so a bid can be taken against one.
+
+**Two tables, not one — and this is the whole design.** The feed returns `{ticker, company, deal_type, subject, summary, received_at}`. It carries **no price, no raise size, no minimum bid, no close date and no option terms**, and `placements` requires the first three as `NOT NULL` for the obvious reason: they are what a bid is measured against. So a summary cannot become a placement on its own. The tempting shortcut — default them to zero and fix it later — puts a live deal in front of the desk with a **$0 minimum**, which does not look broken; it just accepts the wrong money. `placement_candidates` is therefore an **inbox**, and promoting a row into `placements` is a deliberate act by someone who supplies the terms. `placement_id` keeps the trail from the mail to the deal it became.
+
+- **Identity is a content fingerprint**, `sha256(ticker | subject | received_at)`. The API returns no id of its own — upstream has an `approval_token` but does not put it in the response. `summary` is deliberately **excluded**: it is LLM-generated and its upstream cache key includes the ticker's last close price, so the same deal legitimately re-summarises whenever the market moves. Folding it in would mint a new candidate every time the price ticked and put the same raise in the queue several times a week. Covered by a test, because nothing else would notice.
+- **A copy, not a live read.** `GET /api/placements/{date}` fetches market data per ticker and, on a cache miss, calls an LLM to write the summary. Hanging a page render off that means the desk waits on a language model to see a list, and an EC2 hiccup takes the Placements tab down with it. Synced into a table, the tab is a normal database read and an unreachable feed costs freshness rather than the page.
+- **Its own cron** (`/api/ingest/placements`, `CRON_SECRET`), not a step inside the morning ingest. That job is already tight against its ceiling — a real run recomputed 24 of 43 accounts and left 19 queued — and its work is the one that must not be crowded out. A deal summary an hour late costs nothing; a P&L that does not rebuild costs the morning. The window is **2 dates by default** (`?days=N` widens it for a backfill) because each date costs the upstream a lookup per ticker; yesterday's deals do not change.
+- **A failed sync reports failure.** The queue is a work list, so "could not reach the feed" must not render as "no new deals" — the route returns 500 and stores nothing.
+- **Dismissing is recorded, never deleted.** Otherwise the next sync hands the same summary back as new work.
+- `PLACEMENT_API_URL` overrides the endpoint; the EC2 default is plain HTTP with no auth, which is worth knowing before the URL travels anywhere.
+
+**Booking on behalf, in shares (`bookBidForAccount`).** Separate from `placeBid` for two reasons:
+
+1. **The account is named, not inherited.** `placeBid` reads the active client and account from the session, which is right when someone acts as themselves. From the deal book the account is chosen explicitly — bids are unique per `(placement_id, account_id)`, a client can hold several accounts, and a bid landing on whichever was active last is not something the register could later explain.
+2. **The desk instructs in shares, the ledger settles in dollars.** `amount` stays authoritative — `scaleBids`, `alloc` and BPAY are all measured in it — but it is **derived** here (`qty × price`) and `bids.qty` records the number that was actually typed. Dollars alone round 3,000 shares to `$483.29`, which reads back as 3,000.03: close enough to display, and no longer the instruction that was given. `qty` is NULL for amount-entered portal bids rather than invented.
+
+The minimum is enforced in the action, not the form, and reported with both figures — the operator entered neither the dollars nor the check, so a client-side comparison would be the only thing standing between a typo and an under-minimum bid.
+
+**Vocabulary mismatch, surfaced rather than translated.** The feed says `Placement | IPO`; `placement_type` has been `Placement | SPP | Pre-IPO | Rights` since the first migration and has no plain `IPO`. The promote form defaults an `IPO` to `Pre-IPO` and leaves it editable, because that mapping is a judgement and not a translation. The TypeScript compiler is what caught it.

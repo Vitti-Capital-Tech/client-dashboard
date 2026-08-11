@@ -357,6 +357,7 @@ export type Database = {
           id: string
           paid: boolean
           placement_id: string
+          qty: number | null
           updated_at: string
         }
         Insert: {
@@ -368,6 +369,7 @@ export type Database = {
           id?: string
           paid?: boolean
           placement_id: string
+          qty?: number | null
           updated_at?: string
         }
         Update: {
@@ -379,6 +381,7 @@ export type Database = {
           id?: string
           paid?: boolean
           placement_id?: string
+          qty?: number | null
           updated_at?: string
         }
         Relationships: [
@@ -743,6 +746,74 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "securities"
             referencedColumns: ["code"]
+          },
+        ]
+      }
+      placement_candidates: {
+        Row: {
+          company: string
+          deal_type: string
+          dismiss_reason: string | null
+          dismissed_at: string | null
+          dismissed_by: string | null
+          fingerprint: string
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          placement_id: string | null
+          promoted_at: string | null
+          promoted_by: string | null
+          received_at: string
+          region: string
+          subject: string
+          summary: string
+          ticker: string
+        }
+        Insert: {
+          company?: string
+          deal_type?: string
+          dismiss_reason?: string | null
+          dismissed_at?: string | null
+          dismissed_by?: string | null
+          fingerprint: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          placement_id?: string | null
+          promoted_at?: string | null
+          promoted_by?: string | null
+          received_at: string
+          region?: string
+          subject?: string
+          summary?: string
+          ticker: string
+        }
+        Update: {
+          company?: string
+          deal_type?: string
+          dismiss_reason?: string | null
+          dismissed_at?: string | null
+          dismissed_by?: string | null
+          fingerprint?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          placement_id?: string | null
+          promoted_at?: string | null
+          promoted_by?: string | null
+          received_at?: string
+          region?: string
+          subject?: string
+          summary?: string
+          ticker?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "placement_candidates_placement_id_fkey"
+            columns: ["placement_id"]
+            isOneToOne: false
+            referencedRelation: "placements"
+            referencedColumns: ["id"]
           },
         ]
       }

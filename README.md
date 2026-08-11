@@ -330,7 +330,23 @@ BROKER_MAIL_FOLDER=BrokerData                            # optional but recommen
 BROKER_SUBJECT_PATTERN=                                  # optional regex
 CRON_SECRET=<a long random string>
 INGEST_BUDGET_MS=40000                                   # optional; default 40s (see below)
+PLACEMENT_API_URL=http://3.25.70.124:8000                # optional; the deal-mail feed (see below)
 ```
+
+**Regenerating types: `npm run types`.** Not `supabase gen types … > file` typed into a PowerShell prompt — PowerShell 5.1's `>` writes **UTF-16LE**, which doubles the file, makes Git treat it as binary, and leaves `grep`/`awk` finding nothing in a file that looks perfectly fine in an editor. It has caught us twice. The npm script runs through cmd, whose redirect does not transcode.
+
+**The deal-mail feed (`PLACEMENT_API_URL`).** Placement and IPO announcements are summarised by a separate system (`Placement_Email` → `placement_api.py` on EC2) and pulled into `placement_candidates` by `/api/ingest/placements`, guarded by the same `CRON_SECRET`. Schedule it like the morning ingest but **separately** — that job is already tight against its ceiling, and a deal summary an hour late costs nothing while a P&L that does not rebuild costs the morning:
+
+```sql
+SELECT cron.schedule('deal-mail', '30 0 * * 1-5', $$
+  SELECT net.http_post(
+    url := '<APP_URL>/api/ingest/placements',
+    headers := jsonb_build_object('Authorization', 'Bearer <CRON_SECRET>')
+  );
+$$);
+```
+
+A candidate is **not** a deal: the feed carries a ticker, a subject and prose, but no price, raise size or minimum bid — the three `placements` requires and the three a bid is measured against. Staff **promote** a candidate on the Placements tab, supplying those terms, and only then can bids be booked against it. Note the EC2 endpoint is plain HTTP with no auth today.
 
 **`BROKER_MAILBOX` must have a mailbox behind it.** A distribution list forwards to its members and stores nothing, so Graph has nothing to open and returns 404 — the error names this outright, because it is otherwise a long afternoon. If the broker mail arrives via a DL, point this at a shared mailbox (or an individual's) that is a **member** of that list.
 

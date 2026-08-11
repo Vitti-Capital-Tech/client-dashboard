@@ -141,6 +141,15 @@ The broker mails the same two exports every weekday around 9am AEST. A cron rout
 - **And it is read where the desk already looks.** Written-down is not the same as seen: for a while the only way to ask "did this morning land?" was a SQL console, which is the wrong place for an operational answer when the pipeline's worst failure is a *silent* one — a run killed at the host's ceiling writes no row at all, so the evidence is an **absence**. The runs are therefore merged into the audit log's chronology rather than given a page of their own, so a missing morning shows up as a gap in a list the desk reads anyway, and the accounts a run left owed surface as a `Recompute pending` pill on the client profile — the one place a stale figure would otherwise be mistaken for a settled one.
 - **Safe to repeat, which is the DST answer.** Cron is UTC and Sydney is UTC+10/+11, so two schedules (00:00 and 01:00 UTC) fire across the window instead of tracking the changeover. Attachment dedupe on Graph's own ids, content-hash dedupe on the bytes, and idempotent importers make a redundant run almost free — and the second entry doubles as the retry for whatever the first run left queued.
 
+### 3.1f-2 Deal mail → the placements book (`placement_candidates`, `/api/ingest/placements`)
+
+Placement and IPO announcements are processed by a **separate system** — `Placement_Email` summarises them into SQLite, `placement_api.py` serves them from EC2, and the ASX_Dashboard app views them. This is how those deals reach the desk's book.
+
+- **A summary is not a deal.** The feed carries a ticker, a subject line and prose. It carries no price, raise size or minimum bid — the three things `placements` requires `NOT NULL`, and the three things a bid is measured against. So candidates land in their own table and a human **promotes** one, supplying the terms. Defaulting them to zero would put a live deal in front of the desk with a $0 minimum: not visibly broken, just quietly accepting the wrong money.
+- **Copied on a schedule, not read live.** The upstream endpoint fetches market data per ticker and calls an LLM on a cache miss. A page render must not depend on that, and an EC2 hiccup must not take the Placements tab with it.
+- **Its own cron.** The morning ingest is already tight against its ceiling and its work is what must not be crowded out. A deal summary an hour late costs nothing.
+- **The desk books in shares.** `amount` stays the money truth because scaling, allocation and BPAY are dollar-denominated, but it is derived from `qty × price` and the quantity is stored beside it — dollars alone round 3,000 shares into something that reads back as 3,000.03.
+
 ### 3.1g Stored P&L (`lib/pnl/`, `pnl_summary`, `pnl_runs`)
 
 The client profile's P&L table renders what was computed and **stored**, rather than deriving it on each request.
