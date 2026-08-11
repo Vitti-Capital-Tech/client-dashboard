@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ClientRow,
@@ -31,6 +31,7 @@ import { storedToSummaryRows } from "@/lib/export/stored-pnl";
 import type { StoredPnlRow, PnlRunRow } from "@/lib/data/pnl";
 import { buildPnlSummaryXlsx } from "@/app/actions/exports";
 import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
+import { TablePagination } from "@/app/components/TablePagination";
 import { PnlRow } from "./PnlRow";
 import { RealizedPnlChart } from "./RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
@@ -181,6 +182,30 @@ export function ClientDetailClient({
   const [acctFilter, setAcctFilter] = useState<string>("all");
   // Which summary row has its inline editor open, by ticker.
   const [editing, setEditing] = useState<string | null>(null);
+
+  // Pagination states for all tabs
+  const [holdingsPage, setHoldingsPage] = useState(1);
+  const [holdingsPageSize, setHoldingsPageSize] = useState(10);
+
+  const [pnlPage, setPnlPage] = useState(1);
+  const [pnlPageSize, setPnlPageSize] = useState(15);
+
+  const [optionsPage, setOptionsPage] = useState(1);
+  const [optionsPageSize, setOptionsPageSize] = useState(10);
+
+  const [bidsPage, setBidsPage] = useState(1);
+  const [bidsPageSize, setBidsPageSize] = useState(10);
+
+  const [alertsPage, setAlertsPage] = useState(1);
+  const [alertsPageSize, setAlertsPageSize] = useState(10);
+
+  const handleSelectAccount = (id: string) => {
+    setAcctFilter(id);
+    setHoldingsPage(1);
+    setPnlPage(1);
+    setOptionsPage(1);
+    setBidsPage(1);
+  };
 
   const cid = client.id;
   const inAcct = (accountId: string | null) =>
@@ -473,6 +498,37 @@ export function ClientDetailClient({
     )
     .filter((r) => inAcct(r.bid.accountId));
 
+  // Paginated slices for each tab
+  const paginatedPositions = useMemo(() => {
+    if (holdingsPageSize >= visiblePositions.length) return visiblePositions;
+    const start = (holdingsPage - 1) * holdingsPageSize;
+    return visiblePositions.slice(start, start + holdingsPageSize);
+  }, [visiblePositions, holdingsPage, holdingsPageSize]);
+
+  const paginatedPnlRows = useMemo(() => {
+    if (pnlPageSize >= filteredSummaryRows.length) return filteredSummaryRows;
+    const start = (pnlPage - 1) * pnlPageSize;
+    return filteredSummaryRows.slice(start, start + pnlPageSize);
+  }, [filteredSummaryRows, pnlPage, pnlPageSize]);
+
+  const paginatedOptions = useMemo(() => {
+    if (optionsPageSize >= visibleOptions.length) return visibleOptions;
+    const start = (optionsPage - 1) * optionsPageSize;
+    return visibleOptions.slice(start, start + optionsPageSize);
+  }, [visibleOptions, optionsPage, optionsPageSize]);
+
+  const paginatedBids = useMemo(() => {
+    if (bidsPageSize >= bidRows.length) return bidRows;
+    const start = (bidsPage - 1) * bidsPageSize;
+    return bidRows.slice(start, start + bidsPageSize);
+  }, [bidRows, bidsPage, bidsPageSize]);
+
+  const paginatedAlerts = useMemo(() => {
+    if (alertsPageSize >= alerts.length) return alerts;
+    const start = (alertsPage - 1) * alertsPageSize;
+    return alerts.slice(start, start + alertsPageSize);
+  }, [alerts, alertsPage, alertsPageSize]);
+
   const cash =
     acctFilter === "all"
       ? accounts.reduce((sum, a) => sum + a.cash, 0)
@@ -571,7 +627,7 @@ export function ClientDetailClient({
           {[{ id: "all", label: "All accounts" }, ...accounts].map((a) => (
             <button
               key={a.id}
-              onClick={() => setAcctFilter(a.id)}
+              onClick={() => handleSelectAccount(a.id)}
               className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${acctFilter === a.id
                 ? "bg-navy text-white border-navy"
                 : "bg-white text-mut border-line hover:border-navy hover:text-ink"
@@ -627,37 +683,54 @@ export function ClientDetailClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {visiblePositions.map(p => {
-                  const pl = posPL(p);
-                  const cost = posCost(p);
-                  // Free-carried options (placement attachers) have a zero cost
-                  // base, so a percentage return is undefined — not infinite.
-                  const plp = cost === 0 ? null : (pl / cost) * 100;
-                  const isUp = pl >= 0;
-                  const sg = signalsMap[p.code];
-                  return (
-                    <tr key={p.code} className="hover:bg-[#faf9f5]">
-                      <td className="px-4.5 py-3"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span></td>
-                      <td className="px-4.5 py-3 text-mut">{p.name}</td>
-                      <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
-                      <td className="px-4.5 py-3 text-right font-mono">${p.cost.toFixed(2)}</td>
-                      <td className="px-4.5 py-3 text-right font-mono">${(p.last ?? 0).toFixed(2)}</td>
-                      <td className="px-4.5 py-3 text-right font-mono font-semibold">${money2(posValue(p))}</td>
-                      <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
-                        ${money2(pl)}
-                        {plp !== null && (
-                          <div className="text-[10px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
-                        )}
-                      </td>
-                      <td className="px-4.5 py-3 text-center">
-                        {getActionPill(sg ? sg.action : "Hold")}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {paginatedPositions.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="text-center text-mut py-8">
+                      No equity positions on record for this account.
+                    </td>
+                  </tr>
+                ) : (
+                  paginatedPositions.map(p => {
+                    const pl = posPL(p);
+                    const cost = posCost(p);
+                    // Free-carried options (placement attachers) have a zero cost
+                    // base, so a percentage return is undefined — not infinite.
+                    const plp = cost === 0 ? null : (pl / cost) * 100;
+                    const isUp = pl >= 0;
+                    const sg = signalsMap[p.code];
+                    return (
+                      <tr key={p.code} className="hover:bg-[#faf9f5]">
+                        <td className="px-4.5 py-3"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span></td>
+                        <td className="px-4.5 py-3 text-mut">{p.name}</td>
+                        <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
+                        <td className="px-4.5 py-3 text-right font-mono">${p.cost.toFixed(2)}</td>
+                        <td className="px-4.5 py-3 text-right font-mono">${(p.last ?? 0).toFixed(2)}</td>
+                        <td className="px-4.5 py-3 text-right font-mono font-semibold">${money2(posValue(p))}</td>
+                        <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
+                          ${money2(pl)}
+                          {plp !== null && (
+                            <div className="text-[10px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
+                          )}
+                        </td>
+                        <td className="px-4.5 py-3 text-center">
+                          {getActionPill(sg ? sg.action : "Hold")}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
+          <TablePagination
+            totalItems={visiblePositions.length}
+            currentPage={holdingsPage}
+            pageSize={holdingsPageSize}
+            onPageChange={setHoldingsPage}
+            onPageSizeChange={setHoldingsPageSize}
+            pageSizeOptions={[5, 10, 25, 50]}
+            itemLabel="positions"
+          />
         </div>
       )}
 
@@ -832,7 +905,10 @@ export function ClientDetailClient({
                     <button
                       key={f}
                       type="button"
-                      onClick={() => setPnlFilter(f)}
+                      onClick={() => {
+                        setPnlFilter(f);
+                        setPnlPage(1);
+                      }}
                       className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${active
                         ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
                         : "text-mut hover:text-ink font-medium hover:bg-white/50"
@@ -880,13 +956,19 @@ export function ClientDetailClient({
                     type="text"
                     placeholder="Search ticker or company..."
                     value={pnlSearch}
-                    onChange={(e) => setPnlSearch(e.target.value)}
+                    onChange={(e) => {
+                      setPnlSearch(e.target.value);
+                      setPnlPage(1);
+                    }}
                     className="w-full bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
                   />
                   {pnlSearch && (
                     <button
                       type="button"
-                      onClick={() => setPnlSearch("")}
+                      onClick={() => {
+                        setPnlSearch("");
+                        setPnlPage(1);
+                      }}
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
                       title="Clear search"
                     >
@@ -907,6 +989,7 @@ export function ClientDetailClient({
                       onClick={() => {
                         setPnlFilter("all");
                         setPnlSearch("");
+                        setPnlPage(1);
                       }}
                       className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
                     >
@@ -946,7 +1029,7 @@ export function ClientDetailClient({
                     </tr>
                   ) : (
                     <>
-                      {filteredSummaryRows.map((r) => (
+                      {paginatedPnlRows.map((r) => (
                         <PnlRow
                           // Remount when the editor opens or closes, so its
                           // inputs always re-seed from the values currently in
@@ -990,6 +1073,16 @@ export function ClientDetailClient({
                 </tbody>
               </table>
             </div>
+
+            <TablePagination
+              totalItems={filteredSummaryRows.length}
+              currentPage={pnlPage}
+              pageSize={pnlPageSize}
+              onPageChange={setPnlPage}
+              onPageSizeChange={setPnlPageSize}
+              pageSizeOptions={[10, 15, 25, 50, 100]}
+              itemLabel="tickers"
+            />
           </div>
         </div>
       )}
@@ -1019,7 +1112,7 @@ export function ClientDetailClient({
                     <td colSpan={8} className="text-center text-mut py-6">No option assets on record.</td>
                   </tr>
                 ) : (
-                  visibleOptions.map(o => {
+                  paginatedOptions.map(o => {
                     const isItmVal = isITM(o);
                     return (
                       <tr key={o.id} className="hover:bg-[#faf9f5]">
@@ -1050,6 +1143,15 @@ export function ClientDetailClient({
               </tbody>
             </table>
           </div>
+          <TablePagination
+            totalItems={visibleOptions.length}
+            currentPage={optionsPage}
+            pageSize={optionsPageSize}
+            onPageChange={setOptionsPage}
+            onPageSizeChange={setOptionsPageSize}
+            pageSizeOptions={[5, 10, 25, 50]}
+            itemLabel="options"
+          />
         </div>
       )}
 
@@ -1076,7 +1178,7 @@ export function ClientDetailClient({
                     <td colSpan={6} className="text-center text-mut py-6">No bids recorded.</td>
                   </tr>
                 ) : (
-                  bidRows.map(({ placement: p, bid }) => {
+                  paginatedBids.map(({ placement: p, bid }) => {
                     return (
                       <tr key={`${p.id}-${bid.accountId ?? "x"}`} className="hover:bg-[#faf9f5]">
                         <td className="px-4.5 py-3 font-bold"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span> &middot; {p.name}</td>
@@ -1100,6 +1202,15 @@ export function ClientDetailClient({
               </tbody>
             </table>
           </div>
+          <TablePagination
+            totalItems={bidRows.length}
+            currentPage={bidsPage}
+            pageSize={bidsPageSize}
+            onPageChange={setBidsPage}
+            onPageSizeChange={setBidsPageSize}
+            pageSizeOptions={[5, 10, 25, 50]}
+            itemLabel="bids"
+          />
         </div>
       )}
 
@@ -1112,7 +1223,7 @@ export function ClientDetailClient({
             {alerts.length === 0 ? (
               <div className="text-center text-mut py-8 text-xs select-none">No active alerts set for this client.</div>
             ) : (
-              alerts.map(a => (
+              paginatedAlerts.map(a => (
                 <div key={a.id} className="p-4 flex justify-between items-center text-xs">
                   <div>
                     <div className="font-semibold text-ink flex items-center gap-2">
@@ -1130,6 +1241,15 @@ export function ClientDetailClient({
               ))
             )}
           </div>
+          <TablePagination
+            totalItems={alerts.length}
+            currentPage={alertsPage}
+            pageSize={alertsPageSize}
+            onPageChange={setAlertsPage}
+            onPageSizeChange={setAlertsPageSize}
+            pageSizeOptions={[5, 10, 25]}
+            itemLabel="alerts"
+          />
         </div>
       )}
     </div>

@@ -1,7 +1,9 @@
 "use client";
 
+import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { setViewClient } from "@/app/actions/session";
+import { TablePagination } from "@/app/components/TablePagination";
 
 export type ClientRegistryRow = {
   id: string;
@@ -15,6 +17,14 @@ export type ClientRegistryRow = {
 
 export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
   const router = useRouter();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const paginatedRows = useMemo(() => {
+    if (pageSize >= rows.length) return rows;
+    const start = (currentPage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, currentPage, pageSize]);
 
   const open = (id: string) => {
     void setViewClient(id); // keep the session's view-client in sync
@@ -35,7 +45,7 @@ export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-[#f0ede5]">
-            {rows.map((r) => (
+            {paginatedRows.map((r) => (
               <tr
                 key={r.id}
                 onClick={() => open(r.id)}
@@ -60,6 +70,17 @@ export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
           </tbody>
         </table>
       </div>
+
+      <TablePagination
+        totalItems={rows.length}
+        currentPage={currentPage}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+        pageSizeOptions={[5, 10, 25, 50]}
+        itemLabel="clients"
+      />
     </div>
   );
 }
+

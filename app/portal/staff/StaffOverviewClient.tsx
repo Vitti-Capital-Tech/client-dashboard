@@ -1,10 +1,11 @@
 "use client";
 
-import React from "react";
+import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { setViewClient } from "@/app/actions/session";
 import type { PlacementRow, AlertRow } from "@/lib/data/queries";
 import type { RegisterEntry } from "@/lib/data/ingest";
+import { TablePagination } from "@/app/components/TablePagination";
 
 export type ClientRegisterRow = {
   id: string;
@@ -32,6 +33,14 @@ export function StaffOverviewClient({
   registerRows: ClientRegisterRow[];
 }) {
   const router = useRouter();
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const paginatedRows = useMemo(() => {
+    if (pageSize >= registerRows.length) return registerRows;
+    const start = (currentPage - 1) * pageSize;
+    return registerRows.slice(start, start + pageSize);
+  }, [registerRows, currentPage, pageSize]);
 
   const activeDeals = placements.filter(
     (p) => p.stage === "open" || p.stage === "closed",
@@ -173,7 +182,7 @@ export function StaffOverviewClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {registerRows.map(r => (
+                {paginatedRows.map(r => (
                   <tr
                     key={r.id}
                     onClick={() => handleViewClient(r.id)}
@@ -198,10 +207,20 @@ export function StaffOverviewClient({
               </tbody>
             </table>
           </div>
+
+          <TablePagination
+            totalItems={registerRows.length}
+            currentPage={currentPage}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSizeOptions={[5, 10, 25, 50]}
+            itemLabel="clients"
+          />
         </div>
 
         {/* Audit trail summary */}
-        <div className="lg:col-span-4 card bg-white border border-line rounded-[14px] shadow-shadow flex flex-col justify-between overflow-hidden">
+        <div className="lg:col-span-4 card bg-white border border-line rounded-[14px] shadow-shadow flex flex-col overflow-hidden">
           <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex justify-between items-center">
             <b className="text-sm font-semibold text-ink">Audit trail</b>
             <button
@@ -212,17 +231,21 @@ export function StaffOverviewClient({
             </button>
           </div>
 
-          <div className="p-4 flex-1 overflow-y-auto space-y-3.5 max-h-75">
-            {audit.slice(0, 5).map((log) => (
-              <div key={log.key} className="space-y-0.5 text-xs">
-                <div className="flex justify-between items-baseline font-mono text-[9.5px] text-mut select-none">
-                  <span>{log.actor}</span>
-                  <span>{new Date(log.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}</span>
+          <div className="p-4.5 flex-1 overflow-y-auto space-y-3.5">
+            {audit.length === 0 ? (
+              <div className="text-center text-mut text-xs py-8">No recent audit entries.</div>
+            ) : (
+              audit.slice(0, 10).map((log) => (
+                <div key={log.key} className="space-y-0.5 text-xs pb-3 border-b border-line/60 last:border-0 last:pb-0">
+                  <div className="flex justify-between items-baseline font-mono text-[9.5px] text-mut select-none">
+                    <span className="font-semibold text-ink/80">{log.actor}</span>
+                    <span>{new Date(log.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}</span>
+                  </div>
+                  <div className="font-semibold text-ink">{log.action}</div>
+                  <div className="text-mut text-[11px] leading-relaxed line-clamp-2">{log.detail}</div>
                 </div>
-                <div className="font-semibold text-ink">{log.action}</div>
-                <div className="text-mut text-[11px] leading-relaxed truncate">{log.detail}</div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>
