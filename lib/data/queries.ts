@@ -535,6 +535,32 @@ export const getAllOptions = cache(
   },
 );
 
+interface TradeDbRow {
+  id: string;
+  cnote: string;
+  account_id: string;
+  client_id: string;
+  security_code: string;
+  parent_code: string;
+  instrument: string;
+  side: "BUY" | "SELL";
+  trade_date: string;
+  settle_date?: string;
+  units: number;
+  price?: number;
+  avg_price?: number;
+  consideration: number;
+  brokerage: number;
+  other_charges?: number;
+  gst: number;
+  value?: number;
+  adviser?: string | null;
+  total_cost?: number;
+  status: string;
+  contract_url?: string | null;
+  trade_time?: string | null;
+}
+
 /**
  * A client's full contract-note history, newest first, across all of their
  * accounts. Non-settled rows (CANCELLED / REVERSAL / REVERSED) are included
@@ -548,7 +574,7 @@ export const getClientTrades = cache(
     // hand back the first 1,000 without a word — silently truncating their
     // order history, their realised-P&L chart and every total on the page.
     const [data, securityMap] = await Promise.all([
-      pagedSelect<Record<string, any>>(supabase, "trades", "*", (b) =>
+      pagedSelect<TradeDbRow>(supabase, "trades", "*", (b) =>
         b
           .eq("client_id", clientId)
           .order("trade_date", { ascending: false })
@@ -569,13 +595,13 @@ export const getClientTrades = cache(
       side: t.side,
       tradeDate: t.trade_date,
       units: t.units,
-      avgPrice: t.avg_price,
+      avgPrice: t.avg_price ?? t.price ?? 0,
       consideration: t.consideration,
       brokerage: t.brokerage,
-      otherCharges: t.other_charges,
+      otherCharges: t.other_charges ?? 0,
       gst: t.gst,
-      value: t.value,
-      adviser: t.adviser,
+      value: t.value ?? t.consideration ?? 0,
+      adviser: t.adviser ?? null,
       status: t.status,
     }));
   },

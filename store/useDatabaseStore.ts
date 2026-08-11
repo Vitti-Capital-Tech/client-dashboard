@@ -11,7 +11,6 @@ import {
   mutateAckAlert,
   mutateAddCustomAlert,
   mutateClientBpayPayment,
-  Alert,
   AuditEntry,
   TODAY
 } from "@/lib/db";
@@ -90,7 +89,7 @@ export const useDatabaseStore = create<DatabaseState>((set, get) => ({
   })),
 
   ackAlert: (alertId) => set((state) => ({
-    db: mutateAckAlert(state.db, alertId, state.currentUserLabel)
+    db: mutateAckAlert(state.db, alertId)
   })),
 
   addCustomAlert: (code, threshold, direction) => set((state) => ({

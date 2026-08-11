@@ -114,12 +114,21 @@ function isHouseOrSuspenseAccount(
   return false;
 }
 
+interface UnlistedOptionData {
+  spot?: number;
+  addOn?: {
+    raw?: string;
+    expiry?: string;
+    strike?: number;
+  };
+  pricingMethod?: string;
+}
+
 export function StaffOptionsClient({
   storedPnl,
   optionHoldings = [],
   clients,
   accounts,
-  overrides = [],
 }: {
   storedPnl: StoredPnlRow[];
   optionHoldings?: OptionRow[];
@@ -157,7 +166,8 @@ export function StaffOptionsClient({
           ? r.buyQty
           : r.sellQty;
 
-      const uo = (r as any).unlisted_option || (r as any).unlistedOption;
+      const uo = ((r as unknown as { unlisted_option?: UnlistedOptionData; unlistedOption?: UnlistedOptionData }).unlisted_option ||
+        (r as unknown as { unlisted_option?: UnlistedOptionData; unlistedOption?: UnlistedOptionData }).unlistedOption);
       const strike = uo?.addOn?.strike ?? null;
       const underlyingPrice = uo?.spot ?? null;
       const expiryRaw = uo?.addOn?.expiry ?? null;
@@ -210,6 +220,13 @@ export function StaffOptionsClient({
       const isUnlisted = !o.listed;
       const { date: expiryDate, dte } = parseExpiry(o.expiryDate, o.name);
 
+      const statusMap: Record<string, "live" | "expired" | "exercised" | "pending"> = {
+        open: "live",
+        expired: "expired",
+        exercised: "exercised",
+        pending: "pending",
+      };
+
       items.push({
         id: `opt-${o.id}`,
         accountId: acctId,
@@ -230,7 +247,7 @@ export function StaffOptionsClient({
         pricingMethod: o.listed ? "Listed feed" : "Manual registry",
         termsNote: o.source || (o.listed ? "Listed option series" : "Unlisted placement option"),
         source: o.source || (o.listed ? "Broker feed" : "Manual register"),
-        status: o.status === "open" ? "live" : (o.status as any),
+        status: statusMap[o.status] || "live",
       });
     }
 
@@ -266,7 +283,7 @@ export function StaffOptionsClient({
   const [filterTab, setFilterTab] = useState<OptionFilterTab>("all");
   const [selectedAccount, setSelectedAccount] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState<string>("");
-  const [hideSuspense, setHideSuspense] = useState<boolean>(true);
+  const hideSuspense = true;
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);

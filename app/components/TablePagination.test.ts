@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import React from "react";
 import { TablePagination } from "./TablePagination.tsx";
 
 test("TablePagination - returns null when totalItems is 0", () => {
@@ -14,14 +13,11 @@ test("TablePagination - returns null when totalItems is 0", () => {
 });
 
 test("TablePagination - calculates correct ranges for standard pagination", () => {
-  let calledPage = 0;
   const element = TablePagination({
     totalItems: 43,
     currentPage: 2,
     pageSize: 10,
-    onPageChange: (p) => {
-      calledPage = p;
-    },
+    onPageChange: () => {},
     itemLabel: "clients",
   });
   assert.ok(element !== null);

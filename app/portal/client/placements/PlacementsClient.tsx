@@ -116,7 +116,7 @@ export function PlacementsClient({
   };
 
   // Render Placement Detailed Bidding Form
-  const renderBiddingForm = (p: PlacementRow, hasBid: boolean) => {
+  const renderBiddingForm = (p: PlacementRow) => {
     const raw = bidAmount.replace(/[^0-9]/g, "");
     const amt = raw ? parseInt(raw, 10) : 0;
     const sharesCount = Math.round(amt / p.price);
@@ -332,7 +332,6 @@ export function PlacementsClient({
     const isAllocated = bid.alloc !== null;
     const isPaid = bid.paid;
     const isSettled = p.stage === "settled";
-    const closingText = p.stage === "open" ? `closes ${countdown}` : "closed";
 
     const timelineRow = (status: "done" | "now" | "todo", title: string, subtitle: React.ReactNode) => {
       const bulletColors = {
@@ -530,7 +529,7 @@ export function PlacementsClient({
       if (bid) {
         return renderTrackingTimeline(deal, bid);
       }
-      return renderBiddingForm(deal, false);
+      return renderBiddingForm(deal);
     }
   }
 
@@ -547,7 +546,6 @@ export function PlacementsClient({
         <div className="font-mono text-[11px] tracking-wider uppercase text-mut">Open &amp; Upcoming Deals</div>
         <div className="grid sm:grid-cols-2 gap-4">
           {openPlacements.map(p => {
-            const hasBid = p.bids.some(b => b.clientId === clientId);
             const myPlacedBid = p.bids.find(b => b.clientId === clientId);
 
             return (

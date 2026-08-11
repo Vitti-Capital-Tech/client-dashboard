@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ParseResult, PlacementTickerInfo } from "@/lib/pnl-calculator";
+import type { ParseResult, PlacementTickerInfo, ParsedTradeRow } from "@/lib/pnl-calculator";
 
 /**
  * Working state for the P&L Calculator, held OUTSIDE the route component.
@@ -39,7 +39,7 @@ export interface UploadedPlacementFile {
 export interface UploadedTradeFile {
   id: string;
   name: string;
-  rawTrades: any[];
+  rawTrades: ParsedTradeRow[];
   tradeCount: number;
   accounts: string[];
 }

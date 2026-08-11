@@ -396,10 +396,10 @@ export function compareSummaryItems(a: PnlSummaryItem, b: PnlSummaryItem): numbe
 /**
  * Parses numeric values safely from Excel cell or string
  */
-function parseNum(val: any): number {
+function parseNum(val: unknown): number {
   if (val == null) return 0;
   if (typeof val === "number") return isNaN(val) ? 0 : val;
-  if (typeof val === "object" && "result" in val) return parseNum(val.result);
+  if (typeof val === "object" && "result" in val) return parseNum((val as { result: unknown }).result);
   const cleaned = String(val).replace(/[^0-9.-]/g, "");
   const parsed = parseFloat(cleaned);
   return isNaN(parsed) ? 0 : parsed;
@@ -408,7 +408,7 @@ function parseNum(val: any): number {
 /**
  * Extracts string value safely from Excel cell or value
  */
-function parseStr(val: any): string {
+function parseStr(val: unknown): string {
   if (val == null) return "";
   // A REAL date cell — which every .xlsx Contract Date is — arrives as a `Date`, and
   // `String(date)` renders it "Sun Jun 21 2026 10:00:00 GMT+0530 (India Standard
@@ -418,10 +418,10 @@ function parseStr(val: any): string {
   // of this file already speaks.
   if (val instanceof Date) return isoFromDateValue(val);
   if (typeof val === "object") {
-    if ("result" in val) return parseStr(val.result);
-    if ("text" in val) return parseStr(val.text);
-    if ("richText" in val && Array.isArray(val.richText)) {
-      return val.richText.map((t: any) => t.text || "").join("");
+    if ("result" in val) return parseStr((val as { result: unknown }).result);
+    if ("text" in val) return parseStr((val as { text: unknown }).text);
+    if ("richText" in val && Array.isArray((val as { richText: unknown[] }).richText)) {
+      return (val as { richText: Array<{ text?: string }> }).richText.map((t) => t.text || "").join("");
     }
   }
   return String(val).trim();
@@ -456,7 +456,7 @@ function isoFromDateValue(d: Date): string {
 /**
  * Normalizes account numbers (external_ref) by trimming and stripping trailing float zeroes like "114716.0" -> "114716"
  */
-export function normalizeAccountNo(val: any): string {
+export function normalizeAccountNo(val: unknown): string {
   const str = parseStr(val).trim();
   if (!str) return "";
   return str.replace(/\.0+$/, "");
@@ -480,23 +480,23 @@ export async function parsePnlFileBuffer(
       const { Readable } = await import("stream");
       await workbook.csv.read(Readable.from(buffer));
     } else {
-      await workbook.xlsx.load(buffer as any);
+      await workbook.xlsx.load(buffer as unknown as ExcelJS.Buffer);
     }
-  } catch (e) {
+  } catch {
     // If XLSX fails, try CSV
     try {
       workbook = new ExcelJS.Workbook();
       const { Readable } = await import("stream");
       await workbook.csv.read(Readable.from(buffer));
-    } catch (e2) {
+    } catch {
       // ignore
     }
   }
 
-  let worksheet = workbook.worksheets[0];
+  const worksheet = workbook.worksheets[0];
 
   // Helper to scan a worksheet for headers
-  const scanHeaders = (ws: any) => {
+  const scanHeaders = (ws: ExcelJS.Worksheet) => {
     let headerRowNumber = 1;
     let maxMatches = 0;
     let bestColMap: Record<string, number> = {};
@@ -525,7 +525,7 @@ export async function parsePnlFileBuffer(
       }
 
       // Also scan row.eachCell fallback
-      row.eachCell({ includeEmpty: false }, (cell: any, colNumber: number) => {
+      row.eachCell({ includeEmpty: false }, (cell: ExcelJS.Cell, colNumber: number) => {
         const rawVal = parseStr(cell.value);
         const key = normHeader(rawVal);
         if (key && !tempColMap[key]) {
@@ -546,7 +546,7 @@ export async function parsePnlFileBuffer(
     return { headerRowNumber, maxMatches, bestColMap };
   };
 
-  let scanResult = worksheet ? scanHeaders(worksheet) : { headerRowNumber: 1, maxMatches: 0, bestColMap: {} };
+  const scanResult = worksheet ? scanHeaders(worksheet) : { headerRowNumber: 1, maxMatches: 0, bestColMap: {} };
 
   // Fallback: If 0 header matches found with ExcelJS, try loading with SheetJS (XLSX)
   if (scanResult.maxMatches === 0) {
@@ -711,7 +711,7 @@ function parsePnlSheetJsMatrix(buffer: Buffer): ParseResult | null {
     if (!wb.SheetNames || wb.SheetNames.length === 0) return null;
     const sheet = wb.Sheets[wb.SheetNames[0]];
     if (!sheet) return null;
-    const rowsMatrix = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, raw: false });
+    const rowsMatrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false });
     if (!rowsMatrix || rowsMatrix.length === 0) return null;
 
     const knownHeaderKeywords = [
@@ -1210,7 +1210,7 @@ export async function buildPnlExportXlsxBuffer(
   // one figure everybody reads, so it follows the same green/red rule as the rows.
   totalRow.getCell("pnlCalculated").font = pnlFont(totalPnl);
 
-  return Buffer.from(await wb.xlsx.writeBuffer() as any);
+  return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
 /**
@@ -1231,7 +1231,7 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
     "Comments",
   ];
 
-  const escapeCsv = (val: any) => {
+  const escapeCsv = (val: unknown) => {
     const s = String(val == null ? "" : val);
     if (/[",\r\n]/.test(s)) {
       return `"${s.replace(/"/g, '""')}"`;
@@ -1293,23 +1293,6 @@ export function buildPnlExportCsvString(summary: PnlSummaryItem[]): string {
 }
 
 /**
- * Safely extracts raw scalar values from ExcelJS cells, resolving formulas if present.
- */
-function extractCellValue(val: any): any {
-  if (val === null || val === undefined) return "";
-  if (typeof val === "object") {
-    if ("result" in val && val.result !== undefined && val.result !== null) {
-      return val.result;
-    }
-    if ("text" in val) return val.text;
-    if ("richText" in val && Array.isArray(val.richText)) {
-      return val.richText.map((t: any) => t.text || "").join("");
-    }
-  }
-  return val;
-}
-
-/**
  * How many rows of each ticker sheet to read.
  *
  * The allocation table starts around row 5 and the real sheets carry a handful of
@@ -1342,7 +1325,7 @@ export async function parsePlacementTrackerBuffer(
    */
   sourceName?: string
 ): Promise<Map<string, PlacementTickerInfo>> {
-  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as any);
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
 
   // SheetJS is lenient where ExcelJS threw: handed an HTML login page or a stray text
   // file it happily returns an empty workbook, which would surface as the vague "no

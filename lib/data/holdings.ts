@@ -60,13 +60,46 @@ export const getClientPnlOverrides = cache(
   },
 );
 
+interface PnlOverrideDbRow {
+  account_id: string;
+  parent_code: string;
+  buy_qty: number | null;
+  sell_qty: number | null;
+  buy_price: number | null;
+  sell_price: number | null;
+  note: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+interface RealizedPnlDbRow {
+  account_id: string;
+  parent_code: string;
+  realized_pl: number;
+  proceeds: number;
+  cost_of_sold: number;
+  units_bought: number;
+  units_sold: number;
+  fees?: number;
+  trade_count?: number;
+  first_trade?: string | null;
+  last_trade?: string | null;
+  has_partial?: boolean;
+  short_history?: boolean;
+  open_qty: number;
+  unrealized_pl: number | null;
+  open_cost: number | null;
+  current_price: number | null;
+  pricing_error: string | null;
+}
+
 /**
  * All manual desk corrections across all clients and accounts.
  */
 export const getAllPnlOverrides = cache(
   async (): Promise<PnlOverrideRow[]> => {
     const supabase = await createClient();
-    const data = await pagedSelect<Record<string, any>>(
+    const data = await pagedSelect<PnlOverrideDbRow>(
       supabase,
       "pnl_overrides",
       "*",
@@ -98,7 +131,7 @@ export const getClientRealized = cache(
     const supabase = await createClient();
     // Paged — see lib/data/paged.ts. A busy client can hold more rollup rows
     // than PostgREST will return in one response.
-    const data = await pagedSelect<Record<string, any>>(
+    const data = await pagedSelect<RealizedPnlDbRow>(
       supabase,
       "realized_pnl",
       "*",
@@ -113,12 +146,12 @@ export const getClientRealized = cache(
       costOfSold: r.cost_of_sold,
       unitsBought: r.units_bought,
       unitsSold: r.units_sold,
-      fees: r.fees,
-      tradeCount: r.trade_count,
-      firstTrade: r.first_trade,
-      lastTrade: r.last_trade,
-      hasPartial: r.has_partial,
-      shortHistory: r.short_history,
+      fees: r.fees ?? 0,
+      tradeCount: r.trade_count ?? 0,
+      firstTrade: r.first_trade ?? null,
+      lastTrade: r.last_trade ?? null,
+      hasPartial: !!r.has_partial,
+      shortHistory: !!r.short_history,
     }));
   },
 );

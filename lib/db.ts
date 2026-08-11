@@ -710,7 +710,7 @@ export function mutateUpdatePlacementStage(db: Database, placementId: string, st
   };
 }
 
-export function mutateAckAlert(db: Database, alertId: string, user: string): Database {
+export function mutateAckAlert(db: Database, alertId: string): Database {
   const alerts = db.alerts.map(a => {
     if (a.id === alertId) return { ...a, ack: true };
     return a;

@@ -34,7 +34,8 @@ export async function parsePnlFileAction(formData: FormData): Promise<ParseResul
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     return await parsePnlFileBuffer(buffer, file.name || "trades.xlsx");
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Failed to process the uploaded file.";
     console.error("Error parsing P&L file:", err);
     return {
       summary: [],
@@ -44,7 +45,7 @@ export async function parsePnlFileAction(formData: FormData): Promise<ParseResul
       uniqueTickers: 0,
       matchedTickers: 0,
       optionTickers: 0,
-      errors: [err.message || "Failed to process the uploaded file."],
+      errors: [errorMsg],
     };
   }
 }
@@ -166,12 +167,13 @@ export async function fetchPlacementTrackerUrlAction(
       filename: download.filename,
       source: download.source,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Failed to parse Placement Tracker from link.";
     console.error("Error parsing Placement Tracker from URL:", err);
     return {
       ok: false,
       placementItems: [],
-      error: err.message || "Failed to parse Placement Tracker from link.",
+      error: errorMsg,
     };
   }
 }
@@ -388,12 +390,13 @@ export async function parsePlacementTrackerFileAction(
       ok: true,
       placementItems: placementMapToArray(placementMap),
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Failed to process placement file.";
     console.error("Error parsing Placement Tracker file:", err);
     return {
       ok: false,
       placementItems: [],
-      error: err.message || "Failed to process placement file.",
+      error: errorMsg,
     };
   }
 }
@@ -651,7 +654,7 @@ export async function fetchDatabaseHoldingsAction(
 
     const rawPositions = posRes.data || [];
     const accounts = accRes.data || [];
-    const securities = (secRes.data || []) as any[];
+    const securities = (secRes.data || []) as Array<{ code?: string; name?: string; last_price?: number | string }>;
 
     // Map security code -> last_price & name
     const secMap = new Map<string, { name: string; lastClose: number }>();
@@ -678,7 +681,7 @@ export async function fetchDatabaseHoldingsAction(
     );
 
     const accMap = new Map<string, string>();
-    let targetAccountIds = new Set<string>();
+    const targetAccountIds = new Set<string>();
 
     for (const a of accounts) {
       const ext = normalizeAccountNo(a.external_ref);
@@ -752,8 +755,9 @@ export async function fetchDatabaseHoldingsAction(
 
     const holdings = Array.from(holdingMap.values());
     return { ok: true, holdings };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errorMsg = err instanceof Error ? err.message : "Failed to fetch DB holdings.";
     console.error("Error fetching database holdings:", err);
-    return { ok: false, holdings: [], error: err.message || "Failed to fetch DB holdings." };
+    return { ok: false, holdings: [], error: errorMsg };
   }
 }

@@ -6,7 +6,6 @@ import type { PnlOverrideRow } from "@/lib/data/holdings";
 import type { ClientRow, AccountRow } from "@/lib/data/queries";
 import { TablePagination } from "@/app/components/TablePagination";
 import { MismatchRow, type MismatchItem } from "./MismatchRow";
-import { isOptionRow } from "@/lib/pnl-calculator";
 
 type FilterTab = "all" | "pending" | "fixed" | "short_buy" | "buy_unknown";
 
@@ -163,7 +162,7 @@ export function StaffMismatchesClient({
       // Discrepancy label & type
       let discrepancyType: MismatchItem["discrepancyType"] = "unmatched";
       let discrepancyLabel = "Unmatched Qty";
-      let discrepancyDiff = Math.abs(sellQty - buyQty);
+      const discrepancyDiff = Math.abs(sellQty - buyQty);
 
       if (yearUnresolved) {
         discrepancyType = "year_unresolved";

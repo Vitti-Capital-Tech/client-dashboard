@@ -2,7 +2,6 @@
 
 import React, { useState, useTransition, useRef, useEffect } from "react";
 import {
-  parsePnlFileAction,
   exportPnlXlsxAction,
   exportPnlCsvAction,
   fetchPlacementTrackerUrlAction,
@@ -149,22 +148,9 @@ export function PnlCalculatorClient() {
     /** Secondary line: the fix for an error, or how a link was read on success. */
     hint?: string;
   } | null>(null);
-  const [expandedTickers, setExpandedTickers] = useState<Set<string>>(new Set());
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const placementFileInputRef = useRef<HTMLInputElement>(null);
-
-  const toggleExpandTicker = (ticker: string) => {
-    setExpandedTickers((prev) => {
-      const next = new Set(prev);
-      if (next.has(ticker)) {
-        next.delete(ticker);
-      } else {
-        next.add(ticker);
-      }
-      return next;
-    });
-  };
 
   const getFilenameStem = (filename?: string | null): string => {
     if (!filename) return "";
@@ -771,7 +757,7 @@ export function PnlCalculatorClient() {
         for (const pFile of fileList) {
           const arrayBuffer = await pFile.arrayBuffer();
           const placementMap = await parsePlacementTrackerBuffer(
-            Buffer.from(arrayBuffer as any),
+            Buffer.from(arrayBuffer),
             // Dates the tracker when its sheets do not ("…Tracker 2025.xlsx").
             pFile.name
           );
@@ -812,11 +798,12 @@ export function PnlCalculatorClient() {
         if (placementFileInputRef.current) {
           placementFileInputRef.current.value = "";
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const errorMsg = err instanceof Error ? err.message : "Failed to parse placement file(s).";
         console.error("Error parsing placement files:", err);
         setPlacementMsg({
           type: "error",
-          text: err.message || "Failed to parse placement file(s).",
+          text: errorMsg,
         });
       }
     });
@@ -897,7 +884,7 @@ export function PnlCalculatorClient() {
     }
 
     const accToUse = targetAcc !== undefined ? targetAcc : live().selectedAccount;
-    const allRawTrades: any[] = [];
+    const allRawTrades: ParsedTradeRow[] = [];
     const accountsSet = new Set<string>();
 
     for (const tf of activeTradeFiles) {
@@ -1009,7 +996,7 @@ export function PnlCalculatorClient() {
       try {
         const arrayBuffer = await fileToProcess.arrayBuffer();
         const parsed = await parsePnlFileBuffer(
-          Buffer.from(arrayBuffer as any),
+          Buffer.from(arrayBuffer),
           fileToProcess.name
         );
 
@@ -1196,15 +1183,6 @@ export function PnlCalculatorClient() {
       currency: "AUD",
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    }).format(num);
-  };
-
-  const fmtPrice = (num: number) => {
-    return new Intl.NumberFormat("en-AU", {
-      style: "currency",
-      currency: "AUD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 4,
     }).format(num);
   };
 

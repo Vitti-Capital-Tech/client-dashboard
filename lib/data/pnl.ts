@@ -67,11 +67,41 @@ export type PnlRunRow = {
 
 const num = (v: unknown): number => Number(v ?? 0) || 0;
 
+interface PnlSummaryDbRow {
+  account_id: string;
+  client_id: string;
+  ticker: string;
+  parent_ticker: string | null;
+  company?: string | null;
+  instrument?: string | null;
+  buy_qty?: number | string | null;
+  sell_qty?: number | string | null;
+  open_qty?: number | string | null;
+  buy_price?: number | string | null;
+  sell_price?: number | string | null;
+  pnl?: number | string | null;
+  trade_count?: number | string | null;
+  is_matched?: boolean | null;
+  is_option?: boolean | null;
+  is_enriched?: boolean | null;
+  is_db_market_valued?: boolean | null;
+  is_db_open_valued?: boolean | null;
+  is_db_only?: boolean | null;
+  is_partial_exit?: boolean | null;
+  is_partial_buy?: boolean | null;
+  is_unlisted_option?: boolean | null;
+  placement_year_unresolved?: boolean | null;
+  placement_year_note?: string | null;
+  buy_side_unknown?: boolean | null;
+  comment?: string | null;
+  computed_at: string;
+}
+
 export const getClientStoredPnl = cache(
   async (clientId: string): Promise<StoredPnlRow[]> => {
     const supabase = await createClient();
     // Paged — see lib/data/paged.ts.
-    const data = await pagedSelect<Record<string, any>>(
+    const data = await pagedSelect<PnlSummaryDbRow>(
       supabase,
       "pnl_summary",
       "*",
@@ -84,7 +114,7 @@ export const getClientStoredPnl = cache(
       ticker: r.ticker,
       parentTicker: r.parent_ticker,
       company: r.company ?? "",
-      instrument: r.instrument,
+      instrument: r.instrument ?? null,
 
       buyQty: num(r.buy_qty),
       sellQty: num(r.sell_qty),
@@ -104,10 +134,10 @@ export const getClientStoredPnl = cache(
       isPartialBuy: !!r.is_partial_buy,
       isUnlistedOption: !!r.is_unlisted_option,
       placementYearUnresolved: !!r.placement_year_unresolved,
-      placementYearNote: r.placement_year_note,
+      placementYearNote: r.placement_year_note ?? null,
       buySideUnknown: !!r.buy_side_unknown,
 
-      comment: r.comment,
+      comment: r.comment ?? null,
       computedAt: r.computed_at,
     }));
   },
@@ -153,7 +183,7 @@ export const getClientLatestPnlRuns = cache(
 export const getAllStoredPnl = cache(
   async (): Promise<StoredPnlRow[]> => {
     const supabase = await createClient();
-    const data = await pagedSelect<Record<string, any>>(
+    const data = await pagedSelect<PnlSummaryDbRow>(
       supabase,
       "pnl_summary",
       "*",
@@ -166,7 +196,7 @@ export const getAllStoredPnl = cache(
       ticker: r.ticker,
       parentTicker: r.parent_ticker,
       company: r.company ?? "",
-      instrument: r.instrument,
+      instrument: r.instrument ?? null,
 
       buyQty: num(r.buy_qty),
       sellQty: num(r.sell_qty),
@@ -186,10 +216,10 @@ export const getAllStoredPnl = cache(
       isPartialBuy: !!r.is_partial_buy,
       isUnlistedOption: !!r.is_unlisted_option,
       placementYearUnresolved: !!r.placement_year_unresolved,
-      placementYearNote: r.placement_year_note,
+      placementYearNote: r.placement_year_note ?? null,
       buySideUnknown: !!r.buy_side_unknown,
 
-      comment: r.comment,
+      comment: r.comment ?? null,
       computedAt: r.computed_at,
     }));
   },

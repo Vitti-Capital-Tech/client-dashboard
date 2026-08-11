@@ -3620,13 +3620,13 @@ test("xlsx export - P&L is green above zero and red below, total included", asyn
 
   const ExcelJS = (await import("exceljs")).default;
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load((await buildPnlExportXlsxBuffer(summary)) as any);
+  await wb.xlsx.load((await buildPnlExportXlsxBuffer(summary)) as unknown as Parameters<typeof wb.xlsx.load>[0]);
   const ws = wb.worksheets[0];
 
   const GREEN = "FF166534";
   const RED = "FF991B1B";
   const pnlCol = 9;
-  const colourOf = (rowNo: number) => (ws.getRow(rowNo).getCell(pnlCol).font as any)?.color?.argb;
+  const colourOf = (rowNo: number) => ws.getRow(rowNo).getCell(pnlCol).font?.color?.argb;
 
   // Rows are sorted by ticker: 2 = AAA, 3 = BBB, 4 = CCC, 5 = Grand Total.
   assert.equal(ws.getRow(2).getCell(pnlCol).value, 500);
@@ -3639,7 +3639,7 @@ test("xlsx export - P&L is green above zero and red below, total included", asyn
   assert.equal(total.getCell(1).value, "Grand Total");
   assert.equal(total.getCell(pnlCol).value, -400);
   assert.equal(colourOf(5), RED, "the total follows the same rule");
-  assert.equal((total.getCell(pnlCol).font as any)?.bold, true, "and stays bold");
+  assert.equal(total.getCell(pnlCol).font?.bold, true, "and stays bold");
 
   // A loss reads -$900.00, not the accounting brackets the other money columns use.
   const fmt = String(ws.getRow(3).getCell(pnlCol).numFmt);

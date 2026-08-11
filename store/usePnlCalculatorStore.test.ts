@@ -110,7 +110,13 @@ test("PNL store - a configured placement file is distinguishable from an uploade
 });
 
 test("PNL store - reset clears every slice with fresh collections", async () => {
-  store().setTradeFiles([{ id: "a", name: "a.csv", rawTrades: [1], tradeCount: 1, accounts: ["1"] }]);
+  store().setTradeFiles([{
+    id: "a",
+    name: "a.csv",
+    rawTrades: [{ type: "BUY", ticker: "ABC", company: "ABC Ltd", units: 100, avgPrice: 1, value: 100 }],
+    tradeCount: 1,
+    accounts: ["1"],
+  }]);
   store().setPlacementFiles([{ id: "p", name: "p.xlsx", map: new Map(), tickerCount: 3 }]);
   store().setParsedPlacementMap(new Map());
   store().setSelectedAccount("999");

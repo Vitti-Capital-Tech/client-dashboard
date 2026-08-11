@@ -34,7 +34,7 @@ import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
 import { TablePagination } from "@/app/components/TablePagination";
 import { PnlRow } from "./PnlRow";
 import { RealizedPnlChart } from "./RealizedPnlChart";
-import { posValue, posCost, posPL, unlistedValue, isITM } from "@/lib/data/compute";
+import { posValue, posCost, posPL, unlistedValue } from "@/lib/data/compute";
 
 /**
  * Money to the cent, thousands-separated. These are settled cash amounts from
@@ -72,55 +72,6 @@ function s708Label(iso: string | null): string {
   });
 }
 
-// Expiry Rail Component
-const ExpiryRail = ({ dte }: { dte: number }) => {
-  const thresholds = [30, 14, 7, 3, 1];
-  const isDanger = dte <= 3 && dte >= 0;
-  const isWarn = dte <= 14 && dte > 3;
-  const cls = isDanger ? "danger" : isWarn ? "warn" : "";
-
-  const segs = thresholds.map((t, idx) => {
-    const lit = dte <= t && dte >= 0;
-    const colorClass = lit ? (dte <= 3 ? "lit-red" : "lit-amber") : "";
-    return (
-      <div key={idx} className={`seg ${colorClass}`}>
-        <span className="tk" />
-      </div>
-    );
-  });
-
-  return (
-    <div className={`rail ${cls} select-none`}>
-      <div className="dleft">{dte < 0 ? "expired" : `${dte}d`}</div>
-      <div className="ticks">{segs}</div>
-    </div>
-  );
-};
-
-// Moneyness Bar Component
-const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; type: "Call" | "Put" }) => {
-  let m = under - strike;
-  if (type === "Put") m = -m;
-  const span = strike * 0.5 || 0.5;
-  const frac = Math.max(-1, Math.min(1, m / span));
-  const w = Math.abs(frac) * 27;
-  const col = m > 0 ? "var(--color-green)" : "var(--color-loss)";
-
-  return (
-    <span className="mbar select-none">
-      <i />
-      <b
-        style={{
-          backgroundColor: col,
-          width: `${w}px`,
-          left: m > 0 ? "50%" : "auto",
-          right: m > 0 ? "auto" : "50%"
-        }}
-      />
-    </span>
-  );
-};
-
 const TABS = [
   { id: "holdings", label: "Holdings" },
   { id: "historical p&l", label: "Historical P&L" },
@@ -141,6 +92,37 @@ type HistoricalPnlFilter =
   | "profit"
   | "loss"
   | "unmatched";
+
+const isRowOption = (r: PnlSummaryRow) =>
+  Boolean(
+    r.isOption ||
+    r.isUnlistedOption ||
+    r.ticker.endsWith("-UO") ||
+    r.type.toLowerCase().includes("option")
+  );
+
+const isRowUnlistedOption = (r: PnlSummaryRow) =>
+  Boolean(
+    r.isUnlistedOption ||
+    r.ticker.endsWith("-UO") ||
+    r.type.toLowerCase().includes("unlisted")
+  );
+
+const isRowMatched = (r: PnlSummaryRow) =>
+  Boolean(r.isMatched || r.type.startsWith("Matched"));
+
+const isRowOpen = (r: PnlSummaryRow) =>
+  Boolean(
+    r.openPosition ||
+    (r.openQty !== undefined && r.openQty > 0) ||
+    r.isDbOpenValued ||
+    r.type.startsWith("Open")
+  );
+
+const isRowUnmatched = (r: PnlSummaryRow) =>
+  !isRowMatched(r) && !isRowOption(r);
+
+const isRowEquity = (r: PnlSummaryRow) => !isRowOption(r);
 
 export function ClientDetailClient({
   client,
@@ -265,37 +247,6 @@ export function ClientDetailClient({
   const visibleStoredPnl = storedPnl.filter((r) => inAcct(r.accountId));
   const summaryRows = storedToSummaryRows(visibleStoredPnl, overrideMap);
 
-  const isRowOption = (r: PnlSummaryRow) =>
-    Boolean(
-      r.isOption ||
-      r.isUnlistedOption ||
-      r.ticker.endsWith("-UO") ||
-      r.type.toLowerCase().includes("option")
-    );
-
-  const isRowUnlistedOption = (r: PnlSummaryRow) =>
-    Boolean(
-      r.isUnlistedOption ||
-      r.ticker.endsWith("-UO") ||
-      r.type.toLowerCase().includes("unlisted")
-    );
-
-  const isRowMatched = (r: PnlSummaryRow) =>
-    Boolean(r.isMatched || r.type.startsWith("Matched"));
-
-  const isRowOpen = (r: PnlSummaryRow) =>
-    Boolean(
-      r.openPosition ||
-      (r.openQty !== undefined && r.openQty > 0) ||
-      r.isDbOpenValued ||
-      r.type.startsWith("Open")
-    );
-
-  const isRowUnmatched = (r: PnlSummaryRow) =>
-    !isRowMatched(r) && !isRowOption(r);
-
-  const isRowEquity = (r: PnlSummaryRow) => !isRowOption(r);
-
   const pnlTabCounts: Record<HistoricalPnlFilter, number> = {
     all: summaryRows.length,
     equity: summaryRows.filter(isRowEquity).length,
@@ -308,27 +259,32 @@ export function ClientDetailClient({
     unmatched: summaryRows.filter(isRowUnmatched).length,
   };
 
-  const filteredSummaryRows = summaryRows.filter((r) => {
-    const query = pnlSearch.trim().toLowerCase();
-    const matchesSearch =
-      !query ||
-      r.ticker.toLowerCase().includes(query) ||
-      r.name.toLowerCase().includes(query);
+  const filteredSummaryRows = useMemo(() => {
+    return summaryRows.filter((r) => {
+      const query = pnlSearch.trim().toLowerCase();
+      const matchesSearch =
+        !query ||
+        r.ticker.toLowerCase().includes(query) ||
+        r.name.toLowerCase().includes(query);
 
-    if (!matchesSearch) return false;
+      if (!matchesSearch) return false;
 
-    if (pnlFilter === "matched") return isRowMatched(r);
-    if (pnlFilter === "profit") return r.pnl > 0;
-    if (pnlFilter === "loss") return r.pnl < 0;
-    if (pnlFilter === "unmatched") return isRowUnmatched(r);
-    if (pnlFilter === "options") return isRowOption(r);
-    if (pnlFilter === "unlisted") return isRowUnlistedOption(r);
-    if (pnlFilter === "open") return isRowOpen(r);
-    if (pnlFilter === "equity") return isRowEquity(r);
-    return true;
-  });
+      if (pnlFilter === "matched") return isRowMatched(r);
+      if (pnlFilter === "profit") return r.pnl > 0;
+      if (pnlFilter === "loss") return r.pnl < 0;
+      if (pnlFilter === "unmatched") return isRowUnmatched(r);
+      if (pnlFilter === "options") return isRowOption(r);
+      if (pnlFilter === "unlisted") return isRowUnlistedOption(r);
+      if (pnlFilter === "open") return isRowOpen(r);
+      if (pnlFilter === "equity") return isRowEquity(r);
+      return true;
+    });
+  }, [summaryRows, pnlSearch, pnlFilter]);
 
-  const filteredSummaryTotal = grandTotal(filteredSummaryRows);
+  const filteredSummaryTotal = useMemo(
+    () => grandTotal(filteredSummaryRows),
+    [filteredSummaryRows],
+  );
 
   /**
    * When these figures were produced, and anything the desk should read before
