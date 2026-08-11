@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PnlSummaryRow } from "@/lib/export/order-history";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
+import { ManageTradesModal } from "./ManageTradesModal";
 
 export interface MismatchItem extends PnlSummaryRow {
   accountId: string;
@@ -51,6 +52,7 @@ export function MismatchRow({
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showManageModal, setShowManageModal] = useState(false);
 
   const [buyQty, setBuyQty] = useState(String(row.buyQty));
   const [sellQty, setSellQty] = useState(String(row.sellQty));
@@ -234,13 +236,45 @@ export function MismatchRow({
 
         {/* Actions */}
         <td className="px-4.5 py-3 text-right whitespace-nowrap select-none">
-          <button
-            type="button"
-            onClick={onEdit}
-            className="btn ghost sm text-[11px] font-semibold px-2.5 py-1 rounded-[6px] border border-line hover:border-navy hover:text-navy transition-colors cursor-pointer"
-          >
-            {row.edited ? "Edit Fix" : "Fix Qty"}
-          </button>
+          <div className="flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={onEdit}
+              className="btn ghost sm text-[11px] font-semibold px-2.5 py-1 rounded-[6px] border border-line hover:border-navy hover:text-navy transition-colors cursor-pointer"
+            >
+              {row.edited ? "Edit Fix" : "Fix Qty"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowManageModal(true)}
+              className="p-1.5 rounded-[6px] text-mut hover:text-loss hover:bg-loss-bg border border-line/70 hover:border-loss/40 transition-all cursor-pointer inline-flex items-center justify-center"
+              title="Manage & Delete Transactions / Exclude Position"
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
+              </svg>
+            </button>
+          </div>
+
+          <ManageTradesModal
+            isOpen={showManageModal}
+            onClose={() => setShowManageModal(false)}
+            accountId={row.accountId}
+            clientId={row.clientId}
+            clientName={row.clientName}
+            accountLabel={row.accountLabel}
+            accountExternalRef={row.accountExternalRef}
+            ticker={row.ticker}
+            companyName={row.name}
+            discrepancyLabel={row.discrepancyLabel}
+            discrepancyType={row.discrepancyType}
+          />
         </td>
       </tr>
     );

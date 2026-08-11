@@ -944,11 +944,27 @@ Two properties worth stating:
   - `short_sell`: `sellQty < buyQty && openQty === 0 && buyQty > 0` (excess buy units with no open holding).
   - `year_unresolved`: `placementYearUnresolved === true` (placement year conflicts flagged by the engine).
   - `unmatched`: `!isMatched && buyQty !== sellQty`.
+- **Pending vs. Fixed Separation:**
+  - When an override is applied to a discrepancy row, `edited` evaluates to `true`.
+  - In the default **Pending Fixes** tab (`activeFilterTab === "pending"`), edited rows are immediately filtered out, ensuring desk staff only focus on unresolved items.
+  - Edited rows transition into the **Fixed with Overrides** tab (`activeFilterTab === "fixed"`), retaining full audit trails, previous computed values, and notes.
+  - In the **All** tab, pending items sort first by discrepancy size, with fixed items ordered at the bottom.
 - **In-Place Inline Override Editing (`MismatchRow.tsx`):**
   - Staff can click **Fix Qty** on any discrepancy row to trigger inline editing without leaving the page.
   - Edits are validated and saved via `savePnlOverride` (`app/actions/pnl-overrides.ts`), writing to the `pnl_overrides` table with `note` and `updated_by` audit fields.
   - Overrides are applied at read-time over `pnl_summary`, guaranteeing that desk corrections remain permanent across morning automated ingests.
   - A **Revert** action allows clearing an override back to computed values when ledger corrections are imported.
+- **Trade Deletion & Position Exclusion Architecture (`app/actions/trades.ts`, `ManageTradesModal.tsx`):**
+  - **Row-End Action Trigger:** A dedicated trash icon button (`🗑️`) at the end of each mismatch row (and `PnlRow.tsx`) opens `ManageTradesModal`.
+  - **`getTradesForMismatch(accountId, ticker)`**: Concurrently queries raw broker contract notes from `trades` matching `(security_code = ticker OR parent_code = parent)`.
+  - **`deleteTradeAction(tradeId, accountId, clientId)`**:
+    1. Fetches the exact trade details (`side`, `units`, `avg_price`, `cnote`, `trade_date`, `security_code`).
+    2. Removes the row from `trades` in Supabase (`delete().eq("id", tradeId)`).
+    3. Writes an immutable audit entry into `audit_log`: `Deleted BUY/SELL <units> <secCode> @ $<price> (CNote #<cnote>) on account <account>`.
+    4. Triggers background P&L recalculation (`recomputeClient(clientId, { trigger: "manual" })`) so `pnl_summary` and `realized_pnl` instantly reflect the deletion without manual refresh.
+    5. Revalidates Next.js cache (`revalidatePath("/portal", "layout")`).
+  - **`deleteAllTradesForTickerAction(accountId, clientId, ticker)`**: Bulk-deletes all contract notes for that ticker on the target account with comprehensive audit logging and automatic P&L recomputation.
+  - **`excludePositionAction(accountId, clientId, ticker, note)`**: Dismisses / excludes non-ledger positions (e.g. orphan portfolio snapshot rows or placement grants) by writing a zeroed override (`buyQty: 0, sellQty: 0, buyPrice: 0, sellPrice: 0`).
 
 
 ### 8.25 Unified Client Option Register & Universal Table Pagination (`app/components/TablePagination.tsx`, `/portal/staff/clients/[id]`)
@@ -962,6 +978,70 @@ Two properties worth stating:
   - Provides segmented pill rows-per-page selector (`10`, `25`, `50`, `100`, `All`).
   - Features smart ellipsis page jumping (`1`, `2`, `...`, `10`) and chevron navigation buttons with disabled boundary states.
   - Automatically hides when `totalItems === 0`.
-  - Integrated across Overview Wholesale Client Register, Clients Register, Client Detail sub-route tabs (Holdings, Historical P&L, Options, Bids, Alerts), and the Mismatched Qty workspace.
+  - Integrated across Overview Wholesale Client Register, Clients Register, Client Detail sub-route tabs (Holdings, Historical P&L, Options, Bids, Alerts), Mismatches, and the Staff Firm-Wide Options Register.
+
+
+### 8.26 Firm-Wide Multi-Account Options Register (`app/portal/staff/options/StaffOptionsClient.tsx`, `/portal/staff/options`)
+
+**Architecture & Location.** Situated prominently in the staff navigation between **Placements** and **PNL Calculator**, `/portal/staff/options` serves as the centralized, multi-account monitor for all option contracts held across the entire firm.
+
+- **Data Sourcing Pipeline (`app/portal/staff/options/page.tsx`):**
+  - Concurrently queries the complete firm-wide dataset via the DAL:
+    ```typescript
+    const [storedPnl, optionHoldings, clients, accounts, overrides] = await Promise.all([
+      getAllStoredPnl(),
+      getAllOptions(),
+      getClients(),
+      getAccounts(),
+      getAllPnlOverrides(),
+    ]);
+    ```
+  - Ingests **446 live options** (261 listed exchange-traded options + 185 unlisted placement options with Black-Scholes / intrinsic valuations) without dropping unlisted grants.
+- **Normalization to `OptionTableItem`:**
+  - Converts both listed option holdings and unlisted placement grants from `storedPnl` into a uniform data model:
+    - **Listed Options:** Marked to market via `last_price` joined from `securities`, showing strike and expiry terms parsed from ticker or instrument codes.
+    - **Unlisted Options:** Sourced from `storedPnl` rows with `isUnlistedOption || ticker.endsWith("-UO")`. Incorporates Black-Scholes carry valuations, intrinsic models, contract ratios, and assumed expiry notes.
+- **Hierarchical Account Switcher & Grouping:**
+  - **Account Selector Placement:** Placed above KPI cards in the header bar with dynamic badge tallies for each account.
+  - **Deterministic Sort Order:** In "All Accounts" view, rows are sorted hierarchically by:
+    $$\text{Client Name (A-Z)} \longrightarrow \text{Account Label / Ref} \longrightarrow \text{Series Ticker}$$
+  - **Account Column Differentiator:** When "All Accounts" is selected, an extra Account column renders displaying the client name, account label, and external broker account number (`#114716`) to cleanly differentiate holdings between clients and entities.
+- **Refined Column Architecture:**
+  1. **Account** *(Conditional when "All Accounts" active)*: Client Name + Account Label & Number.
+  2. **Series / Ticker**: Option code badge + parent ordinary code indicator.
+  3. **Company / Description**: Company name and instrument details.
+  4. **Type**: Visual badge distinguishing `Listed Option` (blue) from `Unlisted Option` (purple).
+  5. **Quantity**: Formatted unit count.
+  6. **Current Value**: Market valuation or Black-Scholes / intrinsic carrying value.
+  7. **Unrealized P&L**: Color-coded gain/loss metrics.
+  8. **Terms / Valuation Notes**: Contract ratio, strike price, expiration date, and pricing method (BS vs Intrinsic).
+- **Fast Filter Segmentation:**
+  - `All Options`: Complete firm or account register.
+  - `Listed Options`: Exchange-traded options only.
+  - `Unlisted Options`: Placement grant options only.
+  - `Gain`: Options in positive unrealized P&L.
+  - `Loss`: Options with negative unrealized P&L or out-of-the-money valuations.
+- **Data Export & Pagination:**
+  - Single-click CSV export with UTF-8 BOM encoding for Excel compatibility.
+  - Fully integrated with `TablePagination` for responsive client-side page control.
+
+
+### 8.27 Codebase Type Hardening, ESLint Rules & React Compiler Preservation
+
+**Type Safety Enforcement.** To guarantee zero runtime type ambiguity across server components and client islands:
+- Replaced all 40 occurrences of `@typescript-eslint/no-explicit-any` with explicit TypeScript DTO interfaces:
+  - `TradeDbRow`: Typed PostgREST trades representation including contract notes, brokerage, and GST.
+  - `PnlSummaryDbRow`: Typed stored P&L schema with instrument and comment nullability guarantees.
+  - `PnlOverrideDbRow` & `RealizedPnlDbRow`: Strict types for desk overrides and realized P&L aggregations.
+  - `ParsedTradeRow`: Formal interface for in-memory trade ledger rows across the calculator store and client components.
+  - `UnlistedOptionData`: Structural interface for unlisted option parameters.
+- **React Compiler & Hook Dependency Rules:**
+  - Preserved manual memoization (`react-hooks/preserve-manual-memoization`) by hoisting pure helper calculation functions (`isRowOption`, `isRowUnlistedOption`, `isRowMatched`, `isRowOpen`, `isRowEquity`) to module-level scope.
+  - Explicit dependency array tracking on `useMemo` hooks for all filtered and sorted row matrices.
+- **Verification Metrics:**
+  - `npm run lint`: `0 errors, 0 warnings` across all 15 files.
+  - `npx tsc --noEmit`: `0 errors` clean TypeScript compilation.
+  - `npm test`: `270 passed / 270 tests` (100% pass rate).
+
 
 

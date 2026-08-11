@@ -38,6 +38,7 @@ client-dashboard/
 │   │   ├── alerts.ts           # Server actions: ackAlert / addCustomAlert
 │   │   ├── exports.ts          # Server action: builds the .xlsx (keeps ExcelJS off the client)
 │   │   ├── pnl-overrides.ts    # Server action: staff corrections to a P&L row (audited)
+│   │   ├── trades.ts           # Server actions: deleteTradeAction, deleteAllTradesForTickerAction, excludePositionAction (audited with auto P&L recompute)
 │   │   ├── pnl.ts              # Server actions: recalculate one client's stored P&L / preview CSV /
 │   │   │                       #   refresh the Placement Tracker cache / backfill every account
 │   │   └── pnl-calculator.ts   # Server action: in-memory P&L multi-file trade/placement parsing, OAuth URL fetch & export generation
@@ -65,7 +66,8 @@ client-dashboard/
 │           ├── page.tsx        #   ✅ Overview / desk summary + StaffOverviewClient.tsx (island)
 │           ├── pnl-calculator/ #   ✅ page.tsx (server) + PnlCalculatorClient.tsx (in-memory ledger tool island)
 │           ├── mismatches/     #   ✅ page.tsx (server) + StaffMismatchesClient.tsx (centralized reconciliation island)
-│           │                   #      + MismatchRow.tsx (inline in-place P&L override editor)
+│           │                   #      + MismatchRow.tsx (inline in-place P&L override editor & delete trigger)
+│           │                   #      + ManageTradesModal.tsx (contract note inspection, single/bulk trade delete & position dismissal)
 │           ├── clients/        #   ✅ page.tsx (server) + ClientsTable.tsx (row-nav island)
 │           │   │               #      + BackfillPnlButton.tsx (rebuild stored P&L for every account,
 │           │   │               #        plus "Refresh trackers" — the ~17s workbook parse, on demand)
@@ -76,7 +78,9 @@ client-dashboard/
 │           │                   #      + RealizedPnlChart.tsx (realised P&L by month, SVG, no deps)
 │           │                   #      + PnlRow.tsx (inline editor for a summary row)
 │           ├── placements/     #   ✅ page.tsx (server) + StaffPlacementsClient.tsx (scaling & settlement island)
-│           ├── options/        #   ✅ page.tsx (server) + StaffOptionsClient.tsx (firm-wide monitor island)
+│           ├── options/        #   ✅ page.tsx (server) + StaffOptionsClient.tsx (firm-wide multi-account options island:
+│           │                   #      All Accounts / Single Account switcher, account grouping, 446 live options,
+│           │                   #      executive KPIs, Gain/Loss tabs, CSV export & pagination)
 │           ├── alerts/         #   ✅ page.tsx (server) + StaffAlertsClient.tsx (island)
 │           └── audit/          #   ✅ page.tsx (server) + ExportButton.tsx (island)
 ├── lib/
@@ -422,12 +426,13 @@ npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000).
 
-### 4.8 Production Build & Verification
+### 4.8 Production Build, Lint & Verification
 ```bash
-npm run lint
-npm run build
+npm run lint    # ESLint strict validation (0 errors, 0 warnings)
+npm test        # 270 automated unit & regression tests (100% pass)
+npm run build   # Next.js App Router dynamic production build
 ```
-Migrated routes read the DAL through the async server client (`cookies()`), so they build as **dynamic** (`ƒ`, server-rendered on demand); unmigrated client routes remain statically prerendered shells. A clean build confirms TypeScript constraints and that `useSearchParams()` Suspense boundaries (see `app/login/page.tsx`) compile without CSR bailout errors.
+Migrated routes read the DAL through the async server client (`cookies()`), so they build as **dynamic** (`ƒ`, server-rendered on demand); unmigrated client routes remain statically prerendered shells. A clean build confirms TypeScript constraints, zero ESLint issues, and that `useSearchParams()` Suspense boundaries (see `app/login/page.tsx`) compile without CSR bailout errors.
 
 ### 4.9 A quiet failure mode: PostgREST's 1,000-row cap
 
@@ -466,10 +471,13 @@ Every such read now pages until a short page arrives. There are deliberately two
 | Tracker cache + recompute queue | ✅ `…_recompute_queue_and_tracker_cache.sql` — the two tables the first real scheduled run proved necessary. **`placement_tracker_cache`** holds the parsed workbooks (~0.23 MB of JSON for ~17s of parsing) keyed by a **hash** of the URL, refreshed only by the staff **Refresh trackers** button; an empty cache stops the recompute storing anything rather than storing figures with no placement buy sides, and `parsed_at` rides along so a stale parse is visible. **`pnl_recompute_queue`** decouples the import from the recompute: accounts are enqueued *before* any recompute is attempted, the batch stops at a deadline instead of half-finishing an account, and what is left stays counted with its `attempts` and `last_error` |
 | Placement-name aliases | ✅ `…_client_placement_aliases.sql` — `clients.placement_aliases`, the names the hand-typed tracker uses for a client. Spelling is normalised automatically (`Pty Ltd` ≡ `P/L`, `Inv` ≡ `Investments`, `&` ≡ `and`); beyond that the mapping is **stated**, because the same workbooks carry `PSG Capital Ltd` and `PSG Super` against two different clients and a looser matcher would move a parcel between them. Read live by both the calculator and the stored recompute, so the two surfaces cannot fill different rows from one tracker. A sheet's own `Total Confirmation` / `Allowance` rows are no longer read as participants (they doubled its share total and masked the single-participant case), and that single-participant fallback is now the calculator's only — the unattended recompute declines rather than filling from a stranger |
 | Full-set reads (PostgREST cap) | ✅ `lib/data/paged.ts` (`pagedSelect`, DAL) + `lib/import/runner.ts` (`selectAll`, importers/recompute) — Supabase truncates at 1,000 rows silently. A client with 1,650 contract notes had their whole order history, chart and totals computed from the first thousand, and the cost-basis replay walked 1,000 of 3,996 trades. Every money-deciding read now pages to the end (§4.9) |
-| Mismatched Qty P&L Dashboard | ✅ `/portal/staff/mismatches` — a centralized reconciliation workspace and left-sidebar tab for all quantity discrepancies, short buys, 0-buy records, and un-reconciled trades across all client accounts. Includes KPI summary cards (Total Discrepancies, Pending Fixes, Fixed with Overrides, Affected Clients), segmented filter tabs (`All`, `Pending Fix`, `Fixed / Edited`, `Short Buy`, `0 Buys`), client dropdown filter, live search, and **in-place inline override editing** directly updating `pnl_overrides` with live P&L recomputations and revert capabilities |
+| Mismatched Qty P&L Dashboard | ✅ `/portal/staff/mismatches` — a centralized reconciliation workspace and left-sidebar tab for all quantity discrepancies, short buys, 0-buy records, and un-reconciled trades across all client accounts. Includes KPI summary cards (Total Discrepancies, Pending Fixes, Fixed with Overrides, Affected Clients), segmented filter tabs (`All`, `Pending Fix`, `Fixed / Edited`, `Short Buy`, `0 Buys`), client dropdown filter, live search, and **in-place inline override editing** directly updating `pnl_overrides`. Overridden rows immediately move from **Pending Fixes** into **Fixed with Overrides** with complete audit capabilities |
+| Trade Deletion & Position Exclusion | ✅ `app/actions/trades.ts` + `ManageTradesModal.tsx` — 1-click **Delete (🗑️)** icon on both Mismatches and Client Historical P&L rows. Opens a dedicated transaction manager listing all raw contract notes for that ticker/account with single-click delete, bulk delete for all trades, or 1-click position exclusion. Deletions remove rows from `trades`, insert `audit_log` records, and **automatically trigger client P&L recomputations** in the background |
+| Firm-Wide Options Register | ✅ `/portal/staff/options` — dedicated multi-account options monitor located in the staff left sidebar (between Placements and PNL Calculator). Ingests **446 live options** (261 listed exchange-traded options + 185 unlisted placement options with Black-Scholes / intrinsic valuations) across all accounts. Features top-level Account switcher (above KPI cards) with option counts per account, structured grouping in "All Accounts" view (Client Name → Account Label/Ref → Ticker) with account differentiators, clean column layout (Series, Company/Description, Type, Quantity, Current Value, Unrealized P&L, Terms/Valuation Notes), dynamic KPI cards, segmented filter tabs (`All Options`, `Listed Options`, `Unlisted Options`, `Gain`, `Loss`), full UTF-8 BOM CSV export, and pagination |
 | Client Options Register | ✅ `/portal/staff/clients/[id]` **Options** tab — unified registry of all listed exchange-traded options and unlisted placement grants with Black-Scholes carry valuations, derived directly from the client's P&L summary rows. Includes segmented filter tabs (`All Options`, `Listed Options`, `Unlisted Options`) with live count badges, search, and totals |
 | Historical P&L Full-Width Filters | ✅ `/portal/staff/clients/[id]` **Historical P&L** tab (formerly Order History) — full-width segmented control with 9 distinct filters (`All`, `Equities`, `Options`, `Unlisted Options`, `Open`, `Matched`, `Profit Only`, `Loss Only`, `Unmatched`), live search, and persistent Grand Total calculations |
-| Reusable Table Pagination | ✅ `app/components/TablePagination.tsx` — clean client-side pagination with item counters, segmented pill rows-per-page selector (`10`, `25`, `50`, `100`, `All`), and smart chevron/page navigation. Adopted across Overview Wholesale Client Register, Clients Register, all Client Detail sub-route tabs (Holdings, Historical P&L, Options, Bids, Alerts), and Mismatches |
+| Reusable Table Pagination | ✅ `app/components/TablePagination.tsx` — clean client-side pagination with item counters, segmented pill rows-per-page selector (`10`, `25`, `50`, `100`, `All`), and smart chevron/page navigation. Adopted across Overview Wholesale Client Register, Clients Register, all Client Detail sub-route tabs (Holdings, Historical P&L, Options, Bids, Alerts), Mismatches, and Staff Options |
+| Codebase Type Hardening & Linting | ✅ strict zero-tolerance enforcement for ESLint (`@typescript-eslint/no-explicit-any`, `@typescript-eslint/no-unused-vars`, `prefer-const`, React Hooks memoization). All database DTOs typed strictly with 0 lint errors, 0 warnings, and 270/270 passing unit tests |
 | Market price feed | ⏳ planned — prices come only from the latest holdings snapshot, so valuations are as stale as the last import (the unlisted-option spot *is* live: Yahoo → ASX → snapshot, with the source recorded) |
 | Parcel-level (FIFO) cost basis | ⏳ planned — weighted average today; needed for CGT-grade realised figures |
 | TOTP MFA | ⏳ planned — the login OTP screen is cosmetic |
