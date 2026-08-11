@@ -296,17 +296,27 @@ export function PnlCalculatorClient() {
   const commentHint = (item: PnlSummaryItem): string => {
     if (item.isUnlistedOption) {
       const v = item.unlistedOption;
-      if (!v) return "Free unlisted placement options valued with Black-Scholes.";
+      if (!v) return "Free unlisted placement options, valued by the desk's rule.";
+
+      // Which rule set the price leads, because it decides how the rest of the
+      // block reads: on an intrinsic row the vol/rate/expiry lines are the
+      // assumptions that were IN FORCE, not the ones that produced the number.
+      const intrinsic = v.pricingMethod === "intrinsic";
       return (
-        `MODEL PRICE, not a market quote.\n` +
+        (intrinsic
+          ? `INTRINSIC VALUE — in the money, so priced at what exercising is worth today.\n`
+          : `MODEL PRICE, not a market quote.\n`) +
         `Add-On: ${v.addOn.raw}\n` +
         `Entitlement: ${v.addOn.ratioOptions}:${v.addOn.ratioPerShares} on ${fmtQty(v.basisQty)} ${
           v.basisKind === "shares" ? "shares" : "base options"
         } = ${fmtQty(item.sellQty)} options\n` +
         `Spot ${fmtCurrency(v.spot)} (${v.spotSource}) · Strike ${fmtCurrency(v.addOn.strike)}\n` +
         `Expiry ${v.addOn.expiry} (${v.timeToExpiryYears.toFixed(2)} yrs)\n` +
-        `Vol ${(v.volatility * 100).toFixed(0)}% · Rate ${(v.riskFreeRate * 100).toFixed(0)}% · Div ${(v.dividendYield * 100).toFixed(0)}%\n` +
-        `Black-Scholes per option: ${fmtCurrency(v.optionPrice)}`
+        (intrinsic
+          ? `Spot − strike per option: ${fmtCurrency(v.optionPrice)}\n` +
+            `Black-Scholes not used here; its assumptions were Vol ${(v.volatility * 100).toFixed(0)}% · Rate ${(v.riskFreeRate * 100).toFixed(0)}% · Div ${(v.dividendYield * 100).toFixed(0)}%`
+          : `Vol ${(v.volatility * 100).toFixed(0)}% · Rate ${(v.riskFreeRate * 100).toFixed(0)}% · Div ${(v.dividendYield * 100).toFixed(0)}%\n` +
+            `Black-Scholes per option: ${fmtCurrency(v.optionPrice)}`)
       );
     }
     const parts: string[] = [];
@@ -451,8 +461,17 @@ export function PnlCalculatorClient() {
         if (built.addedCount > 0) {
           const fromAsx = spotRes.prices.filter((p) => p.source === "asx").map((p) => p.ticker);
           const stale = spotRes.prices.filter((p) => p.source === "database").map((p) => p.ticker);
+          // Split by rule, because "valued with Black-Scholes" stopped being true
+          // of every line the moment the in-the-money ones started pricing at
+          // intrinsic — and the two numbers are not interchangeable.
+          const byIntrinsic = built.summary.filter(
+            (s) => s.isUnlistedOption && s.unlistedOption?.pricingMethod === "intrinsic",
+          ).length;
+          const byModel = built.addedCount - byIntrinsic;
           notes.push(
-            `Valued ${built.addedCount} unlisted option line(s) with Black-Scholes (vol 50%, rate 5%, div 0%).` +
+            `Valued ${built.addedCount} unlisted option line(s): ` +
+              `${byIntrinsic} in the money at spot − strike, ` +
+              `${byModel} with Black-Scholes (vol 50%, rate 5%, div 0%).` +
               (fromAsx.length > 0
                 ? ` ${fromAsx.join(", ")} priced from the ASX feed (Yahoo had no quote) — still a live price.`
                 : "") +
@@ -2203,7 +2222,7 @@ export function PnlCalculatorClient() {
                               {item.isUnlistedOption && (
                                 <button
                                   type="button"
-                                  aria-label={`Black-Scholes valuation inputs for ${item.ticker}`}
+                                  aria-label={`Unlisted option valuation inputs for ${item.ticker}`}
                                   className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-bg text-amber-d border border-amber-200 hover:bg-amber-d hover:text-white transition-colors cursor-help shrink-0"
                                   onMouseEnter={(e) =>
                                     // Clamped to the viewport: the card is w-[22rem]

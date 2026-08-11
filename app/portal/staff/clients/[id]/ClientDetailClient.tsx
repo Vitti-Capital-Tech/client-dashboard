@@ -1133,7 +1133,7 @@ export function ClientDetailClient({
             <div>
               <b className="text-sm font-semibold text-ink">Client option register</b>
               <div className="text-[11px] text-mut mt-0.5">
-                Listed exchange-traded and unlisted placement options with Black-Scholes carry valuation
+                Listed exchange-traded options, and unlisted placement options carried at intrinsic value
               </div>
             </div>
             <div className="flex items-center gap-2">

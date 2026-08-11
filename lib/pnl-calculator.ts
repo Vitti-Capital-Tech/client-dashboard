@@ -169,7 +169,18 @@ export interface UnlistedOptionValuation {
   spotSource: SpotSource;
   /** Years to expiry at valuation time. */
   timeToExpiryYears: number;
-  /** Black-Scholes value of ONE option. */
+  /**
+   * How `optionPrice` was arrived at.
+   *
+   * Recorded because the two rules produce different numbers from the same
+   * inputs, and a row priced by one is otherwise indistinguishable from a row
+   * priced by the other. `volatility` / `riskFreeRate` / `timeToExpiryYears`
+   * are still stored on an `intrinsic` row — they are the assumptions that were
+   * in force, and keeping them is what lets the model price be reconstructed
+   * later and compared against what was actually reported.
+   */
+  pricingMethod: "intrinsic" | "black-scholes";
+  /** Value of ONE option, by `pricingMethod`. */
   optionPrice: number;
   volatility: number;
   riskFreeRate: number;
@@ -201,7 +212,7 @@ export interface PnlSummaryItem {
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
   isUnlistedOption?: boolean; // true for a synthetic row valuing free UNLISTED placement options
-  unlistedOption?: UnlistedOptionValuation; // The inputs behind that row's Black-Scholes price
+  unlistedOption?: UnlistedOptionValuation; // The inputs behind that row's modelled price, and which rule set it
   comment?: string; // Derived from the flags above — surfaced in the table and both exports
   openQty: number; // buyQty - sellQty
   tradeCount: number;
@@ -3461,10 +3472,14 @@ export function collectUnlistedOptionTickers(
  * Adds one synthetic P&L row per UNLISTED placement add-on.
  *
  * The economics: the options are FREE, so `buyQty` and `buyPrice` are 0 and the
- * whole Black-Scholes value is P&L. Quantity is `floor(basis * ratioOptions /
+ * whole modelled value is P&L. Quantity is `floor(basis * ratioOptions /
  * ratioPerShares)`, floored because a fraction of an option is not granted, where
  * the basis is the SHARES bought for a base tranche and the BASE TRANCHE'S OPTION
  * COUNT for a piggyback.
+ *
+ * One option is valued two ways, and `unlistedOption.pricingMethod` records
+ * which: **intrinsic** (`spot - strike`) once the grant is in the money, and
+ * **Black-Scholes** while it is not. See the note at the branch itself.
  *
  * Rebuilt from scratch on every call: any existing `-UO` rows are dropped first,
  * so re-running after a re-upload or a price refresh cannot accumulate duplicates.
@@ -3549,14 +3564,38 @@ export function buildUnlistedOptionRows(
       const timeToExpiryYears = yearsToExpiry(new Date(`${addOn.expiry}T00:00:00Z`), asOf);
       const { volatility, riskFreeRate, dividendYield } = UNLISTED_OPTION_ASSUMPTIONS;
 
-      const optionPrice = blackScholesCall({
-        spot,
-        strike: addOn.strike,
-        timeToExpiryYears,
-        volatility,
-        riskFreeRate,
-        dividendYield,
-      });
+      /**
+       * IN THE MONEY: value the grant at what exercising it is worth TODAY —
+       * `spot - strike` — rather than at the model price.
+       *
+       * Desk policy, and it cuts the figure rather than flattering it: for a
+       * call, Black-Scholes is intrinsic value PLUS time value, so an ITM grant
+       * reported this way is worth less than the model says. That is the point.
+       * The time value of an option that does not trade is the least defensible
+       * part of the number — there is no market in which to realise it — while
+       * `spot - strike` is what the holder could actually get by exercising.
+       *
+       * Out of the money there is no intrinsic value to fall back on (exercising
+       * is worthless), so the model is the only answer available and nothing
+       * changes: those rows are still Black-Scholes.
+       *
+       * `strike > 0` is required before taking this branch. A missing or zero
+       * strike is a tracker data error, and `spot - 0` would report the whole
+       * share price as option value; `blackScholesCall` already returns 0 for a
+       * non-positive strike, so the guard keeps that refusal intact.
+       */
+      const useIntrinsic = addOn.strike > 0 && spot > addOn.strike;
+
+      const optionPrice = useIntrinsic
+        ? spot - addOn.strike
+        : blackScholesCall({
+            spot,
+            strike: addOn.strike,
+            timeToExpiryYears,
+            volatility,
+            riskFreeRate,
+            dividendYield,
+          });
 
       const sellValue = Math.round(optionPrice * optionQty * 100) / 100;
 
@@ -3596,6 +3635,7 @@ export function buildUnlistedOptionRows(
           spot,
           spotSource,
           timeToExpiryYears,
+          pricingMethod: useIntrinsic ? "intrinsic" : "black-scholes",
           optionPrice,
           volatility,
           riskFreeRate,

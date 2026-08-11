@@ -3041,8 +3041,10 @@ const grvEquityRow = (buyQty = 10000) => [
   },
 ];
 
-test("buildUnlistedOptionRows - entitlement, Black-Scholes price and P&L", async () => {
+test("buildUnlistedOptionRows - entitlement, in-the-money price and P&L", async () => {
   const asOf = new Date("2026-08-04T00:00:00Z");
+  // 0.20 against a 0.14 strike — in the money, so this exercises the intrinsic
+  // branch rather than the model.
   const spot = 0.2;
   const spots = new Map([["GRV", { price: spot, source: "yahoo" as const }]]);
 
@@ -3066,20 +3068,29 @@ test("buildUnlistedOptionRows - entitlement, Black-Scholes price and P&L", async
   assert.equal(row.buyPrice, 0);
   assert.equal(row.totalBuyValue, 0);
 
-  const expectedPer = blackScholesCall({
+  // Written as a literal rather than recomputed from the implementation, so the
+  // test states the rule instead of mirroring it: (0.20 - 0.14) × 3,333.
+  assert.equal(row.unlistedOption!.pricingMethod, "intrinsic");
+  assert.equal(row.sellPrice, 199.98);
+  assert.equal(row.totalSellValue, 199.98);
+  assert.equal(row.pnlCalculated, 199.98);
+
+  // And it is deliberately BELOW the model, which for a call is intrinsic value
+  // plus time value. That gap is the whole reason the rule exists: an unlisted
+  // option has no market in which the time value could be realised.
+  const modelPer = blackScholesCall({
     spot,
     strike: 0.14,
     timeToExpiryYears: row.unlistedOption!.timeToExpiryYears,
     ...UNLISTED_OPTION_ASSUMPTIONS,
   });
-  const expectedValue = Math.round(expectedPer * 3333 * 100) / 100;
+  assert.ok(
+    Math.round(modelPer * 3333 * 100) / 100 > 199.98,
+    "Black-Scholes should carry time value on top of intrinsic",
+  );
 
-  assert.equal(row.sellPrice, expectedValue);
-  assert.equal(row.totalSellValue, expectedValue);
-  assert.equal(row.pnlCalculated, expectedValue);
-  assert.ok(expectedValue > 0, "an ITM option 1.4 years out must be worth something");
-
-  // The valuation inputs are retained for audit.
+  // The valuation inputs are retained for audit — including the assumptions that
+  // did NOT set this price, so the model figure stays reconstructable.
   const v = row.unlistedOption!;
   assert.equal(v.spot, spot);
   assert.equal(v.spotSource, "yahoo");
@@ -3088,6 +3099,63 @@ test("buildUnlistedOptionRows - entitlement, Black-Scholes price and P&L", async
   assert.equal(v.riskFreeRate, 0.05);
   assert.equal(v.dividendYield, 0);
   assert.equal(v.addOn.strike, 0.14);
+});
+
+test("buildUnlistedOptionRows - out of the money still prices off Black-Scholes", async () => {
+  // Below the 0.14 strike: exercising is worthless, so there is no intrinsic
+  // value to fall back on and the model is the only defensible answer. The row
+  // must NOT collapse to zero — a grant 1.4 years out still has real value.
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spot = 0.1;
+  const spots = new Map([["GRV", { price: spot, source: "yahoo" as const }]]);
+
+  const built = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
+  const row = built.summary.find((s) => s.isUnlistedOption);
+  assert.ok(row);
+
+  assert.equal(row.unlistedOption!.pricingMethod, "black-scholes");
+
+  const expectedPer = blackScholesCall({
+    spot,
+    strike: 0.14,
+    timeToExpiryYears: row.unlistedOption!.timeToExpiryYears,
+    ...UNLISTED_OPTION_ASSUMPTIONS,
+  });
+  assert.equal(row.pnlCalculated, Math.round(expectedPer * 3333 * 100) / 100);
+  assert.ok(row.pnlCalculated > 0, "an OTM option 1.4 years out is not worthless");
+});
+
+test("buildUnlistedOptionRows - spot exactly AT the strike is not intrinsic", async () => {
+  // The rule is `spot > strike`, strictly. At the money there is nothing to gain
+  // by exercising, so intrinsic would be exactly $0 and would wipe out a grant
+  // that still has 1.4 years to run.
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spots = new Map([["GRV", { price: 0.14, source: "yahoo" as const }]]);
+
+  const built = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
+  const row = built.summary.find((s) => s.isUnlistedOption);
+
+  assert.equal(row!.unlistedOption!.pricingMethod, "black-scholes");
+  assert.ok(row!.pnlCalculated > 0);
+});
+
+test("buildUnlistedOptionRows - a zero strike never takes the intrinsic branch", async () => {
+  // A missing strike is a tracker data error. `spot - 0` would report the entire
+  // share price as option value, which is how a typo becomes a five-figure gain;
+  // Black-Scholes already refuses a non-positive strike, and that refusal stands.
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spots = new Map([["GRV", { price: 0.2, source: "yahoo" as const }]]);
+
+  const built = buildUnlistedOptionRows(
+    grvEquityRow(10000),
+    unlistedPlacementMap({ strike: 0 }),
+    spots,
+    asOf,
+  );
+  const row = built.summary.find((s) => s.isUnlistedOption);
+
+  assert.equal(row!.unlistedOption!.pricingMethod, "black-scholes");
+  assert.equal(row!.pnlCalculated, 0);
 });
 
 test("buildUnlistedOptionRows - an ASX-sourced spot prices normally and is not 'skipped'", async () => {
