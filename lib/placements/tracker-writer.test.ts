@@ -50,11 +50,16 @@ function fakeGraph(
   workbook: { sheets: string[]; overview: (string | number)[][] },
   fail?: { path: RegExp; status: number; message?: string },
 ) {
-  const calls: { method: string; path: string; body?: unknown }[] = [];
+  const calls: { method: string; path: string; body?: unknown; session?: string }[] = [];
 
   const graph: GraphCall = async (path, init = {}) => {
     const method = init.method ?? "GET";
-    calls.push({ method, path, body: init.body });
+    calls.push({
+      method,
+      path,
+      body: init.body,
+      session: init.headers?.["workbook-session-id"],
+    });
 
     if (fail && fail.path.test(path) && method !== "GET") {
       return {
@@ -77,6 +82,12 @@ function fakeGraph(
     }
     if (method === "GET" && path.includes("range(address=")) {
       return { ok: true, status: 200, body: { values: workbook.overview } };
+    }
+    if (method === "POST" && path.includes("/createSession")) {
+      return { ok: true, status: 201, body: { id: "session-1" } };
+    }
+    if (method === "POST" && path.includes("/closeSession")) {
+      return { ok: true, status: 204, body: null };
     }
     if (method === "POST" && path.includes("/worksheets/add")) {
       const name = (init.body as { name: string }).name;
@@ -114,6 +125,39 @@ test("tracker: the tab is created BEFORE the Overview row that points at it", as
   const rowAt = calls.findIndex((c) => c.method === "PATCH" && c.path.includes("2026%20Overview"));
   assert.ok(addAt >= 0 && rowAt >= 0);
   assert.ok(addAt < rowAt, "the tab must exist first");
+});
+
+test("tracker: the whole write happens inside one persisted workbook session", async () => {
+  // Without a session, Graph answered a read issued straight after a write from
+  // a STALE snapshot: a live test created a sheet, wrote five cells and read back
+  // five empty ones while the file on disk had them. Everything reported success,
+  // which is the worst way to be wrong. `persistChanges: true` is also what makes
+  // it an edit of the file rather than of a scratch copy Graph discards.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const opened = calls.find((c) => c.path.includes("/createSession"));
+  assert.deepEqual(opened?.body, { persistChanges: true });
+
+  const work = calls.filter(
+    (c) => !c.path.includes("Session") && (c.method !== "GET" || c.path.includes("range")),
+  );
+  assert.ok(work.length > 0);
+  assert.ok(
+    work.every((c) => c.session === "session-1"),
+    "every call carries the session id",
+  );
+
+  assert.ok(calls.some((c) => c.path.includes("/closeSession")), "and it is closed");
+});
+
+test("tracker: the session is closed even when the deal was already there", async () => {
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "PGF"],
+    overview: [[57, "PGF", serial("2026-08-12")]],
+  });
+  await writeDealToTracker(DEAL, { graph, target });
+  assert.ok(calls.some((c) => c.path.includes("/closeSession")), "the early return closes it too");
 });
 
 test("tracker: Template is REPLAYED into the new sheet, because Graph cannot copy one", async () => {
@@ -167,7 +211,9 @@ test("tracker: a deal already in the Overview is skipped, not written twice", as
   const res = await writeDealToTracker(DEAL, { graph, target });
   assert.equal(res.ok, true);
   assert.equal(res.skipped, true);
-  assert.equal(calls.filter((c) => c.method !== "GET").length, 0, "nothing was written");
+  // Opening and closing the session are POSTs but change nothing in the sheets.
+  const mutations = calls.filter((c) => c.method !== "GET" && !c.path.includes("Session"));
+  assert.equal(mutations.length, 0, "nothing was written");
 });
 
 test("tracker: the SAME stock placed on a different date is a new deal, not a duplicate", async () => {

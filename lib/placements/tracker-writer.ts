@@ -261,13 +261,45 @@ export async function writeDealToTracker(
   deal: TrackerDeal,
   deps: TrackerWriteDeps,
 ): Promise<TrackerWriteResult> {
-  const { graph, target } = deps;
+  const { target } = deps;
   const scanToRow = deps.scanToRow ?? 400;
   const item = `/drives/${target.driveId}/items/${target.itemId}/workbook`;
 
   if (!deal.ticker?.trim()) {
     return { ok: false, error: "A deal with no ticker cannot be written to the tracker." };
   }
+
+  // ── Everything happens inside one workbook session ──────────────────────────
+  // Not for speed. Without a session, Graph answers a read issued straight after
+  // a write from a stale snapshot: a live test created a sheet, wrote five cells
+  // and read back five empty ones — while the workbook on disk had them. The
+  // writes were fine; the reads were lying, which is a far worse way to be wrong
+  // than an error, because everything reports success.
+  //
+  // `persistChanges: true` is the difference between editing the file and
+  // editing a scratch copy Graph throws away. Session creation is allowed to
+  // fail — an unsessioned write still lands — so this degrades rather than
+  // blocks, and the duplicate guard is what stops a retry doubling up.
+  const session = await deps.graph(`${item}/createSession`, {
+    method: "POST",
+    body: { persistChanges: true },
+  });
+  const sessionId = session.ok
+    ? ((session.body as { id?: string } | null)?.id ?? null)
+    : null;
+
+  const graph: GraphCall = (path, init = {}) =>
+    deps.graph(path, {
+      ...init,
+      headers: { ...(init.headers ?? {}), ...(sessionId ? { "workbook-session-id": sessionId } : {}) },
+    });
+
+  const closeSession = async () => {
+    if (!sessionId) return;
+    // Best effort: an unclosed session expires on its own, and failing to close
+    // one is not a reason to report a completed write as failed.
+    await graph(`${item}/closeSession`, { method: "POST", body: {} }).catch(() => undefined);
+  };
 
   try {
     // ── Is it already there? ────────────────────────────────────────────────
@@ -401,5 +433,8 @@ export async function writeDealToTracker(
       ok: false,
       error: err instanceof Error ? err.message : "The tracker write failed.",
     };
+  } finally {
+    // Every return above lands here, including the early "already there" one.
+    await closeSession();
   }
 }
