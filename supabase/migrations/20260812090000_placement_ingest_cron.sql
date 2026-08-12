@@ -95,11 +95,46 @@ END
 $do$;
 
 -- ----------------------------------------------------------------------------
+-- If you would rather not paste the URL and secret again
+-- ----------------------------------------------------------------------------
+-- `broker-ingest-a` is already scheduled with both, so the placements job can
+-- borrow its command and swap the path. No secret is typed, no URL is guessed,
+-- and the two jobs cannot drift apart:
+--
+--   DO $borrow$
+--   DECLARE src text;
+--   BEGIN
+--     SELECT command INTO src FROM cron.job WHERE jobname = 'broker-ingest-a' LIMIT 1;
+--     IF src IS NULL THEN
+--       RAISE EXCEPTION 'broker-ingest-a not found — fill in the placeholders above instead.';
+--     END IF;
+--     IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'placement-mail-sync') THEN
+--       PERFORM cron.unschedule('placement-mail-sync');
+--     END IF;
+--     PERFORM cron.schedule(
+--       'placement-mail-sync',
+--       '0 22,23,0,1,2,3,4,5,6,7,8 * * 0-5',
+--       replace(src, '/api/ingest/morning', '/api/ingest/placements')
+--     );
+--   END
+--   $borrow$;
+--
+-- Check the result's url afterwards: if `broker-ingest-a` was itself scheduled
+-- with an unreplaced <APP_URL>, this copies that too.
+--
+-- ----------------------------------------------------------------------------
 -- Checking on it
 -- ----------------------------------------------------------------------------
 --   SELECT jobid, jobname, schedule, active FROM cron.job;
---   SELECT * FROM cron.job_run_details WHERE jobname = 'placement-mail-sync'
---     ORDER BY start_time DESC LIMIT 10;
+--
+--   -- `job_run_details` carries jobid, NOT jobname — the name lives on cron.job
+--   -- and the two have to be joined. Selecting jobname straight off the details
+--   -- table fails with `column "jobname" does not exist`.
+--   SELECT d.start_time, d.status, d.return_message
+--   FROM cron.job_run_details d
+--   JOIN cron.job j USING (jobid)
+--   WHERE j.jobname = 'placement-mail-sync'
+--   ORDER BY d.start_time DESC LIMIT 10;
 --
 --   -- The response body carries the tracker's own report: how many rows were
 --   -- written, how many were already there, and what stopped the rest.
