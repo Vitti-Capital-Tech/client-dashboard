@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { fakeDb } from "../test-support/fake-db.ts";
 import {
   candidateFingerprint,
+  storeCandidates,
   syncPlacementCandidates,
   type CandidateFeedItem,
 } from "./candidates.ts";
@@ -147,6 +148,42 @@ test("candidates: an unreachable feed fails loudly and stores nothing", async ()
   assert.equal(report.ok, false);
   assert.match(report.error ?? "", /ECONNREFUSED/);
   assert.equal(tables.placement_candidates.length, 0);
+});
+
+test("candidates: a PUSHED deal is not new again when the schedule catches up", async () => {
+  // The two ways in must agree about what "new" means. If they did not, the
+  // hourly backstop would rediscover a deal the push already stored, call it
+  // fresh, and the tracker would grow a second tab for one placement.
+  const { db, tables } = fakeDb({ placement_candidates: [] });
+
+  const pushed = await storeCandidates([item()], { db });
+  assert.equal(pushed.fresh, 1, "the push saw it first");
+
+  const later = await syncPlacementCandidates({
+    db,
+    fetchJson: fakeFeed({ "2026-08-11": [item()] }).fetchJson,
+    apiBase: "http://feed",
+  });
+
+  assert.equal(later.fresh, 0, "the schedule finds it already stored");
+  assert.deepEqual(later.freshItems, [], "so nothing is handed to the tracker twice");
+  assert.equal(tables.placement_candidates.length, 1);
+});
+
+test("candidates: a push carrying two deals at once stores both", async () => {
+  const { db, tables } = fakeDb({ placement_candidates: [] });
+  const res = await storeCandidates([item(), item({ ticker: "KNI", subject: "KNI raise" })], { db });
+
+  assert.equal(res.fresh, 2);
+  assert.equal(tables.placement_candidates.length, 2);
+});
+
+test("candidates: a pushed deal with no ticker is dropped, not stored", async () => {
+  const { db, tables } = fakeDb({ placement_candidates: [] });
+  const res = await storeCandidates([item({ ticker: "   " }), item()], { db });
+
+  assert.equal(res.seen, 1, "the empty one is not even counted as seen");
+  assert.equal(tables.placement_candidates.length, 1);
 });
 
 test("candidates: the fingerprint ignores the summary but not the deal", async () => {

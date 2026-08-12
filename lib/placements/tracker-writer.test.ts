@@ -35,6 +35,16 @@ const DEAL = {
   addOns: "1:2 free listed options",
 };
 
+/**
+ * Two rows of Template, shaped as Graph returns them: literals and formulas in
+ * one `formulas` array, empty cells as "".
+ */
+const TEMPLATE_FORMULAS = [
+  ["ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW", "", "Industry", "ASX CODE"],
+  ["Date", "", "", ""],
+  ["2 Tranche", "yes", "Ratio", "=D6/C6"],
+];
+
 /** A Graph that records calls and answers from a literal workbook. */
 function fakeGraph(
   workbook: { sheets: string[]; overview: (string | number)[][] },
@@ -57,10 +67,18 @@ function fakeGraph(
     if (method === "GET" && path.includes("/worksheets?")) {
       return { ok: true, status: 200, body: { value: workbook.sheets.map((name) => ({ name })) } };
     }
+    if (method === "GET" && path.includes("usedRange")) {
+      // Graph hands back the address and the formulas together.
+      return {
+        ok: true,
+        status: 200,
+        body: { address: "Template!A1:P30", formulas: TEMPLATE_FORMULAS },
+      };
+    }
     if (method === "GET" && path.includes("range(address=")) {
       return { ok: true, status: 200, body: { values: workbook.overview } };
     }
-    if (method === "POST" && path.includes("/copy")) {
+    if (method === "POST" && path.includes("/worksheets/add")) {
       const name = (init.body as { name: string }).name;
       workbook.sheets.push(name);
       return { ok: true, status: 201, body: { name } };
@@ -92,10 +110,31 @@ test("tracker: the tab is created BEFORE the Overview row that points at it", as
   const res = await writeDealToTracker(DEAL, { graph, target });
   assert.equal(res.ok, true);
 
-  const copyAt = calls.findIndex((c) => c.path.includes("/copy"));
+  const addAt = calls.findIndex((c) => c.path.includes("/worksheets/add"));
   const rowAt = calls.findIndex((c) => c.method === "PATCH" && c.path.includes("2026%20Overview"));
-  assert.ok(copyAt >= 0 && rowAt >= 0);
-  assert.ok(copyAt < rowAt, "the tab must exist first");
+  assert.ok(addAt >= 0 && rowAt >= 0);
+  assert.ok(addAt < rowAt, "the tab must exist first");
+});
+
+test("tracker: Template is REPLAYED into the new sheet, because Graph cannot copy one", async () => {
+  // `worksheets/{id}/copy` answers 400 "Resource not found for the segment
+  // 'copy'" on both v1.0 and beta, and so does `range/copyFrom` — probed against
+  // the real workbook with `tables/add` as a control. So a tab is an added sheet
+  // plus Template's own used range written into it at the same addresses, where
+  // its sheet-relative formulas stay correct.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const seed = calls.find((c) => c.method === "PATCH" && c.path.includes("A1:P30"));
+  assert.ok(seed, "Template's shape is written in one call");
+  assert.deepEqual((seed!.body as { formulas: unknown[][] }).formulas, TEMPLATE_FORMULAS);
+
+  // The address comes from Template's own usedRange, so extending Template does
+  // not silently start truncating new tabs.
+  assert.ok(
+    calls.some((c) => c.method === "GET" && c.path.includes("usedRange")),
+    "Template's extent is read, not hardcoded",
+  );
 });
 
 test("tracker: a new deal lands on the first empty row, continuing the counter", async () => {
@@ -147,7 +186,10 @@ test("tracker: only the terms the mail carried are written to the tab", async ()
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
   await writeDealToTracker(DEAL, { graph, target });
 
-  const patches = calls.filter((c) => c.method === "PATCH" && !c.path.includes("Overview"));
+  // The Template seed is a PATCH too; the deal's own cells are the rest.
+  const patches = calls.filter(
+    (c) => c.method === "PATCH" && !c.path.includes("Overview") && !c.path.includes("A1:P30"),
+  );
   const written = new Map(
     patches.map((c) => [
       /address='([^']+)'/.exec(c.path)![1],
@@ -174,7 +216,10 @@ test("tracker: a deal with only a ticker still writes a usable tab", async () =>
 
   assert.equal(res.ok, true);
   assert.equal(res.sheet, "ABC");
-  const patches = calls.filter((c) => c.method === "PATCH" && !c.path.includes("Overview"));
+  // The Template seed is a PATCH too; the deal's own cells are the rest.
+  const patches = calls.filter(
+    (c) => c.method === "PATCH" && !c.path.includes("Overview") && !c.path.includes("A1:P30"),
+  );
   assert.equal(patches.length, 1, "just the ASX code");
 });
 
@@ -194,13 +239,15 @@ test("tracker: a failed row write reports the tab that was left behind", async (
   assert.match(res.hint ?? "", /by hand|retry/);
 });
 
-test("tracker: a 403 on the copy names the missing permission", async () => {
+test("tracker: a 403 creating the sheet names the missing permission", async () => {
   // The single most likely failure in production, and the one whose fix is a
-  // consent screen rather than a code change.
+  // consent screen rather than a code change. Graph's own words are "Contact the
+  // workbook owner to request edit access", which does not tell a developer
+  // which application permission to grant.
   const { graph } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW }, {
-    path: /copy/,
+    path: /worksheets\/add/,
     status: 403,
-    message: "Access denied",
+    message: "Contact the workbook owner to request edit access.",
   });
 
   const res = await writeDealToTracker(DEAL, { graph, target });
@@ -342,9 +389,16 @@ test("tracker sync: a missing permission is reported once, not once per deal", (
       if (path.includes("/worksheets?")) {
         return { ok: true, status: 200, body: { value: [{ name: "Template" }] } };
       }
+      if (path.includes("usedRange")) {
+        return { ok: true, status: 200, body: { address: "Template!A1:P30", formulas: [["x"]] } };
+      }
       return { ok: true, status: 200, body: { values: [["", "", ""]] } };
     }
-    return { ok: false, status: 403, body: { error: { message: "Access denied" } } };
+    return {
+      ok: false,
+      status: 403,
+      body: { error: { message: "Contact the workbook owner to request edit access." } },
+    };
   };
 
   return syncTrackerRows(

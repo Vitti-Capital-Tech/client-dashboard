@@ -21,9 +21,29 @@ import {
  * change two, and every feature the library does not model — and there are
  * several — would be quietly dropped from a file people work in daily.
  *
- * Graph's Excel API edits the file in place instead: copy `Template`, patch five
- * cells, append one row. Nothing else in the workbook is touched, and a failure
- * halfway leaves the sheets it did not reach exactly as they were.
+ * Graph's Excel API edits the file in place instead: add a sheet, replay
+ * `Template` into it, patch five cells, append one row. Nothing else in the
+ * workbook is touched, and a failure halfway leaves the sheets it did not reach
+ * exactly as they were.
+ *
+ * ── Why Template is REPLAYED and not copied ──────────────────────────────────
+ * Because Graph cannot copy a worksheet. `POST /worksheets/{id}/copy` answers
+ * `400 Resource not found for the segment 'copy'` on v1.0 AND beta, and so does
+ * `range/copyFrom` — both were probed against this workbook, with `tables/add`
+ * as a control to prove the probe distinguishes "missing endpoint" (400) from
+ * "needs write access" (403).
+ *
+ * So a new tab is `worksheets/add` followed by writing Template's own used range
+ * into it. Its formulas are sheet-relative (`=D6/C6`, `=SUM(C7:C21)`) or point at
+ * `Index`, so they land correct at the same addresses.
+ *
+ * **What this does not carry: formatting.** Fills, borders and column widths stay
+ * behind, including the yellow highlighting the desk's "ONLY EDIT FIELDS
+ * HIGHLIGHTED IN YELLOW" convention depends on. There is no bulk per-cell format
+ * read to replay from — `range/cellProperties` does not exist here either — and
+ * guessing which cells are meant to be yellow would mark the wrong ones editable,
+ * which is worse than plain. A new tab therefore computes correctly and looks
+ * unstyled until someone formats it.
  *
  * ── Order matters ────────────────────────────────────────────────────────────
  * The tab is created BEFORE the Overview row, because every cell in that row is
@@ -148,6 +168,13 @@ export function trackerUrls(configured: string | undefined): string[] {
     .split(/[,;\n]/)
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+/** `Template!A1:P30` → `A1:P30`, for writing the same shape on another sheet. */
+function localAddress(address: string | undefined): string | null {
+  if (!address) return null;
+  const local = address.includes("!") ? address.slice(address.lastIndexOf("!") + 1) : address;
+  return /^[A-Z]+\d+(:[A-Z]+\d+)?$/i.test(local) ? local : null;
 }
 
 function graphError(body: unknown): string {
@@ -277,15 +304,50 @@ export async function writeDealToTracker(
     }
 
     // ── The tab, before the row that points at it ───────────────────────────
-    const copied = await graph(
-      `${item}/worksheets('${encodeURIComponent(TEMPLATE_SHEET)}')/copy`,
-      { method: "POST", body: { name: sheet, positionType: "End" } },
+    // Template's used range is read rather than hardcoded, so a tab stays a
+    // faithful copy if the desk ever extends it. `usedRange` hands back the
+    // address and the formulas together, which is one call for both.
+    const template = await graph(
+      `${item}/worksheets('${encodeURIComponent(
+        TEMPLATE_SHEET,
+      )}')/usedRange?$select=address,formulas`,
     );
-    if (!copied.ok) {
+    if (!template.ok) {
       return {
         ok: false,
-        error: `Could not copy ${TEMPLATE_SHEET} to "${sheet}": ${graphError(copied.body)}`,
-        hint: permissionHint(copied.status),
+        error: `Could not read ${TEMPLATE_SHEET}: ${graphError(template.body)}`,
+      };
+    }
+    const blueprint = template.body as { address?: string; formulas?: unknown[][] };
+    const shape = localAddress(blueprint.address);
+    if (!shape || !blueprint.formulas?.length) {
+      return { ok: false, error: `${TEMPLATE_SHEET} appears to be empty.` };
+    }
+
+    const added = await graph(`${item}/worksheets/add`, {
+      method: "POST",
+      body: { name: sheet },
+    });
+    if (!added.ok) {
+      return {
+        ok: false,
+        error: `Could not create the sheet "${sheet}": ${graphError(added.body)}`,
+        hint: permissionHint(added.status),
+      };
+    }
+
+    const seeded = await graph(
+      `${item}/worksheets('${encodeURIComponent(sheet)}')/range(address='${shape}')`,
+      { method: "PATCH", body: { formulas: blueprint.formulas } },
+    );
+    if (!seeded.ok) {
+      return {
+        ok: false,
+        sheet,
+        error: `Sheet "${sheet}" was created but ${TEMPLATE_SHEET} could not be written into it: ${graphError(seeded.body)}`,
+        hint:
+          permissionHint(seeded.status) ??
+          `Delete the empty "${sheet}" tab and retry — it is not yet on the Overview.`,
       };
     }
 

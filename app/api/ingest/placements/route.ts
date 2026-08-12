@@ -49,15 +49,23 @@ export async function GET(request: Request) {
   const report = await syncPlacementCandidates({ days });
 
   // The tracker write runs on what actually arrived, and only after the
-  // candidates are safely stored. It is reported beside the sync rather than
-  // folded into it: a workbook that cannot be written is worth a loud line in
-  // the cron log, but it is not a reason to call the mail sync a failure — the
-  // deals are in the desk's inbox either way.
+  // candidates are safely stored.
   const tracker = await writeFreshDealsToTracker(report.freshItems);
+
+  // A BLOCKED tracker fails the run — a missing permission or a workbook that
+  // cannot be found is the mechanism being broken, and the whole point of this
+  // job is that nobody is watching it. Green cron runs while nothing is written
+  // for three weeks is the exact failure this codebase already refuses to ship
+  // elsewhere ("could not reach the feed" must not read as "no new deals").
+  //
+  // One deal failing is different and stays a 200: it is reported, and the next
+  // run retries it, because the candidate is stored and the workbook check will
+  // still say it is missing.
+  const ok = report.ok && tracker?.ok !== false;
 
   return NextResponse.json(
     { ...report, tracker, notes: [...report.notes, ...(tracker?.notes ?? [])] },
-    { status: report.ok ? 200 : 500 },
+    { status: ok ? 200 : 500 },
   );
 }
 
