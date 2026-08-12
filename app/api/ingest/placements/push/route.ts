@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { storeCandidates, type CandidateFeedItem } from "@/lib/placements/candidates";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getMicrosoftAccessToken } from "@/lib/remote-sheets";
-import { syncTrackerRows } from "@/lib/placements/tracker-sync";
-import { graphCaller, resolveTrackerTarget, trackerUrls } from "@/lib/placements/tracker-writer";
+import { writeFreshDealsToTracker } from "@/lib/placements/ingest-run";
 
 /**
  * The instant path: upstream hands us a deal the moment it classifies one.
@@ -102,7 +100,7 @@ export async function POST(request: Request) {
   const db = createAdminClient();
   const { seen, fresh, freshItems } = await storeCandidates(items, { db });
 
-  const tracker = await writeToTracker(freshItems);
+  const tracker = await writeFreshDealsToTracker(freshItems);
   const ok = tracker?.ok !== false;
 
   return NextResponse.json(
@@ -115,18 +113,3 @@ export async function POST(request: Request) {
   );
 }
 
-async function writeToTracker(fresh: CandidateFeedItem[]) {
-  if (fresh.length === 0) return null;
-
-  const urls = trackerUrls(process.env.PLACEMENT_TRACKER_URL);
-  if (urls.length === 0) return null;
-
-  const token = await getMicrosoftAccessToken();
-  if (!token) return null;
-
-  const graph = graphCaller(token);
-  return syncTrackerRows(fresh, {
-    graph,
-    target: (year) => resolveTrackerTarget(urls, year, graph),
-  });
-}

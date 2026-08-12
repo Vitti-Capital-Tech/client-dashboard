@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { syncPlacementCandidates } from "@/lib/placements/candidates";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
 import { getMicrosoftAccessToken } from "@/lib/remote-sheets";
-import { syncTrackerRows } from "@/lib/placements/tracker-sync";
-import { graphCaller, resolveTrackerTarget, trackerUrls } from "@/lib/placements/tracker-writer";
+import { runPlacementIngest } from "@/lib/placements/ingest-run";
+import { ensureMailSubscription } from "@/lib/placements/mail-hook";
+import { graphCaller } from "@/lib/placements/tracker-writer";
 
 /**
  * Cron entry point for the deal-mail sync.
@@ -40,58 +40,71 @@ export const dynamic = "force-dynamic";
  */
 export const maxDuration = 60;
 
+
 export async function GET(request: Request) {
   if (!authorisedCronRequest(request)) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
   const days = Number(new URL(request.url).searchParams.get("days")) || undefined;
-  const report = await syncPlacementCandidates({ days });
 
-  // The tracker write runs on what actually arrived, and only after the
-  // candidates are safely stored.
-  const tracker = await writeFreshDealsToTracker(report.freshItems);
+  // The same ingest the mail webhook runs — see `ingest-run.ts` for why it is one
+  // function rather than two that drift.
+  const { ok: ingestOk, candidates, tracker } = await runPlacementIngest({ days });
+
+  // Keeping the Graph mail subscription alive rides along here rather than on a
+  // cron of its own. A mail subscription expires after ~3 days whatever happens,
+  // so upkeep is not optional, and an hourly caller renewing with 12 hours to
+  // spare cannot be the reason one lapses.
+  const subscription = await keepMailHookAlive();
 
   // A BLOCKED tracker fails the run — a missing permission or a workbook that
-  // cannot be found is the mechanism being broken, and the whole point of this
-  // job is that nobody is watching it. Green cron runs while nothing is written
-  // for three weeks is the exact failure this codebase already refuses to ship
-  // elsewhere ("could not reach the feed" must not read as "no new deals").
+  // cannot be found is the mechanism being broken, and the whole point of this job
+  // is that nobody is watching it. Green cron runs while nothing is written for
+  // three weeks is the exact failure this codebase refuses to ship elsewhere
+  // ("could not reach the feed" must not read as "no new deals").
   //
   // One deal failing is different and stays a 200: it is reported, and the next
   // run retries it, because the candidate is stored and the workbook check will
   // still say it is missing.
-  const ok = report.ok && tracker?.ok !== false;
+  //
+  // A subscription that cannot be established fails the run too. Without it the
+  // instant path is dead and only this hourly job is left — which still works, and
+  // is exactly why the failure has to be loud rather than inferred from latency.
+  const ok = ingestOk && subscription.ok;
 
   return NextResponse.json(
-    { ...report, tracker, notes: [...report.notes, ...(tracker?.notes ?? [])] },
+    {
+      ...candidates,
+      tracker,
+      subscription,
+      notes: [
+        ...candidates.notes,
+        ...(tracker?.notes ?? []),
+        `Mail hook: ${subscription.action}${subscription.detail ? ` — ${subscription.detail}` : ""}.`,
+      ],
+    },
     { status: ok ? 200 : 500 },
   );
 }
 
-/**
- * Fills the Placement Tracker for every deal this run brought in.
- *
- * Returns null when there is nothing to do or nothing to do it with — an absent
- * `PLACEMENT_TRACKER_URL` or absent Graph credentials is a deployment without
- * the tracker wired up, not an error to raise every ten minutes.
- */
-async function writeFreshDealsToTracker(fresh: Parameters<typeof syncTrackerRows>[0]) {
-  if (fresh.length === 0) return null;
+/** Cron issues GET; POST is here so the desk can trigger a catch-up run. */
+export const POST = GET;
 
-  const urls = trackerUrls(process.env.PLACEMENT_TRACKER_URL);
-  if (urls.length === 0) return null;
+async function keepMailHookAlive() {
+  const mailbox = process.env.BROKER_MAILBOX?.trim();
+  if (!mailbox) {
+    return { ok: true as const, action: "skipped" as const, detail: "No BROKER_MAILBOX set." };
+  }
 
   const token = await getMicrosoftAccessToken();
-  if (!token) return null;
+  if (!token) {
+    return {
+      ok: true as const,
+      action: "skipped" as const,
+      detail: "No Graph credentials, so there is no subscription to keep.",
+    };
+  }
 
-  const graph = graphCaller(token);
-  return syncTrackerRows(fresh, {
-    graph,
-    target: (year) => resolveTrackerTarget(urls, year, graph),
-  });
+  return ensureMailSubscription({ graph: graphCaller(token), mailbox });
 }
-
-// Cron issues GET; POST is here so the desk can trigger a catch-up with the
-// same secret without pretending to be cron.
-export const POST = GET;
