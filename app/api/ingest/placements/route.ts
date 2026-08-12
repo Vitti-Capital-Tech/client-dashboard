@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { syncPlacementCandidates } from "@/lib/placements/candidates";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
+import { getMicrosoftAccessToken } from "@/lib/remote-sheets";
+import { syncTrackerRows } from "@/lib/placements/tracker-sync";
+import { graphCaller, resolveTrackerTarget, trackerUrls } from "@/lib/placements/tracker-writer";
 
 /**
  * Cron entry point for the deal-mail sync.
@@ -45,9 +48,40 @@ export async function GET(request: Request) {
   const days = Number(new URL(request.url).searchParams.get("days")) || undefined;
   const report = await syncPlacementCandidates({ days });
 
-  // Non-200 on failure so the platform's cron monitoring shows it as failed
-  // rather than as a quiet success with sad JSON inside.
-  return NextResponse.json(report, { status: report.ok ? 200 : 500 });
+  // The tracker write runs on what actually arrived, and only after the
+  // candidates are safely stored. It is reported beside the sync rather than
+  // folded into it: a workbook that cannot be written is worth a loud line in
+  // the cron log, but it is not a reason to call the mail sync a failure — the
+  // deals are in the desk's inbox either way.
+  const tracker = await writeFreshDealsToTracker(report.freshItems);
+
+  return NextResponse.json(
+    { ...report, tracker, notes: [...report.notes, ...(tracker?.notes ?? [])] },
+    { status: report.ok ? 200 : 500 },
+  );
+}
+
+/**
+ * Fills the Placement Tracker for every deal this run brought in.
+ *
+ * Returns null when there is nothing to do or nothing to do it with — an absent
+ * `PLACEMENT_TRACKER_URL` or absent Graph credentials is a deployment without
+ * the tracker wired up, not an error to raise every ten minutes.
+ */
+async function writeFreshDealsToTracker(fresh: Parameters<typeof syncTrackerRows>[0]) {
+  if (fresh.length === 0) return null;
+
+  const urls = trackerUrls(process.env.PLACEMENT_TRACKER_URL);
+  if (urls.length === 0) return null;
+
+  const token = await getMicrosoftAccessToken();
+  if (!token) return null;
+
+  const graph = graphCaller(token);
+  return syncTrackerRows(fresh, {
+    graph,
+    target: (year) => resolveTrackerTarget(urls, year, graph),
+  });
 }
 
 // Cron issues GET; POST is here so the desk can trigger a catch-up with the
