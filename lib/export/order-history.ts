@@ -107,6 +107,8 @@ export type PnlSummaryRow = {
   isUnlistedOption?: boolean;
   isDbOpenValued?: boolean;
   isDbOnly?: boolean;
+  /** A still-held parcel sits on top of a realised part-sale. */
+  isPartialExit?: boolean;
   openQty?: number;
 
   /**
@@ -252,6 +254,50 @@ export function buildPnlSummary(
   return rows.sort((a, b) => b.pnl - a.pnl || a.ticker.localeCompare(b.ticker));
 }
 
+/**
+ * Whether the position behind a row is still held.
+ *
+ * A word, not a `Yes`/`No`. The flag could only ever answer "is any of this
+ * still open?", which on an OPTION line is barely a question — a free grant is
+ * never bought, so "Open Position: No" read as though the client had disposed
+ * of something they still hold. Naming the state instead means the same cell
+ * says something true for an equity, a listed series and a modelled grant alike.
+ */
+export type PositionStatus = "Open" | "Partly open" | "Closed" | "Unknown";
+
+export function positionStatus(r: PnlSummaryRow): PositionStatus {
+  // Ahead of everything: this row's own figures are blank, so no claim about
+  // what is left of the position can be true — including "Closed", which would
+  // report a disposal nobody has evidence of.
+  if (r.excludedFromTotal) return "Unknown";
+
+  // A modelled grant was never bought and cannot be sold; it is an outstanding
+  // entitlement for as long as the row exists.
+  if (r.isUnlistedOption) return "Open";
+
+  // The row exists ONLY because the holdings snapshot carries it — so it is
+  // held, by definition, whatever the ledger does or does not say.
+  if (r.isDbOnly) return "Open";
+
+  // Nothing was sold: the whole "sell side" is this parcel marked to the
+  // snapshot. Checked BEFORE the quantities, because valuing an open parcel
+  // sets both legs from the same held count — `openQty` is 0 on exactly the
+  // rows that are most open, and reading it alone reported them as Closed.
+  if (r.isDbOpenValued) return "Open";
+
+  if (r.isPartialExit || r.type.toLowerCase().startsWith("partial")) return "Partly open";
+
+  if ((r.openQty ?? 0) > 0) return "Open";
+  // The computed path has no flags, only this — see `buildPnlSummary`.
+  if (r.openPosition) return "Open";
+
+  return "Closed";
+}
+
+/** Amber vs green, and the on-screen fills: anything not fully exited is open. */
+export const isStillHeld = (s: PositionStatus): boolean =>
+  s === "Open" || s === "Partly open";
+
 export function grandTotal(rows: PnlSummaryRow[]) {
   // A row whose cost is unknown contributes nothing to any column, not even its
   // real sale proceeds: showing proceeds against a blank cost would make the
@@ -277,7 +323,7 @@ export const SUMMARY_HEADERS = [
   "Buy Price",
   "Sell Price / Current Price",
   "PnL",
-  "Open Positions",
+  "Position",
   "Type",
 ] as const;
 
@@ -314,7 +360,7 @@ export function buildPnlSummaryCsv(rows: PnlSummaryRow[]): string {
         n2(r.buyPrice),
         n2(r.sellOrCurrent),
         n2(r.pnl),
-        r.openPosition ? "Yes" : "No",
+        positionStatus(r),
         r.type,
       ]
         .map(csvField)

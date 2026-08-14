@@ -163,6 +163,11 @@ export function storedToSummaryRows(
       isUnlistedOption: r.isUnlistedOption,
       isDbOpenValued: r.isDbOpenValued,
       isDbOnly: r.isDbOnly,
+      // Both feed `positionStatus`, which is what the exports' Position column
+      // and the row fills read. Valuing an open parcel off the snapshot sets
+      // both legs from the same held count, so `openQty` alone cannot tell a
+      // still-held position from an exited one — these flags can.
+      isPartialExit: r.isPartialExit,
       openQty: eff.openQty,
       // Only a modelled option carries its own terms. Left undefined elsewhere
       // so the Options tab can tell "no strike on this row" from "strike of 0".

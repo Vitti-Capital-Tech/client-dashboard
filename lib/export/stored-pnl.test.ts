@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { storedToSummaryRows } from "./stored-pnl.ts";
-import { grandTotal, type PnlOverride } from "./order-history.ts";
+import { grandTotal, positionStatus, type PnlOverride } from "./order-history.ts";
 import type { StoredPnlRow } from "../data/pnl.ts";
 
 /**
@@ -322,6 +322,47 @@ test("stored: status precedence matches the calculator's", () => {
   assert.equal(status({ isMatched: false, isOption: true }), "Option");
   assert.equal(status({ isMatched: false, openQty: 500 }), "Open");
   assert.equal(status({ isMatched: false }), "Unmatched");
+});
+
+test("stored: the flags the Position column reads survive the mapping", () => {
+  // `positionStatus` cannot tell a still-held parcel from an exited one on the
+  // quantities alone — valuing an open parcel sets both legs from the same held
+  // count. It reads these flags instead, so they have to arrive.
+  const status = (over: Partial<StoredPnlRow>) =>
+    positionStatus(storedToSummaryRows([row(over)])[0]);
+
+  assert.equal(status({ isDbOpenValued: true }), "Open", "nothing was sold");
+  assert.equal(status({ isPartialExit: true, isMatched: false }), "Partly open");
+  assert.equal(status({ isDbOnly: true }), "Open", "held, with no ledger behind it");
+  assert.equal(status({}), "Closed", "1,000 bought, 1,000 sold, no parcel left");
+});
+
+test("stored: an option says whether the position is still open", () => {
+  // The point of naming the state: a free grant is never bought, so the old
+  // Yes/No flag reported it as a disposal that never happened.
+  const status = (over: Partial<StoredPnlRow>) =>
+    positionStatus(storedToSummaryRows([row(over)])[0]);
+
+  assert.equal(
+    status({ ticker: "GRV-UO", isUnlistedOption: true, isOption: true, buyQty: 0, sellQty: 50_000 }),
+    "Open",
+    "a modelled grant is outstanding for as long as the row exists",
+  );
+  assert.equal(
+    status({ ticker: "EOSO", isOption: true, isDbOnly: true }),
+    "Open",
+    "a listed series carried by the holdings snapshot is held",
+  );
+  assert.equal(
+    status({ ticker: "EOSO", isOption: true, buyQty: 10_000, sellQty: 10_000, openQty: 0 }),
+    "Closed",
+    "a listed series traded all the way out",
+  );
+  assert.equal(
+    status({ ticker: "EOSO", isOption: true, buyQty: 10_000, sellQty: 4_000, openQty: 6_000, isMatched: false }),
+    "Open",
+    "6,000 contracts still held",
+  );
 });
 
 test("stored: rows are ordered biggest result first", () => {

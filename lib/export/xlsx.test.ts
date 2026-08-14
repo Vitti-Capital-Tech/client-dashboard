@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import ExcelJS from "exceljs";
 
 import { buildPnlSummaryWorkbook, XLSX_FILLS } from "./xlsx.ts";
-import { buildPnlSummary, type ExportGroup, type HeldPosition } from "./order-history.ts";
+import {
+  buildPnlSummary,
+  isStillHeld,
+  positionStatus,
+  type ExportGroup,
+  type HeldPosition,
+} from "./order-history.ts";
 
 /**
  * Round-trip tests: generate the workbook, read it back with ExcelJS, and
@@ -78,22 +84,37 @@ test("xlsx: it is a real workbook with the expected sheet and headers", async ()
     "Buy Price",
     "Sell Price / Current Price",
     "PnL",
-    "Open Positions",
+    "Position",
     "Type",
   ]);
 });
 
-test("xlsx: open rows are amber, exited rows green", async () => {
+test("xlsx: the Position cell names the state and the fill agrees with it", async () => {
+  // One call decides both, so a line can never read `Closed` on an amber row.
   const { ws, rows } = await readBack();
+  const POSITION_COL = 8;
 
   for (const [i, r] of rows.entries()) {
-    const expected = r.openPosition ? XLSX_FILLS.FILL_OPEN : XLSX_FILLS.FILL_CLOSED;
-    assert.equal(
-      fillOf(ws, i + 2),
-      expected,
-      `${r.ticker} (open=${r.openPosition}) should be ${expected}`,
-    );
+    const status = positionStatus(r);
+    const cell = ws.getRow(i + 2).getCell(POSITION_COL).value;
+    assert.equal(cell, status, `${r.ticker} Position cell`);
+
+    const expected =
+      status === "Unknown"
+        ? XLSX_FILLS.FILL_UNKNOWN
+        : isStillHeld(status)
+        ? XLSX_FILLS.FILL_OPEN
+        : XLSX_FILLS.FILL_CLOSED;
+    assert.equal(fillOf(ws, i + 2), expected, `${r.ticker} (${status}) fill`);
   }
+
+  // And the sample really does exercise more than one state. `Unknown` needs a
+  // resolved-buy-side flag the computed path does not produce, so it is covered
+  // against the stored rows in order-history.test.ts instead.
+  assert.deepEqual(
+    [...new Set(rows.map(positionStatus))].sort(),
+    ["Closed", "Partly open"],
+  );
 });
 
 test("xlsx: a flagged row carries the warning ink on top of its fill", async () => {

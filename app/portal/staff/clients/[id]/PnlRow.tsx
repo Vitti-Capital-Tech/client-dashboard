@@ -2,7 +2,11 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PnlSummaryRow } from "@/lib/export/order-history";
+import {
+  isStillHeld,
+  positionStatus,
+  type PnlSummaryRow,
+} from "@/lib/export/order-history";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
 
 /**
@@ -117,8 +121,23 @@ export function PnlRow({
     if (e.key === "Escape") onClose();
   };
 
-  // Amber = still open, green = fully exited — the same rule as the .xlsx.
-  const fill = row.openPosition ? "bg-amber-bg/45" : "bg-green-bg/45";
+  // Amber = still held, green = fully exited, neutral = the buy side could not
+  // be resolved so nothing can be said. The SAME call the .xlsx makes, so the
+  // screen and the file cannot paint one row two different colours.
+  const status = positionStatus(row);
+  const fill =
+    status === "Unknown"
+      ? "bg-paper-2/60"
+      : isStillHeld(status)
+      ? "bg-amber-bg/45"
+      : "bg-green-bg/45";
+
+  const statusPill =
+    status === "Unknown"
+      ? "bg-paper-2 text-mut"
+      : isStillHeld(status)
+      ? "bg-amber-bg text-amber-d"
+      : "bg-green-bg text-green-d";
 
   // A dotted underline marks a value set by hand, with the computed figure in
   // the tooltip so the change stays inspectable without opening the editor.
@@ -173,9 +192,9 @@ export function PnlRow({
         </td>
         <td className="px-4.5 py-3 text-center">
           <span
-            className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${row.openPosition ? "bg-amber-bg text-amber-d" : "bg-green-bg text-green-d"}`}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap ${statusPill}`}
           >
-            {row.openPosition ? "Yes" : "No"}
+            {status}
           </span>
         </td>
         <td className={`px-4.5 py-3 text-[11px] ${row.flagged ? "text-loss-d font-semibold" : "text-mut"}`}>

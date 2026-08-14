@@ -269,7 +269,7 @@ test("csv: headers are exactly the requested columns", () => {
     "Buy Price",
     "Sell Price / Current Price",
     "PnL",
-    "Open Positions",
+    "Position",
     "Type",
   ]);
 });
@@ -329,10 +329,95 @@ test("csv: a holding with no ledger history reports zero quantities", () => {
   assert.equal(rows[1][8], "Open - no ledger history");
 });
 
-test("csv: Open Positions is Yes/No", () => {
+test("csv: Position names the state rather than answering Yes/No", () => {
+  // A flag could only ever say "is any of this still open?", which on an option
+  // line is barely a question — a free grant is never bought, so "No" read as a
+  // disposal that never happened.
   const rows = parse(buildPnlSummaryCsv(SAMPLE()));
-  const vals = rows.slice(1, -1).map((r) => r[7]);
-  assert.deepEqual([...new Set(vals)].sort(), ["No", "Yes"]);
+  const byTicker = new Map(rows.slice(1, -1).map((r) => [r[0], r[7]]));
+
+  assert.equal(byTicker.get("LDX"), "Closed", "1,000 bought, 1,000 sold, none held");
+  assert.equal(byTicker.get("ACW"), "Partly open", "300 bought, 100 sold, 200 still held");
+});
+
+test("csv: a still-held parcel valued off the snapshot reads Open, not Closed", () => {
+  // The trap: valuing an open parcel sets BOTH legs from the same held count,
+  // so `openQty` is 0 on exactly the rows that are most open. Reading the
+  // quantities alone reported a position the client still holds as exited —
+  // and painted it green in the .xlsx.
+  const rows = parse(
+    buildPnlSummaryCsv([
+      {
+        ticker: "EOS",
+        name: "ELECTRO OPTIC",
+        buyQty: 10_000,
+        sellQty: 10_000,
+        buyPrice: 5000,
+        sellOrCurrent: 8000,
+        pnl: 3000,
+        openPosition: false,
+        type: "Matched",
+        flagged: false,
+        edited: false,
+        overridden: {
+          buyQty: false,
+          sellQty: false,
+          buyPrice: false,
+          sellOrCurrent: false,
+        },
+        note: null,
+        computed: {
+          buyQty: 10_000,
+          sellQty: 10_000,
+          buyPrice: 5000,
+          sellOrCurrent: 8000,
+          pnl: 3000,
+        },
+        isDbOpenValued: true,
+        openQty: 0,
+      },
+    ]),
+  );
+
+  assert.equal(rows[1][7], "Open");
+});
+
+test("csv: a blank buy side says Unknown rather than claiming a disposal", () => {
+  const rows = parse(
+    buildPnlSummaryCsv([
+      {
+        ticker: "EUR",
+        name: "EUROPEAN LITHIUM",
+        buyQty: 0,
+        sellQty: 115_385,
+        buyPrice: 0,
+        sellOrCurrent: 40_000,
+        pnl: 40_000,
+        openPosition: false,
+        type: "Buy Side Unknown",
+        flagged: true,
+        excludedFromTotal: true,
+        edited: false,
+        overridden: {
+          buyQty: false,
+          sellQty: false,
+          buyPrice: false,
+          sellOrCurrent: false,
+        },
+        note: null,
+        computed: {
+          buyQty: 0,
+          sellQty: 115_385,
+          buyPrice: 0,
+          sellOrCurrent: 40_000,
+          pnl: 40_000,
+        },
+        openQty: 0,
+      },
+    ]),
+  );
+
+  assert.equal(rows[1][7], "Unknown");
 });
 
 test("csv: a company name with a comma keeps the column count", () => {
