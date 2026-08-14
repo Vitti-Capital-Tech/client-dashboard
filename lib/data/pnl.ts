@@ -17,6 +17,35 @@ import { pagedSelect } from "./paged";
  * account filter as everything else on the page.
  */
 
+/**
+ * The part of a modelled option row's audit payload the UI actually asks
+ * questions of.
+ *
+ * `pnl_summary.unlisted_option` stores every input behind a Black-Scholes price
+ * — volatility, rate, dividend yield, the lot. Only strike and spot decide
+ * MONEYNESS, so only those are lifted into a named shape; the rest stays in the
+ * jsonb where the audit trail wants it. Every field is nullable because the
+ * column is nullable and its contents were written by an earlier engine
+ * version: a row stored before a field existed must read as "not known" rather
+ * than crash the register.
+ */
+export type StoredUnlistedOption = {
+  /** Exercise price. */
+  strike: number | null;
+  /** Underlying spot used at valuation time. */
+  spot: number | null;
+  /** `yahoo` / `asx` are live; `database` is the last holdings snapshot. */
+  spotSource: string | null;
+  expiry: string | null;
+  /** The expiry was DERIVED from the issue date, not read off the tracker. */
+  expiryAssumed: boolean;
+  /** Value of ONE option, by `pricingMethod`. */
+  optionPrice: number | null;
+  pricingMethod: string | null;
+  /** Verbatim tranche text from the tracker, e.g. "1:3 @ $0.14 exp 30/06/27". */
+  raw: string | null;
+};
+
 /** One stored P&L row, at account × ticker grain. */
 export type StoredPnlRow = {
   accountId: string;
@@ -48,6 +77,9 @@ export type StoredPnlRow = {
   placementYearNote: string | null;
   /** The buy side is genuinely unknown — this row is left out of the total. */
   buySideUnknown: boolean;
+
+  /** Null on every row that is not a modelled option. */
+  unlistedOption: StoredUnlistedOption | null;
 
   comment: string | null;
   computedAt: string;
@@ -93,8 +125,90 @@ interface PnlSummaryDbRow {
   placement_year_unresolved?: boolean | null;
   placement_year_note?: string | null;
   buy_side_unknown?: boolean | null;
+  unlisted_option?: unknown;
   comment?: string | null;
   computed_at: string;
+}
+
+/** `numeric` arrives as a string; absent and unparseable both mean "not known". */
+const numOrNull = (v: unknown): number | null => {
+  if (v == null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+/**
+ * Read the option audit payload out of the jsonb.
+ *
+ * Hand-narrowed rather than cast, because this column is written by whichever
+ * engine version was current when the row was last recomputed — an older row
+ * legitimately lacks fields a newer one has, and a cast would turn that into an
+ * `undefined.strike` at render time.
+ */
+function toUnlistedOption(v: unknown): StoredUnlistedOption | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const addOn = (o.addOn && typeof o.addOn === "object" ? o.addOn : {}) as Record<
+    string,
+    unknown
+  >;
+
+  return {
+    strike: numOrNull(addOn.strike),
+    spot: numOrNull(o.spot),
+    spotSource: typeof o.spotSource === "string" ? o.spotSource : null,
+    expiry: typeof addOn.expiry === "string" ? addOn.expiry : null,
+    expiryAssumed: addOn.expiryAssumed === true,
+    optionPrice: numOrNull(o.optionPrice),
+    pricingMethod: typeof o.pricingMethod === "string" ? o.pricingMethod : null,
+    raw: typeof addOn.raw === "string" ? addOn.raw : null,
+  };
+}
+
+/**
+ * ONE mapping, used by every read below.
+ *
+ * The client profile and the staff registers must see the same row for the same
+ * `pnl_summary` record — two hand-maintained copies of thirty field names is
+ * how one page ends up with a column the other silently drops, which is exactly
+ * what had happened to `unlisted_option`: stored on write, absent on read, so
+ * every strike and spot on the Options register was blank.
+ */
+function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
+  return {
+    accountId: r.account_id,
+    clientId: r.client_id,
+    ticker: r.ticker,
+    parentTicker: r.parent_ticker,
+    company: r.company ?? "",
+    instrument: r.instrument ?? null,
+
+    buyQty: num(r.buy_qty),
+    sellQty: num(r.sell_qty),
+    openQty: num(r.open_qty),
+    buyPrice: num(r.buy_price),
+    sellPrice: num(r.sell_price),
+    pnl: num(r.pnl),
+    tradeCount: num(r.trade_count),
+
+    isMatched: !!r.is_matched,
+    isOption: !!r.is_option,
+    isEnriched: !!r.is_enriched,
+    isDbMarketValued: !!r.is_db_market_valued,
+    isDbOpenValued: !!r.is_db_open_valued,
+    isDbOnly: !!r.is_db_only,
+    isPartialExit: !!r.is_partial_exit,
+    isPartialBuy: !!r.is_partial_buy,
+    isUnlistedOption: !!r.is_unlisted_option,
+    placementYearUnresolved: !!r.placement_year_unresolved,
+    placementYearNote: r.placement_year_note ?? null,
+    buySideUnknown: !!r.buy_side_unknown,
+
+    unlistedOption: toUnlistedOption(r.unlisted_option),
+
+    comment: r.comment ?? null,
+    computedAt: r.computed_at,
+  };
 }
 
 export const getClientStoredPnl = cache(
@@ -108,38 +222,7 @@ export const getClientStoredPnl = cache(
       (b) => b.eq("client_id", clientId),
     );
 
-    return data.map((r) => ({
-      accountId: r.account_id,
-      clientId: r.client_id,
-      ticker: r.ticker,
-      parentTicker: r.parent_ticker,
-      company: r.company ?? "",
-      instrument: r.instrument ?? null,
-
-      buyQty: num(r.buy_qty),
-      sellQty: num(r.sell_qty),
-      openQty: num(r.open_qty),
-      buyPrice: num(r.buy_price),
-      sellPrice: num(r.sell_price),
-      pnl: num(r.pnl),
-      tradeCount: num(r.trade_count),
-
-      isMatched: !!r.is_matched,
-      isOption: !!r.is_option,
-      isEnriched: !!r.is_enriched,
-      isDbMarketValued: !!r.is_db_market_valued,
-      isDbOpenValued: !!r.is_db_open_valued,
-      isDbOnly: !!r.is_db_only,
-      isPartialExit: !!r.is_partial_exit,
-      isPartialBuy: !!r.is_partial_buy,
-      isUnlistedOption: !!r.is_unlisted_option,
-      placementYearUnresolved: !!r.placement_year_unresolved,
-      placementYearNote: r.placement_year_note ?? null,
-      buySideUnknown: !!r.buy_side_unknown,
-
-      comment: r.comment ?? null,
-      computedAt: r.computed_at,
-    }));
+    return data.map(toStoredPnlRow);
   },
 );
 
@@ -190,38 +273,7 @@ export const getAllStoredPnl = cache(
       (b) => b.order("ticker"),
     );
 
-    return data.map((r) => ({
-      accountId: r.account_id,
-      clientId: r.client_id,
-      ticker: r.ticker,
-      parentTicker: r.parent_ticker,
-      company: r.company ?? "",
-      instrument: r.instrument ?? null,
-
-      buyQty: num(r.buy_qty),
-      sellQty: num(r.sell_qty),
-      openQty: num(r.open_qty),
-      buyPrice: num(r.buy_price),
-      sellPrice: num(r.sell_price),
-      pnl: num(r.pnl),
-      tradeCount: num(r.trade_count),
-
-      isMatched: !!r.is_matched,
-      isOption: !!r.is_option,
-      isEnriched: !!r.is_enriched,
-      isDbMarketValued: !!r.is_db_market_valued,
-      isDbOpenValued: !!r.is_db_open_valued,
-      isDbOnly: !!r.is_db_only,
-      isPartialExit: !!r.is_partial_exit,
-      isPartialBuy: !!r.is_partial_buy,
-      isUnlistedOption: !!r.is_unlisted_option,
-      placementYearUnresolved: !!r.placement_year_unresolved,
-      placementYearNote: r.placement_year_note ?? null,
-      buySideUnknown: !!r.buy_side_unknown,
-
-      comment: r.comment ?? null,
-      computedAt: r.computed_at,
-    }));
+    return data.map(toStoredPnlRow);
   },
 );
 

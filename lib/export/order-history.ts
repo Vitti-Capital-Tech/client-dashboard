@@ -108,6 +108,19 @@ export type PnlSummaryRow = {
   isDbOpenValued?: boolean;
   isDbOnly?: boolean;
   openQty?: number;
+
+  /**
+   * Option terms — what moneyness is judged on (`lib/options/moneyness.ts`).
+   *
+   * Present on MODELLED option rows, which carry their own valuation inputs.
+   * A listed series has neither here: its strike lives in the option register,
+   * so the caller joins it on. Absent means "not known", never "zero" — a
+   * fabricated strike would put an ITM badge on a row nobody can check.
+   */
+  strike?: number | null;
+  /** Underlying spot the row was valued at, not the option's own price. */
+  underlyingPrice?: number | null;
+  expiry?: string | null;
 };
 
 /**

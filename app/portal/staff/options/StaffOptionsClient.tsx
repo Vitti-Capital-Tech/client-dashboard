@@ -5,6 +5,12 @@ import type { ClientRow, AccountRow, OptionRow } from "@/lib/data/queries";
 import type { StoredPnlRow } from "@/lib/data/pnl";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
 import { TablePagination } from "@/app/components/TablePagination";
+import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
+import {
+  moneynessOf,
+  UNKNOWN_MONEYNESS,
+  type OptionMoneyness,
+} from "@/lib/options/moneyness";
 
 export type OptionTableItem = {
   id: string;
@@ -21,6 +27,8 @@ export type OptionTableItem = {
   pnl: number;
   strike: number | null;
   underlyingPrice: number | null;
+  /** Where the strike sits against the underlying, and what exercising is worth. */
+  money: OptionMoneyness;
   expiryDate: string | null;
   dte: number | null;
   pricingMethod: string | null;
@@ -29,10 +37,17 @@ export type OptionTableItem = {
   status: "live" | "expired" | "exercised" | "pending";
 };
 
-type OptionFilterTab = "all" | "listed" | "unlisted" | "gain" | "loss";
+type OptionFilterTab = "all" | "listed" | "unlisted" | "itm" | "gain" | "loss";
 
 const money2 = (n: number) =>
   n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/**
+ * Strikes and spots are quoted in fractions of a cent, so a $0.0125 strike must
+ * not round to $0.01 — the ITM arithmetic beside it would stop adding up.
+ */
+const money4 = (n: number) =>
+  n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 
 const fmtQty = (n: number) =>
   Math.round(n).toLocaleString("en-AU");
@@ -114,16 +129,6 @@ function isHouseOrSuspenseAccount(
   return false;
 }
 
-interface UnlistedOptionData {
-  spot?: number;
-  addOn?: {
-    raw?: string;
-    expiry?: string;
-    strike?: number;
-  };
-  pricingMethod?: string;
-}
-
 export function StaffOptionsClient({
   storedPnl,
   optionHoldings = [],
@@ -166,12 +171,15 @@ export function StaffOptionsClient({
           ? r.buyQty
           : r.sellQty;
 
-      const uo = ((r as unknown as { unlisted_option?: UnlistedOptionData; unlistedOption?: UnlistedOptionData }).unlisted_option ||
-        (r as unknown as { unlisted_option?: UnlistedOptionData; unlistedOption?: UnlistedOptionData }).unlistedOption);
-      const strike = uo?.addOn?.strike ?? null;
+      // Terms are carried only by the MODELLED grants — they were the inputs to
+      // that row's price. A listed series is quoted and traded on its own
+      // market, so its Current Value is already the answer; a strike and an
+      // intrinsic figure struck off the underlying would be a second, unrelated
+      // number sitting beside it claiming to describe the same row.
+      const uo = r.unlistedOption;
+      const strike = uo?.strike ?? null;
       const underlyingPrice = uo?.spot ?? null;
-      const expiryRaw = uo?.addOn?.expiry ?? null;
-      const { date: expiryDate, dte } = parseExpiry(expiryRaw, r.company);
+      const { date: expiryDate, dte } = parseExpiry(uo?.expiry ?? null, r.company);
       const pricingMethod = uo?.pricingMethod
         ? uo.pricingMethod === "black-scholes"
           ? "Black-Scholes model"
@@ -181,7 +189,7 @@ export function StaffOptionsClient({
         : "Listed feed";
 
       const termsNote =
-        uo?.addOn?.raw ||
+        uo?.raw ||
         r.comment ||
         (isUnlisted
           ? "Free unlisted placement options"
@@ -202,6 +210,10 @@ export function StaffOptionsClient({
         pnl: r.pnl,
         strike,
         underlyingPrice,
+        // Placement grants are calls by construction.
+        money: isUnlisted
+          ? moneynessOf({ spot: underlyingPrice, strike, qty: quantity, kind: "Call" })
+          : UNKNOWN_MONEYNESS,
         expiryDate,
         dte,
         pricingMethod,
@@ -227,6 +239,18 @@ export function StaffOptionsClient({
         pending: "pending",
       };
 
+      // These rows have no stored valuation behind them — the register is all
+      // there is — so exercise value IS the value reported, for listed and
+      // unlisted alike. Taken from the shared helper rather than open-coded,
+      // which is what had a registered PUT reading as worthless whenever it was
+      // in the money.
+      const money = moneynessOf({
+        spot: o.under,
+        strike: o.strike,
+        qty: o.qty,
+        kind: o.type,
+      });
+
       items.push({
         id: `opt-${o.id}`,
         accountId: acctId,
@@ -238,10 +262,14 @@ export function StaffOptionsClient({
         isListed: o.listed,
         quantity: o.qty,
         costBasis: 0,
-        marketValue: o.qty * Math.max(0, o.under - o.strike),
-        pnl: o.qty * Math.max(0, o.under - o.strike),
-        strike: o.strike,
-        underlyingPrice: o.under,
+        marketValue: money.intrinsicValue,
+        pnl: money.intrinsicValue,
+        // Reported only for the unlisted grants, matching the stored-P&L rows
+        // above — one rule for the whole table, so a listed series never shows
+        // a strike on one screen and a dash on the other.
+        strike: isUnlisted ? o.strike : null,
+        underlyingPrice: isUnlisted ? o.under : null,
+        money: isUnlisted ? money : UNKNOWN_MONEYNESS,
         expiryDate,
         dte,
         pricingMethod: o.listed ? "Listed feed" : "Manual registry",
@@ -320,6 +348,9 @@ export function StaffOptionsClient({
     let unlistedCount = 0;
     let gainCount = 0;
     let lossCount = 0;
+    let itmCount = 0;
+    let itmUnits = 0;
+    let itmIntrinsic = 0;
     const accountsSet = new Set<string>();
 
     for (const it of scopedAccountItems) {
@@ -337,6 +368,15 @@ export function StaffOptionsClient({
 
       if (it.pnl > 0) gainCount++;
       else if (it.pnl < 0) lossCount++;
+
+      // Exercise value is summed over the ITM rows ONLY. An OTM option's
+      // intrinsic is zero, so including it would not change the figure — but
+      // the count beside it would then say something different from the tab.
+      if (it.money.isItm) {
+        itmCount++;
+        itmUnits += it.quantity;
+        itmIntrinsic += it.money.intrinsicValue;
+      }
     }
 
     return {
@@ -345,6 +385,9 @@ export function StaffOptionsClient({
       unlistedCount,
       gainCount,
       lossCount,
+      itmCount,
+      itmUnits,
+      itmIntrinsic,
       totalListedVal,
       totalUnlistedVal,
       totalMarketVal: totalListedVal + totalUnlistedVal,
@@ -360,6 +403,7 @@ export function StaffOptionsClient({
       // 1. Category tab filter
       if (filterTab === "listed" && !it.isListed) return false;
       if (filterTab === "unlisted" && !it.isUnlisted) return false;
+      if (filterTab === "itm" && !it.money.isItm) return false;
       if (filterTab === "gain" && it.pnl <= 0) return false;
       if (filterTab === "loss" && it.pnl >= 0) return false;
 
@@ -421,14 +465,16 @@ export function StaffOptionsClient({
     let val = 0;
     let pnl = 0;
     let qty = 0;
+    let intrinsic = 0;
 
     for (const it of filteredItems) {
       val += it.marketValue;
       pnl += it.pnl;
       qty += it.quantity;
+      intrinsic += it.money.intrinsicValue;
     }
 
-    return { val, pnl, qty };
+    return { val, pnl, qty, intrinsic };
   }, [filteredItems]);
 
   // Reset filters
@@ -445,7 +491,11 @@ export function StaffOptionsClient({
       "Parent Ordinary",
       "Company / Description",
       "Option Type",
-      "Quantity",
+      "Buy Qty",
+      "Strike ($)",
+      "Underlying Price ($)",
+      "Moneyness",
+      "Exercise Value ($)",
       "Current Value ($)",
       "Unrealized P&L ($)",
       "Terms / Valuation Notes",
@@ -464,6 +514,12 @@ export function StaffOptionsClient({
         `"${it.company.replace(/"/g, '""')}"`,
         `"${it.isUnlisted ? "Unlisted Option" : "Listed Option"}"`,
         it.quantity,
+        // Blank, not 0 — an unparsed strike is not a free option, and a
+        // spreadsheet cannot tell the difference once a zero is written.
+        it.strike == null ? "" : it.strike,
+        it.underlyingPrice == null ? "" : it.underlyingPrice,
+        it.money.moneyness === "unknown" ? "" : it.money.moneyness,
+        it.money.moneyness === "unknown" ? "" : it.money.intrinsicValue.toFixed(2),
         it.marketValue.toFixed(2),
         it.pnl.toFixed(2),
         `"${(it.termsNote || "").replace(/"/g, '""')}"`,
@@ -537,7 +593,7 @@ export function StaffOptionsClient({
       </div>
 
       {/* KPI Cards Row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {/* Total Options */}
         <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Total Options</div>
@@ -564,6 +620,33 @@ export function StaffOptionsClient({
           <div className="text-[11px] text-mut mt-0.5 font-mono">${money2(metrics.totalUnlistedVal)} modelled</div>
         </div>
 
+        {/* In the money — the desk's actionable set: options worth exercising
+            today, and what exercising the whole lot would realise. */}
+        <button
+          type="button"
+          onClick={() => {
+            setFilterTab(filterTab === "itm" ? "all" : "itm");
+            setCurrentPage(1);
+          }}
+          title="Underlying trading above the strike — click to filter"
+          className={`text-left bg-white border rounded-xl p-3.5 shadow-2xs cursor-pointer transition-colors hover:border-green-d/40 ${
+            filterTab === "itm" ? "border-green-d/60 ring-1 ring-green-d/20" : "border-line"
+          }`}
+        >
+          <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
+            In the Money
+          </div>
+          <div className="font-disp font-semibold text-xl mt-1 text-gain flex items-baseline gap-2">
+            {metrics.itmCount}
+            <span className="font-body text-xs font-normal text-mut">
+              of {metrics.totalCount}
+            </span>
+          </div>
+          <div className="text-[11px] text-mut mt-0.5 font-mono">
+            ${money2(metrics.itmIntrinsic)} on {fmtQty(metrics.itmUnits)} units
+          </div>
+        </button>
+
         {/* Unrealized P&L */}
         <div className="bg-white border border-line rounded-xl p-3.5 shadow-2xs">
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">Unrealized P&amp;L</div>
@@ -587,6 +670,7 @@ export function StaffOptionsClient({
                 { id: "all", label: "All Options", count: metrics.totalCount },
                 { id: "listed", label: "Listed Options", count: metrics.listedCount },
                 { id: "unlisted", label: "Unlisted Options", count: metrics.unlistedCount },
+                { id: "itm", label: "In the Money", count: metrics.itmCount },
                 { id: "gain", label: "Gain", count: metrics.gainCount },
                 { id: "loss", label: "Loss", count: metrics.lossCount },
               ] as const
@@ -681,7 +765,24 @@ export function StaffOptionsClient({
                 <th className="px-4 py-2.5 whitespace-nowrap">Series</th>
                 <th className="px-4 py-2.5">Company / Description</th>
                 <th className="px-4 py-2.5 whitespace-nowrap">Type</th>
-                <th className="px-4 py-2.5 text-right whitespace-nowrap">Quantity</th>
+                <th
+                  className="px-4 py-2.5 text-right whitespace-nowrap"
+                  title="Options held — the count the exercise value is struck on"
+                >
+                  Buy Qty
+                </th>
+                <th
+                  className="px-4 py-2.5 whitespace-nowrap"
+                  title="Exercise price → underlying price. Unlisted grants only — a listed series trades on its own market."
+                >
+                  Strike &rarr; Spot
+                </th>
+                <th
+                  className="px-4 py-2.5 text-right whitespace-nowrap"
+                  title="Qty × (Spot − Strike), floored at zero. Unlisted grants only."
+                >
+                  Exercise Value
+                </th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L</th>
                 <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
@@ -690,7 +791,7 @@ export function StaffOptionsClient({
             <tbody className="divide-y divide-line/60">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={selectedAccount === "all" ? 8 : 7} className="text-center text-mut py-12">
+                  <td colSpan={selectedAccount === "all" ? 10 : 9} className="text-center text-mut py-12">
                     <p className="font-semibold text-ink">No options found</p>
                     <p className="text-xs text-mut mt-0.5">
                       {scopedAccountItems.length === 0
@@ -716,7 +817,14 @@ export function StaffOptionsClient({
                     const isUp = o.pnl >= 0;
 
                     return (
-                      <tr key={o.id} className="hover:bg-paper/50 transition-colors">
+                      <tr
+                        key={o.id}
+                        className={`transition-colors ${
+                          o.money.isItm
+                            ? "bg-green-bg/25 hover:bg-green-bg/40"
+                            : "hover:bg-paper/50"
+                        }`}
+                      >
                         {/* Account column displayed only when All Accounts is selected */}
                         {selectedAccount === "all" && (
                           <td className="px-4 py-3 whitespace-nowrap">
@@ -751,22 +859,55 @@ export function StaffOptionsClient({
                           </div>
                         </td>
 
-                        {/* Type */}
+                        {/* Type + moneyness */}
                         <td className="px-4 py-3 whitespace-nowrap">
-                          <span
-                            className={`text-[10.5px] font-semibold rounded-full px-2.5 py-0.5 inline-block ${
-                              o.isUnlisted
-                                ? "bg-[#ece9f3] text-[#5c5775] border border-[#d8d3e5]"
-                                : "bg-paper-2 text-ink border border-line/60"
-                            }`}
-                          >
-                            {o.isUnlisted ? "Unlisted Option" : "Listed Option"}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-[10.5px] font-semibold rounded-full px-2.5 py-0.5 inline-block ${
+                                o.isUnlisted
+                                  ? "bg-[#ece9f3] text-[#5c5775] border border-[#d8d3e5]"
+                                  : "bg-paper-2 text-ink border border-line/60"
+                              }`}
+                            >
+                              {o.isUnlisted ? "Unlisted Option" : "Listed Option"}
+                            </span>
+                            <MoneynessBadge
+                              money={o.money}
+                              title={
+                                o.money.isItm
+                                  ? `In the money by $${money4(o.money.intrinsicPerOption)} per option`
+                                  : undefined
+                              }
+                            />
+                          </div>
                         </td>
 
                         {/* Quantity */}
                         <td className="px-4 py-3 text-right font-mono text-ink whitespace-nowrap font-medium">
                           {o.quantity > 0 ? fmtQty(o.quantity) : "—"}
+                        </td>
+
+                        {/* Strike against spot — what the badge is a verdict on */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <StrikeSpot strike={o.strike} spot={o.underlyingPrice} money4={money4} />
+                        </td>
+
+                        {/* Exercise value: qty × (spot − strike), floored at zero */}
+                        <td
+                          className={`px-4 py-3 text-right font-mono whitespace-nowrap ${
+                            o.money.isItm ? "text-gain font-semibold" : "text-mut"
+                          }`}
+                          title={
+                            o.money.moneyness === "unknown"
+                              ? o.isUnlisted
+                                ? "No strike on record for this grant"
+                                : "Listed series — marked to its own market, see Current Value"
+                              : `${fmtQty(o.quantity)} × $${money4(o.money.intrinsicPerOption)}`
+                          }
+                        >
+                          {o.money.moneyness === "unknown"
+                            ? "—"
+                            : `$${money2(o.money.intrinsicValue)}`}
                         </td>
 
                         {/* Current Value */}
@@ -800,6 +941,10 @@ export function StaffOptionsClient({
                     <td className="px-4 py-3" />
                     <td className="px-4 py-3 text-right font-mono">
                       {fmtQty(filteredTotals.qty)}
+                    </td>
+                    <td className="px-4 py-3" />
+                    <td className="px-4 py-3 text-right font-mono text-gain">
+                      ${money2(filteredTotals.intrinsic)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-ink">
                       ${money2(filteredTotals.val)}

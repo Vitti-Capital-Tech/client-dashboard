@@ -789,7 +789,8 @@ Two refusals, both added after the first real scheduled run:
 
 The queue is updated from the **outcome**, not optimistically: successes are cleared (`clearRecomputes`), failures gain an attempt and a stored reason (`noteRecomputeFailures`), and a `dryRun` touches neither.
 
-**`lib/export/stored-pnl.ts` — back to one array.** `storedToSummaryRows` maps stored rows into the existing `PnlSummaryRow`, so the on-screen table, the CSV and the `.xlsx` remain three renderings of one array (§8.15). It re-states the calculator's `exportStatus` precedence rather than importing it, because the flags arrive already flattened. Two decisions worth naming:
+**`lib/export/stored-pnl.ts` — back to one array.** `storedToSummaryRows` maps stored rows into the existing `PnlSummaryRow`, so the on-screen table, the CSV and the `.xlsx` remain three renderings of one array (§8.15). It re-states the calculator's `exportStatus` precedence rather than importing it, because the flags arrive already flattened. Three decisions worth naming:
+- **Status is judged on the quantities in force, not the stored flags.** `is_matched` answers for the figures the *sources* produced; an override exists because those were wrong. So when a **quantity** is overridden the row is re-judged on the corrected pair (`buyQty === sellQty && buyQty > 0`, the calculator's own rule) and `openQty` becomes `buyQty − sellQty` — otherwise a mismatch the desk had already fixed kept reading "Unmatched" on the client profile and kept being counted by its Unmatched tab. Same test retires `Buy Side Unknown`: the label names the *quantity* ("0 Buys vs N Sold" on the Mismatches page), so supplying only the cost does not clear it. Without a quantity edit the stored flags stand — they know things the two numbers do not, such as a DB-only row whose legs match trivially because both came from the same held quantity.
 - **An option line never inherits the underlying's override.** Overrides are keyed by ordinary code, stored rows by ticker; applying an `EOS` correction to a separate `EOSO` position would change a figure nobody edited.
 - **`grandTotal` skips `excludedFromTotal` rows.** A row whose cost is *unknown* rather than zero contributes nothing — not even its real proceeds, since proceeds against a blank cost read as pure profit. Supplying the buy side by hand puts the row straight back in, which is the whole point of the override.
 
@@ -1010,15 +1011,18 @@ Two properties worth stating:
   1. **Account** *(Conditional when "All Accounts" active)*: Client Name + Account Label & Number.
   2. **Series / Ticker**: Option code badge + parent ordinary code indicator.
   3. **Company / Description**: Company name and instrument details.
-  4. **Type**: Visual badge distinguishing `Listed Option` (blue) from `Unlisted Option` (purple).
-  5. **Quantity**: Formatted unit count.
-  6. **Current Value**: Market valuation or Black-Scholes / intrinsic carrying value.
-  7. **Unrealized P&L**: Color-coded gain/loss metrics.
-  8. **Terms / Valuation Notes**: Contract ratio, strike price, expiration date, and pricing method (BS vs Intrinsic).
+  4. **Type**: Visual badge distinguishing `Listed Option` (blue) from `Unlisted Option` (purple), plus the **moneyness badge** (§8.29).
+  5. **Buy Qty**: Options held — the count the exercise value is struck on.
+  6. **Strike → Spot** *(unlisted grants only)*: Exercise price against the underlying's price, so the badge beside it can be checked without opening anything. An em dash on a listed series.
+  7. **Exercise Value** *(unlisted grants only)*: `Qty × (Spot − Strike)`, floored at zero.
+  8. **Current Value**: Market valuation or Black-Scholes / intrinsic carrying value.
+  9. **Unrealized P&L**: Color-coded gain/loss metrics.
+  10. **Terms / Valuation Notes**: Contract ratio, strike price, expiration date, and pricing method (BS vs Intrinsic).
 - **Fast Filter Segmentation:**
   - `All Options`: Complete firm or account register.
   - `Listed Options`: Exchange-traded options only.
   - `Unlisted Options`: Placement grant options only.
+  - `In the Money`: Underlying trading above the strike. Also a KPI card, which doubles as the filter toggle.
   - `Gain`: Options in positive unrealized P&L.
   - `Loss`: Options with negative unrealized P&L or out-of-the-money valuations.
 - **Data Export & Pagination:**
@@ -1119,3 +1123,20 @@ The minimum is enforced in the action, not the form, and reported with both figu
 The picker groups accounts under client names because that is how the instruction arrives ("book Cameron in for 50,000") — but the value is still an account id, since a client holding an SMSF and a personal account has to say which one takes the stock.
 
 **Vocabulary mismatch, surfaced rather than translated.** The feed says `Placement | IPO`; `placement_type` has been `Placement | SPP | Pre-IPO | Rights` since the first migration and has no plain `IPO`. The promote form defaults an `IPO` to `Pre-IPO` and leaves it editable, because that mapping is a judgement and not a translation. The TypeScript compiler is what caught it.
+
+### 8.29 Option moneyness (`lib/options/moneyness.ts`, `app/components/MoneynessBadge.tsx`)
+
+An option is **in the money** when the underlying is trading past the strike — above it for a call, below it for a put — and the position's **exercise value** is `qty × |spot − strike|`, floored at zero. The desk reads that off two screens: the client profile's Options tab (§8.25) and the firm-wide register (§8.26).
+
+**One function decides it, not two screens.** `moneynessOf({ spot, strike, qty, kind })` returns the verdict and the arithmetic together, and `MoneynessBadge` / `StrikeSpot` render both the same way in both places. A series that reads ITM on the register and plain on the client profile is worse than no badge at all — the desk cannot tell which screen is stale.
+
+Five decisions worth naming:
+- **Only the MODELLED grants get a verdict.** A listed series is quoted and traded on its own market, so its Current Value already answers what it is worth; a strike and an intrinsic figure struck off the *underlying* would be a second, unrelated number sitting beside it claiming to describe the same row. Listed rows are passed `UNKNOWN_MONEYNESS`, so both columns read as an em dash, the badge is absent, and the ITM tab and KPI cover the grants alone. The one exception is a row sourced from the option register with no stored P&L behind it: the register is all there is, so its exercise value IS the value reported — but its terms are still not shown when the series is listed, so the table never contradicts itself.
+- **An unknown strike or spot claims NOTHING.** `moneyness: "unknown"`, no badge, an em dash in the value column. A strike the tracker could not parse is missing data; rendering it as `OTM` would read as a finding, and rendering a strike of `0` as "infinitely ITM" would put a badge on a row nobody can act on.
+- **A tenth of a cent is the tick.** ASX prices are quoted no finer, so anything closer is the same price wearing floating-point noise — `0.1 + 0.04` must not read as ITM against a `0.14` strike. Inside that band the verdict is `ATM`.
+- **Puts are mirrored, not assumed away.** `option_holdings.option_type` allows `Put`, and the register's exercise value had been open-coded as `qty × max(0, under − strike)` — which reports a deep in-the-money put as worthless. Placement grants stay calls by construction; a registered series says which it is.
+- **Exercise value is shown BESIDE the stored P&L, never instead of it.** An unlisted grant is carried at its Black-Scholes price, which holds time value on top of intrinsic; intrinsic is the floor under that number. Both columns are shown because they answer different questions, and the recompute engine (§8.18) is left alone — this is a reading of stored figures, not a new valuation.
+
+**`unlisted_option` was write-only until now.** `pnl_summary.unlisted_option` has stored every input behind a modelled price since the table was created, but neither DAL read mapped the column — so `StaffOptionsClient` reached for it through a cast, got `undefined`, and every strike and spot on the register was blank. Both reads now share ONE `toStoredPnlRow` mapping (thirty field names maintained twice is how a column ends up dropped on one path and not the other), and the jsonb is hand-narrowed rather than cast, because rows written by an older engine version legitimately lack fields a newer one has.
+
+**A strike comes from the row that has one.** A modelled unlisted grant carries its own terms — they were the inputs to its price — and that is the only source consulted. A listed series carries none on the stored P&L row, and is not joined against the option register to manufacture some: see the first decision above.

@@ -39,6 +39,7 @@ function row(over: Partial<StoredPnlRow> = {}): StoredPnlRow {
     placementYearUnresolved: false,
     placementYearNote: null,
     buySideUnknown: false,
+    unlistedOption: null,
     comment: null,
     computedAt: "2026-08-07T00:00:00Z",
     ...over,
@@ -177,6 +178,131 @@ test("stored: an option line never inherits the underlying's override", () => {
   assert.equal(r.edited, false);
   assert.equal(r.buyPrice, 0);
   assert.equal(r.type, "Option");
+});
+
+test("stored: correcting the quantities leaves the row matched, not Unmatched", () => {
+  // The bug this covers: the desk fixed a 900-vs-1000 mismatch by hand and the
+  // row went on reading "Unmatched" — and went on being counted by the client
+  // profile's Unmatched tab — because the status was still being read off the
+  // stored flag the correction exists to overrule.
+  const overrides = new Map<string, PnlOverride>([
+    [
+      "EOS",
+      {
+        parent: "EOS",
+        buyQty: 1000,
+        sellQty: null,
+        buyPrice: null,
+        sellOrCurrent: null,
+        note: "Missing parcel from the May contract note",
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+    ],
+  ]);
+
+  const [r] = storedToSummaryRows(
+    [row({ buyQty: 900, sellQty: 1000, openQty: 0, isMatched: false })],
+    overrides,
+  );
+
+  assert.equal(r.type, "Matched (edited)");
+  assert.equal(r.isMatched, true, "the Unmatched tab reads this");
+  assert.equal(r.openPosition, false);
+  assert.equal(r.computed.buyQty, 900, "what the sources said is still kept");
+});
+
+test("stored: a quantity correction that does NOT balance stays unmatched", () => {
+  const overrides = new Map<string, PnlOverride>([
+    [
+      "EOS",
+      {
+        parent: "EOS",
+        buyQty: 950,
+        sellQty: null,
+        buyPrice: null,
+        sellOrCurrent: null,
+        note: null,
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+    ],
+  ]);
+
+  const [r] = storedToSummaryRows(
+    [row({ buyQty: 900, sellQty: 1000, openQty: 0, isMatched: false })],
+    overrides,
+  );
+
+  assert.equal(r.type, "Unmatched (edited)");
+  assert.equal(r.isMatched, false);
+});
+
+test("stored: correcting the sell side closes the open position", () => {
+  const overrides = new Map<string, PnlOverride>([
+    [
+      "EOS",
+      {
+        parent: "EOS",
+        buyQty: null,
+        sellQty: 1000,
+        buyPrice: null,
+        sellOrCurrent: null,
+        note: null,
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+    ],
+  ]);
+
+  const [r] = storedToSummaryRows(
+    [row({ buyQty: 1000, sellQty: 400, openQty: 600, isMatched: false })],
+    overrides,
+  );
+
+  assert.equal(r.type, "Matched (edited)");
+  assert.equal(r.openQty, 0, "the 600 held were the ones the ledger got wrong");
+  assert.equal(r.openPosition, false);
+});
+
+test("stored: supplying the missing buy quantity retires the Buy Side Unknown flag", () => {
+  const unknown = row({
+    ticker: "EUR",
+    buySideUnknown: true,
+    buyQty: 0,
+    buyPrice: 0,
+    sellQty: 115385,
+    sellPrice: 40000,
+    pnl: 40000,
+    openQty: 0,
+    isMatched: false,
+  });
+
+  const withQty = (over: Partial<PnlOverride>) =>
+    storedToSummaryRows(
+      [unknown],
+      new Map<string, PnlOverride>([
+        [
+          "EUR",
+          {
+            parent: "EUR",
+            buyQty: null,
+            sellQty: null,
+            buyPrice: null,
+            sellOrCurrent: null,
+            note: null,
+            updatedBy: "desk",
+            updatedAt: "2026-08-07T00:00:00Z",
+            ...over,
+          },
+        ],
+      ]),
+    )[0];
+
+  assert.equal(withQty({ buyQty: 115385, buyPrice: 25000 }).type, "Matched (edited)");
+  // Only the cost was answered. The label names the QUANTITY — still 0 buys
+  // against 115,385 sold, which is exactly how the Mismatches page words it.
+  assert.equal(withQty({ buyPrice: 25000 }).type, "Buy Side Unknown (edited)");
 });
 
 test("stored: status precedence matches the calculator's", () => {

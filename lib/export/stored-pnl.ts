@@ -15,6 +15,30 @@ import type { PnlOverride, OverriddenFields, PnlSummaryRow } from "./order-histo
  */
 
 /**
+ * The two legs as they stand AFTER any desk override — which is what every
+ * question about the row's state has to be asked of.
+ *
+ * The stored flags answer for the figures the sources produced. An override
+ * exists precisely because those were wrong, so once someone corrects a
+ * quantity the stored `is_matched` is stale: a row whose legs now balance went
+ * on reading "Unmatched" on the client profile, and went on being counted by
+ * the Unmatched tab, long after the mismatch it names was fixed.
+ *
+ * Only recomputed when a QUANTITY was actually overridden. Left alone, the
+ * stored flag stays authoritative — it knows things the two numbers do not,
+ * such as a DB-only row whose legs match trivially because both were set from
+ * the same held quantity.
+ */
+type EffectiveState = {
+  /** Legs reconcile — the calculator's rule, restated on the values in force. */
+  isMatched: boolean;
+  /** Units still held on the corrected figures. */
+  openQty: number;
+  /** The desk supplied the buy quantity the sources could not. */
+  buySideSupplied: boolean;
+};
+
+/**
  * The status cell.
  *
  * Deliberately the same wording, in the same precedence order, as the
@@ -23,10 +47,11 @@ import type { PnlOverride, OverriddenFields, PnlSummaryRow } from "./order-histo
  * imported because the flags arrive already flattened onto the stored row, and
  * reconstructing a `PnlSummaryItem` just to ask it a question would be worse.
  */
-function statusOf(r: StoredPnlRow): string {
+function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
   // Ahead of everything else: the row's figures are blank, so no status that
-  // describes them can be true.
-  if (r.buySideUnknown) return "Buy Side Unknown";
+  // describes them can be true. Unless the desk has since typed the missing buy
+  // side in, at which point the row is judged on its figures like any other.
+  if (r.buySideUnknown && !eff.buySideSupplied) return "Buy Side Unknown";
   // Before `isMatched`, because a DB-only row trivially reconciles — both legs
   // came from the same held quantity — and "Matched" would imply a trade
   // reconciliation that never happened. Both wordings say WHY there are no trades
@@ -36,10 +61,10 @@ function statusOf(r: StoredPnlRow): string {
   // always used for the same case.
   if (r.isDbOnly) return r.isOption ? "Listed Options" : "Open - no ledger history";
   if (r.isUnlistedOption) return "Unlisted Option";
-  if (r.isMatched) return "Matched";
+  if (eff.isMatched) return "Matched";
   if (r.isOption) return "Option";
   if (r.isPartialExit) return "Partial exit";
-  if (r.openQty > 0) return "Open";
+  if (eff.openQty > 0) return "Open";
   return "Unmatched";
 }
 
@@ -95,7 +120,21 @@ export function storedToSummaryRows(
     // columns contradict.
     const pnl = sellOrCurrent - buyPrice;
 
-    const status = statusOf(r);
+    // Correcting a quantity is how a mismatch gets FIXED, so the row has to be
+    // re-judged on the corrected pair — same rule the calculator applies to the
+    // sources (`buyQty === sellQty && buyQty > 0`). Without a quantity edit the
+    // stored answers stand, untouched.
+    const qtyEdited = overridden.buyQty || overridden.sellQty;
+    const eff: EffectiveState = {
+      isMatched: qtyEdited ? buyQty === sellQty && buyQty > 0 : r.isMatched,
+      openQty: qtyEdited ? Math.max(buyQty - sellQty, 0) : r.openQty,
+      // Judged on the QUANTITY, which is the leg the label names — the
+      // Mismatches page words the same row "0 Buys vs N Sold". A desk that
+      // supplied only the cost has not answered that, so the flag stands.
+      buySideSupplied: overridden.buyQty && buyQty > 0,
+    };
+
+    const status = statusOf(r, eff);
 
     // An edited row is no longer a pure derivation. Not an error, but a fact
     // the reader is entitled to, so it never travels silently.
@@ -107,7 +146,7 @@ export function storedToSummaryRows(
       buyPrice,
       sellOrCurrent,
       pnl,
-      openPosition: r.openQty > 0,
+      openPosition: eff.openQty > 0,
       type: edited ? `${status} (edited)` : status,
       flagged: r.buySideUnknown || r.placementYearUnresolved,
       edited,
@@ -117,12 +156,19 @@ export function storedToSummaryRows(
       // Correcting the buy side by hand is exactly how such a row rejoins the
       // total, so this tracks the value in force rather than the stored flag.
       excludedFromTotal: r.buySideUnknown && buyPrice === 0 && buyQty === 0,
-      isMatched: r.isMatched,
+      // The values in force, not the stored ones — the Unmatched tab and the
+      // Unmatched badge both read these, and a corrected row must leave both.
+      isMatched: eff.isMatched,
       isOption: r.isOption,
       isUnlistedOption: r.isUnlistedOption,
       isDbOpenValued: r.isDbOpenValued,
       isDbOnly: r.isDbOnly,
-      openQty: r.openQty,
+      openQty: eff.openQty,
+      // Only a modelled option carries its own terms. Left undefined elsewhere
+      // so the Options tab can tell "no strike on this row" from "strike of 0".
+      strike: r.unlistedOption?.strike ?? null,
+      underlyingPrice: r.unlistedOption?.spot ?? null,
+      expiry: r.unlistedOption?.expiry ?? null,
     };
   });
 
