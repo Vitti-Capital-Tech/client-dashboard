@@ -3,11 +3,14 @@ import {
   OVERVIEW_FIRST_DATA_ROW,
   TEMPLATE_SHEET,
   alreadyInOverview,
+  dealSheetPlacement,
+  isDealSheet,
   nextOverviewSlot,
   nextSheetName,
   overviewRowAddress,
   overviewRowFormulas,
   tabCellWrites,
+  type SheetSlot,
   type TrackerDeal,
 } from "./tracker-format.ts";
 
@@ -26,24 +29,37 @@ import {
  * workbook is touched, and a failure halfway leaves the sheets it did not reach
  * exactly as they were.
  *
- * ── Why Template is REPLAYED and not copied ──────────────────────────────────
- * Because Graph cannot copy a worksheet. `POST /worksheets/{id}/copy` answers
- * `400 Resource not found for the segment 'copy'` on v1.0 AND beta, and so does
- * `range/copyFrom` — both were probed against this workbook, with `tables/add`
- * as a control to prove the probe distinguishes "missing endpoint" (400) from
- * "needs write access" (403).
+ * ── Copy the sheet if Graph will, replay it if it will not ───────────────────
+ * A real `worksheets/{id}/copy` brings EVERYTHING — fills, borders, column
+ * widths, validation, conditional formatting, the yellow highlighting the desk's
+ * "ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW" convention depends on — and puts the
+ * tab in the right place in the same call. It is tried first, always.
  *
- * So a new tab is `worksheets/add` followed by writing Template's own used range
- * into it. Its formulas are sheet-relative (`=D6/C6`, `=SUM(C7:C21)`) or point at
- * `Index`, so they land correct at the same addresses.
+ * It was once probed against this workbook and answered `400 Resource not found
+ * for the segment 'copy'`, which is why this module used to replay only. That is
+ * a per-tenant/per-endpoint answer, not a law, so the code no longer assumes it:
+ * a 400 falls through to the replay, a 403 is reported as the permission problem
+ * it is, and the result says which path ran (`via`) so a look at one ingest log
+ * answers "is copy working here yet?".
  *
- * **What this does not carry: formatting.** Fills, borders and column widths stay
- * behind, including the yellow highlighting the desk's "ONLY EDIT FIELDS
- * HIGHLIGHTED IN YELLOW" convention depends on. There is no bulk per-cell format
- * read to replay from — `range/cellProperties` does not exist here either — and
- * guessing which cells are meant to be yellow would mark the wrong ones editable,
- * which is worse than plain. A new tab therefore computes correctly and looks
- * unstyled until someone formats it.
+ * ── The replay fallback ──────────────────────────────────────────────────────
+ * `worksheets/add`, then Template's own used range written in at the same
+ * addresses, where its sheet-relative formulas (`=D6/C6`, `=SUM(C7:C21)`) and its
+ * `Index` lookups stay correct. Carried with it:
+ *
+ *   formulas      the whole point — the tab computes
+ *   numberFormat  per cell, so dates read `17/08/2026` rather than `46251`, and
+ *                 money reads as money instead of a bare number
+ *   columnWidth   per column, because a tab whose columns are all 8.43 wide does
+ *                 not look like the template even when every cell is right
+ *
+ * **What the replay still cannot carry: fills, borders and fonts.** There is no
+ * bulk per-cell format read to replay them from — `range/format` reports a
+ * single value for a range and `null` wherever the cells differ, which is
+ * precisely the case that matters. Guessing which cells are meant to be yellow
+ * would mark the wrong ones editable, which is worse than plain. So a replayed
+ * tab computes and reads correctly but stays unshaded until copy is available or
+ * someone formats it.
  *
  * ── Order matters ────────────────────────────────────────────────────────────
  * The tab is created BEFORE the Overview row, because every cell in that row is
@@ -79,9 +95,22 @@ export type TrackerWriteResult = {
   sheet?: string;
   overviewRow?: number;
   counter?: number;
+  /**
+   * How the tab was made. `copy` is a true worksheet copy and carries the
+   * template's formatting; `replay` rebuilds it and cannot carry fills or
+   * borders. Reported so one glance at an ingest log answers which the workbook
+   * is getting, rather than someone inferring it from how a tab looks.
+   */
+  via?: "copy" | "replay";
   error?: string;
   /** What a person has to do about it — a missing permission, a half-write. */
   hint?: string;
+  /**
+   * Things that did not stop the write but a person should know: a tab left in
+   * the wrong position, widths that did not replay. The deal is IN the workbook
+   * in every one of these cases, so they are not failures.
+   */
+  notes?: string[];
 };
 
 /* ------------------------------------------------------------------ */
@@ -155,8 +184,8 @@ export async function resolveTrackerTarget(
     if (!itemId || !driveId) continue;
 
     const candidate: TrackerTarget = { driveId, itemId, overviewSheet };
-    const names = await sheetNames(graph, candidate);
-    if (names?.includes(overviewSheet)) return candidate;
+    const slots = await sheetSlots(graph, candidate);
+    if (slots?.some((s) => s.name === overviewSheet)) return candidate;
   }
 
   return null;
@@ -201,15 +230,28 @@ function permissionHint(status: number): string | undefined {
 /* Reads                                                               */
 /* ------------------------------------------------------------------ */
 
-type NamedSheet = { name?: string };
+type NamedSheet = { name?: string; position?: number };
 
-async function sheetNames(graph: GraphCall, t: TrackerTarget): Promise<string[] | null> {
+/**
+ * Every tab, with the position that decides where it sits along the bottom.
+ *
+ * `position` is asked for because a new deal has to land at the front of the
+ * deal tabs and `worksheets/add` always appends. Graph returns them in order,
+ * so the index is a sound fallback for a workbook that answers without one.
+ */
+async function sheetSlots(graph: GraphCall, t: TrackerTarget): Promise<SheetSlot[] | null> {
   const res = await graph(
-    `/drives/${t.driveId}/items/${t.itemId}/workbook/worksheets?$select=name`,
+    `/drives/${t.driveId}/items/${t.itemId}/workbook/worksheets?$select=name,position`,
   );
   if (!res.ok) return null;
   const value = (res.body as { value?: NamedSheet[] } | null)?.value ?? [];
-  return value.map((s) => s.name ?? "").filter(Boolean);
+
+  return value
+    .map((s, i) => ({
+      name: s.name ?? "",
+      position: typeof s.position === "number" ? s.position : i,
+    }))
+    .filter((s) => s.name !== "");
 }
 
 /**
@@ -238,6 +280,232 @@ async function overviewIndex(
     ticker: row?.[1] ?? "",
     issued: row?.[2] ?? "",
   }));
+}
+
+/* ------------------------------------------------------------------ */
+/* Making the tab                                                      */
+/* ------------------------------------------------------------------ */
+
+type SheetPlacement = { position: number; before: string | null };
+
+type MadeSheet = {
+  ok: boolean;
+  via?: "copy" | "replay";
+  sheet?: string;
+  error?: string;
+  hint?: string;
+  notes?: string[];
+};
+
+const sheetPath = (item: string, name: string) =>
+  `${item}/worksheets('${encodeURIComponent(name)}')`;
+
+/**
+ * `A1:P30` → the column letters it spans. Widths are a per-COLUMN property, so
+ * this is what has to be walked; `null` for anything not shaped like a range,
+ * which then simply skips the width replay rather than guessing at `A:XFD`.
+ */
+export function columnsOf(shape: string): string[] | null {
+  const m = /^([A-Z]+)\d+(?::([A-Z]+)\d+)?$/i.exec(shape.trim());
+  if (!m) return null;
+
+  const toIndex = (s: string) =>
+    [...s.toUpperCase()].reduce((n, c) => n * 26 + (c.charCodeAt(0) - 64), 0);
+  const toLetters = (n: number) => {
+    let out = "";
+    for (let v = n; v > 0; v = Math.floor((v - 1) / 26)) {
+      out = String.fromCharCode(65 + ((v - 1) % 26)) + out;
+    }
+    return out;
+  };
+
+  const from = toIndex(m[1]);
+  const to = m[2] ? toIndex(m[2]) : from;
+  if (to < from) return null;
+
+  return Array.from({ length: to - from + 1 }, (_, i) => toLetters(from + i));
+}
+
+/**
+ * Column widths, one column at a time, Template → new tab.
+ *
+ * One call per column each way, which is the only granularity there is: asking
+ * `range/format` about several columns at once answers `null` the moment two of
+ * them differ, and differing is the normal case. Bounded by the template's own
+ * width (~16 columns) and it runs once per new deal, so the chattiness buys a
+ * tab that looks like the others.
+ *
+ * Never fatal. A tab with the right numbers in the wrong-width columns is a
+ * cosmetic problem; refusing to file the deal over it would not be.
+ */
+async function replayColumnWidths(
+  graph: GraphCall,
+  item: string,
+  sheet: string,
+  shape: string,
+): Promise<string | null> {
+  const columns = columnsOf(shape);
+  if (!columns) return null;
+
+  let failed = 0;
+  for (const col of columns) {
+    const cell = `${col}1:${col}1`;
+    const read = await graph(
+      `${sheetPath(item, TEMPLATE_SHEET)}/range(address='${cell}')/format?$select=columnWidth`,
+    );
+    const width = (read.body as { columnWidth?: number } | null)?.columnWidth;
+    if (!read.ok || typeof width !== "number") {
+      failed++;
+      continue;
+    }
+
+    const set = await graph(`${sheetPath(item, sheet)}/range(address='${cell}')/format`, {
+      method: "PATCH",
+      body: { columnWidth: width },
+    });
+    if (!set.ok) failed++;
+  }
+
+  return failed === 0
+    ? null
+    : `${failed} of ${columns.length} column widths on "${sheet}" did not copy across; the tab computes but is narrower than Template.`;
+}
+
+/**
+ * Create the deal's tab, in the right place, looking as much like Template as
+ * the API allows.
+ *
+ * Copy first — it carries the formatting and positions the tab in one call. A
+ * tenant where copy is unavailable answers 400 and gets the replay instead; a
+ * tenant where it is available but not permitted answers 403, and retrying that
+ * as an `add` would fail identically, so it is reported rather than retried.
+ */
+async function createDealSheet(
+  graph: GraphCall,
+  item: string,
+  sheet: string,
+  placement: SheetPlacement,
+): Promise<MadeSheet> {
+  const copied = await graph(`${sheetPath(item, TEMPLATE_SHEET)}/copy`, {
+    method: "POST",
+    body: placement.before
+      ? { name: sheet, positionType: "Before", relativeTo: placement.before }
+      : { name: sheet, positionType: "End" },
+  });
+
+  if (copied.ok) {
+    const notes: string[] = [];
+    // Excel has been known to answer a requested name with `Template (2)` when
+    // it does not like it. `nextSheetName` has already guaranteed the name is
+    // free, so a mismatch is Excel's doing and is simply corrected.
+    const got = (copied.body as { name?: string } | null)?.name;
+    if (got && got !== sheet) {
+      const renamed = await graph(sheetPath(item, got), {
+        method: "PATCH",
+        body: { name: sheet },
+      });
+      if (!renamed.ok) {
+        return {
+          ok: false,
+          sheet: got,
+          error: `Template was copied but the tab could not be renamed from "${got}" to "${sheet}": ${graphError(renamed.body)}`,
+          hint: `Rename "${got}" to "${sheet}" by hand — it is not yet on the Overview.`,
+        };
+      }
+    }
+    return { ok: true, via: "copy", sheet, notes };
+  }
+
+  if (copied.status === 401 || copied.status === 403) {
+    return {
+      ok: false,
+      error: `Could not copy ${TEMPLATE_SHEET} to "${sheet}": ${graphError(copied.body)}`,
+      hint: permissionHint(copied.status),
+    };
+  }
+
+  return replayTemplate(graph, item, sheet, placement);
+}
+
+/**
+ * The fallback: an empty sheet with Template's used range written into it.
+ *
+ * Template's extent is READ rather than hardcoded, so a tab stays a faithful
+ * copy if the desk ever extends the template. `usedRange` hands back the
+ * address, the formulas and the number formats together — one call for all
+ * three, and the number formats are what make a date read as a date.
+ */
+async function replayTemplate(
+  graph: GraphCall,
+  item: string,
+  sheet: string,
+  placement: SheetPlacement,
+): Promise<MadeSheet> {
+  const template = await graph(
+    `${sheetPath(item, TEMPLATE_SHEET)}/usedRange?$select=address,formulas,numberFormat`,
+  );
+  if (!template.ok) {
+    return { ok: false, error: `Could not read ${TEMPLATE_SHEET}: ${graphError(template.body)}` };
+  }
+
+  const blueprint = template.body as {
+    address?: string;
+    formulas?: unknown[][];
+    numberFormat?: unknown[][];
+  };
+  const shape = localAddress(blueprint.address);
+  if (!shape || !blueprint.formulas?.length) {
+    return { ok: false, error: `${TEMPLATE_SHEET} appears to be empty.` };
+  }
+
+  const added = await graph(`${item}/worksheets/add`, { method: "POST", body: { name: sheet } });
+  if (!added.ok) {
+    return {
+      ok: false,
+      error: `Could not create the sheet "${sheet}": ${graphError(added.body)}`,
+      hint: permissionHint(added.status),
+    };
+  }
+
+  const seeded = await graph(`${sheetPath(item, sheet)}/range(address='${shape}')`, {
+    method: "PATCH",
+    body: {
+      formulas: blueprint.formulas,
+      // Sent alongside the formulas, the way the per-cell writes below already
+      // do it. Without this the tab's dates render as five-digit serials and
+      // every dollar column as a bare number — the tab is right and reads wrong.
+      ...(blueprint.numberFormat?.length ? { numberFormat: blueprint.numberFormat } : {}),
+    },
+  });
+  if (!seeded.ok) {
+    return {
+      ok: false,
+      sheet,
+      error: `Sheet "${sheet}" was created but ${TEMPLATE_SHEET} could not be written into it: ${graphError(seeded.body)}`,
+      hint:
+        permissionHint(seeded.status) ??
+        `Delete the empty "${sheet}" tab and retry — it is not yet on the Overview.`,
+    };
+  }
+
+  // Neither of the two below is worth failing a deal over: the tab is complete
+  // and correct, and both are things a person can fix in seconds once told.
+  const notes: string[] = [];
+
+  const moved = await graph(sheetPath(item, sheet), {
+    method: "PATCH",
+    body: { position: placement.position },
+  });
+  if (!moved.ok) {
+    notes.push(
+      `"${sheet}" was added at the end of the workbook — moving it to the front of the deal tabs failed: ${graphError(moved.body)}`,
+    );
+  }
+
+  const widthNote = await replayColumnWidths(graph, item, sheet, shape);
+  if (widthNote) notes.push(widthNote);
+
+  return { ok: true, via: "replay", sheet, notes };
 }
 
 /* ------------------------------------------------------------------ */
@@ -315,9 +583,10 @@ export async function writeDealToTracker(
     }
 
     // ── Name the tab ────────────────────────────────────────────────────────
-    const names = await sheetNames(graph, target);
-    if (!names) return { ok: false, error: "Could not list the workbook's sheets." };
+    const slots = await sheetSlots(graph, target);
+    if (!slots) return { ok: false, error: "Could not list the workbook's sheets." };
 
+    const names = slots.map((s) => s.name);
     if (!names.includes(TEMPLATE_SHEET)) {
       return {
         ok: false,
@@ -326,7 +595,7 @@ export async function writeDealToTracker(
       };
     }
 
-    const deals = names.filter((n) => !NON_DEAL_SHEETS.has(n) && !/overview$/i.test(n));
+    const deals = names.filter(isDealSheet);
     const sheet = nextSheetName(deal.ticker, [...deals, ...NON_DEAL_SHEETS]);
     if (!sheet) {
       return {
@@ -336,52 +605,11 @@ export async function writeDealToTracker(
     }
 
     // ── The tab, before the row that points at it ───────────────────────────
-    // Template's used range is read rather than hardcoded, so a tab stays a
-    // faithful copy if the desk ever extends it. `usedRange` hands back the
-    // address and the formulas together, which is one call for both.
-    const template = await graph(
-      `${item}/worksheets('${encodeURIComponent(
-        TEMPLATE_SHEET,
-      )}')/usedRange?$select=address,formulas`,
-    );
-    if (!template.ok) {
-      return {
-        ok: false,
-        error: `Could not read ${TEMPLATE_SHEET}: ${graphError(template.body)}`,
-      };
-    }
-    const blueprint = template.body as { address?: string; formulas?: unknown[][] };
-    const shape = localAddress(blueprint.address);
-    if (!shape || !blueprint.formulas?.length) {
-      return { ok: false, error: `${TEMPLATE_SHEET} appears to be empty.` };
-    }
+    const placement = dealSheetPlacement(slots);
+    const made = await createDealSheet(graph, item, sheet, placement);
+    if (!made.ok) return { ...made, ok: false };
 
-    const added = await graph(`${item}/worksheets/add`, {
-      method: "POST",
-      body: { name: sheet },
-    });
-    if (!added.ok) {
-      return {
-        ok: false,
-        error: `Could not create the sheet "${sheet}": ${graphError(added.body)}`,
-        hint: permissionHint(added.status),
-      };
-    }
-
-    const seeded = await graph(
-      `${item}/worksheets('${encodeURIComponent(sheet)}')/range(address='${shape}')`,
-      { method: "PATCH", body: { formulas: blueprint.formulas } },
-    );
-    if (!seeded.ok) {
-      return {
-        ok: false,
-        sheet,
-        error: `Sheet "${sheet}" was created but ${TEMPLATE_SHEET} could not be written into it: ${graphError(seeded.body)}`,
-        hint:
-          permissionHint(seeded.status) ??
-          `Delete the empty "${sheet}" tab and retry — it is not yet on the Overview.`,
-      };
-    }
+    const notes = made.notes ?? [];
 
     // ── The deal's own terms ────────────────────────────────────────────────
     for (const cell of tabCellWrites(deal)) {
@@ -427,7 +655,14 @@ export async function writeDealToTracker(
       };
     }
 
-    return { ok: true, sheet, overviewRow: slot.row, counter: slot.counter };
+    return {
+      ok: true,
+      sheet,
+      overviewRow: slot.row,
+      counter: slot.counter,
+      via: made.via,
+      ...(notes.length > 0 ? { notes } : {}),
+    };
   } catch (err) {
     return {
       ok: false,

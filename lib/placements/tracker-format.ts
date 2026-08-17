@@ -52,6 +52,49 @@ export const TEMPLATE_SHEET = "Template";
  */
 export const NON_DEAL_SHEETS = new Set(["Template", "Index", "Invoice", "Options"]);
 
+/** Is this tab a placement, rather than the workbook's scaffolding? */
+export function isDealSheet(name: string): boolean {
+  const n = name.trim();
+  return n !== "" && !NON_DEAL_SHEETS.has(n) && !/overview$/i.test(n);
+}
+
+/** A tab as the workbook lists it, in the order they appear along the bottom. */
+export type SheetSlot = { name: string; position: number };
+
+/**
+ * Where a NEW deal tab belongs: at the FRONT of the deal tabs.
+ *
+ * `worksheets/add` appends, so a new placement landed at the far right of ~190
+ * tabs — past the point the tab bar scrolls to, which is where the desk stopped
+ * finding it. Newest-first is how this workbook is read: the deal that arrived
+ * this morning is the one being worked on today.
+ *
+ * In FRONT of the first deal, not at position 0, because `Template`, `Index`
+ * and the Overview sit ahead of them and are not placements. Their own order is
+ * left alone — this says where the new tab goes, not how the workbook should be
+ * arranged.
+ *
+ * `before` names that first deal tab for the copy API, which positions
+ * relative to a sheet; `position` is the same answer as an index, for the
+ * add-then-move path. One function so the two cannot drift apart.
+ */
+export function dealSheetPlacement(sheets: SheetSlot[]): {
+  position: number;
+  before: string | null;
+} {
+  const deals = sheets.filter((s) => isDealSheet(s.name));
+
+  if (deals.length > 0) {
+    const first = deals.reduce((a, b) => (b.position < a.position ? b : a));
+    return { position: first.position, before: first.name };
+  }
+
+  // The first placement of a fresh year goes after the scaffolding, not before
+  // it — `Template` at position 3 would be a strange thing to push right.
+  const end = sheets.reduce((max, s) => Math.max(max, s.position), -1) + 1;
+  return { position: end, before: null };
+}
+
 /**
  * Excel's serial day number for an ISO date.
  *

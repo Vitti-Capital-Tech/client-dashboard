@@ -82,6 +82,8 @@ export async function syncTrackerRows(
   // once, and the rest are not attempted: forty identical 403s in a cron log is
   // noise that hides the one line explaining what to do.
   let blocked: string | null = null;
+  /** Tabs this run had to rebuild because the tenant has no worksheet copy. */
+  let replayed = 0;
 
   for (const item of items) {
     if (blocked) {
@@ -116,6 +118,11 @@ export async function syncTrackerRows(
       report.skipped++;
     } else if (res.ok && res.sheet) {
       report.written.push({ ticker: deal.ticker, sheet: res.sheet, row: res.overviewRow ?? 0 });
+      if (res.via === "replay") replayed++;
+      // A tab that landed but not where it should have, or without its widths.
+      // The deal IS filed, so these belong in the run's notes rather than
+      // anywhere that reads as a failure.
+      if (res.notes?.length) report.notes.push(...res.notes);
     } else {
       const error = [res.error, res.hint].filter(Boolean).join(" ");
       report.failed.push({ ticker: deal.ticker, error });
@@ -130,5 +137,17 @@ export async function syncTrackerRows(
   report.notes.push(
     `Tracker: ${report.written.length} written, ${report.skipped} already there, ${report.failed.length} failed.`,
   );
+
+  // Said once per run, not once per deal. It is the answer to "why does the new
+  // tab have no yellow on it?" — this tenant's Graph has no worksheet copy, so
+  // the tab was rebuilt: formulas, number formats and column widths carry, fills
+  // and borders do not.
+  if (replayed > 0) {
+    report.notes.push(
+      `${replayed} tab${replayed === 1 ? "" : "s"} rebuilt from Template rather than copied — ` +
+        `this workbook's Graph endpoint has no worksheet copy, so fills and borders did not carry.`,
+    );
+  }
+
   return report;
 }

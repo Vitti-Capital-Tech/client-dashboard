@@ -3,14 +3,16 @@ import assert from "node:assert/strict";
 
 import {
   alreadyInOverview,
+  dealSheetPlacement,
   excelSerialDate,
   formulaSheetRef,
+  isDealSheet,
   nextOverviewSlot,
   nextSheetName,
   overviewRowFormulas,
   tabCellWrites,
 } from "./tracker-format.ts";
-import { writeDealToTracker, type GraphCall } from "./tracker-writer.ts";
+import { columnsOf, writeDealToTracker, type GraphCall } from "./tracker-writer.ts";
 import { dealFromCandidate, syncTrackerRows } from "./tracker-sync.ts";
 import type { CandidateFeedItem } from "./candidates.ts";
 
@@ -45,10 +47,27 @@ const TEMPLATE_FORMULAS = [
   ["2 Tranche", "yes", "Ratio", "=D6/C6"],
 ];
 
-/** A Graph that records calls and answers from a literal workbook. */
+/** The formats beside them — this is what makes a date read as a date. */
+const TEMPLATE_NUMBER_FORMATS = [
+  ["General", "General", "General", "General"],
+  ["dd/mm/yyyy", "General", "General", "General"],
+  ["General", "General", "General", "0.00%"],
+];
+
+const TEMPLATE_COLUMN_WIDTH = 14.5;
+
+/**
+ * A Graph that records calls and answers from a literal workbook.
+ *
+ * `canCopy` is the interesting knob: `worksheets/{id}/copy` exists on some
+ * tenants and answers `400 Resource not found for the segment 'copy'` on
+ * others, and the writer has to produce a correct tab either way. Both branches
+ * are exercised below.
+ */
 function fakeGraph(
   workbook: { sheets: string[]; overview: (string | number)[][] },
   fail?: { path: RegExp; status: number; message?: string },
+  opts: { canCopy?: boolean } = {},
 ) {
   const calls: { method: string; path: string; body?: unknown; session?: string }[] = [];
 
@@ -70,15 +89,26 @@ function fakeGraph(
     }
 
     if (method === "GET" && path.includes("/worksheets?")) {
-      return { ok: true, status: 200, body: { value: workbook.sheets.map((name) => ({ name })) } };
-    }
-    if (method === "GET" && path.includes("usedRange")) {
-      // Graph hands back the address and the formulas together.
       return {
         ok: true,
         status: 200,
-        body: { address: "Template!A1:P30", formulas: TEMPLATE_FORMULAS },
+        body: { value: workbook.sheets.map((name, position) => ({ name, position })) },
       };
+    }
+    if (method === "GET" && path.includes("usedRange")) {
+      // Graph hands back the address, the formulas and the number formats together.
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          address: "Template!A1:P30",
+          formulas: TEMPLATE_FORMULAS,
+          numberFormat: TEMPLATE_NUMBER_FORMATS,
+        },
+      };
+    }
+    if (method === "GET" && path.includes("/format")) {
+      return { ok: true, status: 200, body: { columnWidth: TEMPLATE_COLUMN_WIDTH } };
     }
     if (method === "GET" && path.includes("range(address=")) {
       return { ok: true, status: 200, body: { values: workbook.overview } };
@@ -89,18 +119,58 @@ function fakeGraph(
     if (method === "POST" && path.includes("/closeSession")) {
       return { ok: true, status: 204, body: null };
     }
+    if (method === "POST" && path.endsWith("/copy")) {
+      if (!opts.canCopy) {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            error: {
+              code: "InvalidRequest",
+              message: "Resource not found for the segment 'copy'.",
+            },
+          },
+        };
+      }
+      const body = init.body as { name: string; positionType?: string; relativeTo?: string };
+      const at =
+        body.positionType === "Before" && body.relativeTo
+          ? workbook.sheets.indexOf(body.relativeTo)
+          : -1;
+      workbook.sheets.splice(at < 0 ? workbook.sheets.length : at, 0, body.name);
+      return { ok: true, status: 201, body: { name: body.name } };
+    }
     if (method === "POST" && path.includes("/worksheets/add")) {
       const name = (init.body as { name: string }).name;
+      // Graph always appends — which is the whole reason a move follows.
       workbook.sheets.push(name);
       return { ok: true, status: 201, body: { name } };
     }
-    if (method === "PATCH") return { ok: true, status: 200, body: {} };
+    if (method === "PATCH") {
+      // A position PATCH really moves the tab, so tab ORDER can be asserted
+      // rather than the fact that a request was sent.
+      const named = /worksheets\('([^']+)'\)$/.exec(path);
+      const body = init.body as { position?: number } | undefined;
+      if (named && typeof body?.position === "number") {
+        const name = decodeURIComponent(named[1]);
+        const from = workbook.sheets.indexOf(name);
+        if (from >= 0) {
+          workbook.sheets.splice(from, 1);
+          workbook.sheets.splice(body.position, 0, name);
+        }
+      }
+      return { ok: true, status: 200, body: {} };
+    }
 
     return { ok: false, status: 404, body: { error: { message: `unrouted ${method} ${path}` } } };
   };
 
   return { graph, calls };
 }
+
+/** The PATCHes that fill one cell — not the seed, the widths or the move. */
+const cellWrites = (calls: { method: string; path: string; body?: unknown }[]) =>
+  calls.filter((c) => c.method === "PATCH" && /range\(address='[A-Z]+\d+'\)$/.test(c.path));
 
 const target = { driveId: "d", itemId: "i", overviewSheet: "2026 Overview" };
 
@@ -160,14 +230,39 @@ test("tracker: the session is closed even when the deal was already there", asyn
   assert.ok(calls.some((c) => c.path.includes("/closeSession")), "the early return closes it too");
 });
 
-test("tracker: Template is REPLAYED into the new sheet, because Graph cannot copy one", async () => {
+test("tracker: a real worksheet copy is tried FIRST, and carries the formatting", async () => {
+  // Copy brings fills, borders, widths and validation across; nothing the
+  // replay can do comes close. So it is always attempted, and when the tenant
+  // has it, none of the rebuild runs at all.
+  const workbook = { sheets: ["Template", "Index", "LGF"], overview: OVERVIEW };
+  const { graph, calls } = fakeGraph(workbook, undefined, { canCopy: true });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+  assert.equal(res.via, "copy");
+
+  const copy = calls.find((c) => c.method === "POST" && c.path.endsWith("/copy"));
+  assert.ok(copy, "copy is attempted");
+  assert.deepEqual(copy!.body, { name: "PGF", positionType: "Before", relativeTo: "LGF" });
+
+  assert.ok(
+    !calls.some((c) => c.path.includes("/worksheets/add")),
+    "no empty sheet is created when the copy worked",
+  );
+  assert.ok(
+    !calls.some((c) => c.method === "PATCH" && c.path.includes("A1:P30")),
+    "and Template is not re-written into it",
+  );
+});
+
+test("tracker: a tenant without copy falls back to REPLAYING Template", async () => {
   // `worksheets/{id}/copy` answers 400 "Resource not found for the segment
-  // 'copy'" on both v1.0 and beta, and so does `range/copyFrom` — probed against
-  // the real workbook with `tables/add` as a control. So a tab is an added sheet
-  // plus Template's own used range written into it at the same addresses, where
-  // its sheet-relative formulas stay correct.
+  // 'copy'" on some tenants. That is not a reason to fail the deal — a tab is
+  // then an added sheet plus Template's own used range written into it at the
+  // same addresses, where its sheet-relative formulas stay correct.
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
-  await writeDealToTracker(DEAL, { graph, target });
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.via, "replay");
 
   const seed = calls.find((c) => c.method === "PATCH" && c.path.includes("A1:P30"));
   assert.ok(seed, "Template's shape is written in one call");
@@ -179,6 +274,85 @@ test("tracker: Template is REPLAYED into the new sheet, because Graph cannot cop
     calls.some((c) => c.method === "GET" && c.path.includes("usedRange")),
     "Template's extent is read, not hardcoded",
   );
+});
+
+test("tracker: the replay carries Template's number formats, not just its formulas", async () => {
+  // Without these the tab is arithmetically right and unreadable: `17/08/2026`
+  // renders as `46251`, percentages as `0.075`, and every dollar column as a
+  // bare number. It was the loudest thing wrong with a freshly written tab.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const seed = calls.find((c) => c.method === "PATCH" && c.path.includes("A1:P30"))!;
+  assert.deepEqual(
+    (seed.body as { numberFormat: unknown[][] }).numberFormat,
+    TEMPLATE_NUMBER_FORMATS,
+    "sent alongside the formulas, in the same call",
+  );
+
+  assert.ok(
+    calls.some((c) => c.method === "GET" && c.path.includes("numberFormat")),
+    "and asked for when Template is read",
+  );
+});
+
+test("tracker: the replay carries Template's column widths", async () => {
+  // A tab whose columns are all 8.43 wide does not look like the template even
+  // when every cell in it is correct. Widths are a per-column property and
+  // `range/format` answers null the moment two columns differ, so they are
+  // walked one at a time.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+  assert.equal(res.notes, undefined, "nothing degraded, so nothing to report");
+
+  const widths = calls.filter(
+    (c) => c.method === "PATCH" && c.path.includes("/format") && c.path.includes("PGF"),
+  );
+  // Template's used range is A1:P30 — sixteen columns, A through P.
+  assert.equal(widths.length, 16);
+  assert.deepEqual(widths[0].body, { columnWidth: TEMPLATE_COLUMN_WIDTH });
+});
+
+test("tracker: a new deal lands at the FRONT of the deal tabs, not the far right", async () => {
+  // `worksheets/add` appends, so a new placement was landing past the point the
+  // tab bar scrolls to — the desk stopped finding it. Template and Index stay
+  // where they are; the newest deal goes ahead of the other deals.
+  const workbook = { sheets: ["Template", "Index", "LGF", "TAM"], overview: OVERVIEW };
+  const { graph, calls } = fakeGraph(workbook);
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+  assert.deepEqual(workbook.sheets, ["Template", "Index", "PGF", "LGF", "TAM"]);
+
+  const move = calls.find(
+    (c) => c.method === "PATCH" && /worksheets\('PGF'\)$/.test(c.path),
+  );
+  assert.deepEqual(move?.body, { position: 2 }, "in front of LGF, behind the scaffolding");
+});
+
+test("tracker: the first deal of a fresh year goes after the scaffolding, not before it", async () => {
+  const workbook = { sheets: ["Template", "Index"], overview: [] as (string | number)[][] };
+  const { graph } = fakeGraph(workbook);
+
+  await writeDealToTracker(DEAL, { graph, target });
+  assert.deepEqual(workbook.sheets, ["Template", "Index", "PGF"]);
+});
+
+test("tracker: a tab that could not be moved is reported, not failed", async () => {
+  // The deal is in the workbook and every figure on it is right. Refusing the
+  // write over a tab being in the wrong place would be the worse outcome; a
+  // note in the ingest log is a ten-second fix for a person.
+  const { graph } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW }, {
+    path: /worksheets\('PGF'\)$/,
+    status: 400,
+    message: "sheet is protected",
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true, "the deal is still filed");
+  assert.equal(res.sheet, "PGF");
+  assert.match(res.notes?.join(" ") ?? "", /end of the workbook/);
 });
 
 test("tracker: a new deal lands on the first empty row, continuing the counter", async () => {
@@ -232,12 +406,8 @@ test("tracker: only the terms the mail carried are written to the tab", async ()
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
   await writeDealToTracker(DEAL, { graph, target });
 
-  // The Template seed is a PATCH too; the deal's own cells are the rest.
-  const patches = calls.filter(
-    (c) => c.method === "PATCH" && !c.path.includes("Overview") && !c.path.includes("A1:P30"),
-  );
   const written = new Map(
-    patches.map((c) => [
+    cellWrites(calls).map((c) => [
       /address='([^']+)'/.exec(c.path)![1],
       (c.body as { values: unknown[][] }).values[0][0],
     ]),
@@ -262,11 +432,7 @@ test("tracker: a deal with only a ticker still writes a usable tab", async () =>
 
   assert.equal(res.ok, true);
   assert.equal(res.sheet, "ABC");
-  // The Template seed is a PATCH too; the deal's own cells are the rest.
-  const patches = calls.filter(
-    (c) => c.method === "PATCH" && !c.path.includes("Overview") && !c.path.includes("A1:P30"),
-  );
-  assert.equal(patches.length, 1, "just the ASX code");
+  assert.equal(cellWrites(calls).length, 1, "just the ASX code");
 });
 
 test("tracker: a failed row write reports the tab that was left behind", async () => {
@@ -389,6 +555,58 @@ test("tracker: duplicate detection needs ticker AND date", () => {
 test("tracker: the Overview row is 19 cells, B through T", () => {
   const row = overviewRowFormulas("PGF", "PGF", 61, 58);
   assert.equal(row.length, 19, "B..T inclusive — matches the header on row 3");
+});
+
+test("tracker: a new tab goes in front of the deals, behind the scaffolding", () => {
+  const slots = [
+    { name: "Template", position: 0 },
+    { name: "Index", position: 1 },
+    { name: "2026 Overview", position: 2 },
+    { name: "LGF", position: 3 },
+    { name: "TAM", position: 4 },
+  ];
+  assert.deepEqual(dealSheetPlacement(slots), { position: 3, before: "LGF" });
+
+  // Order in the array is not order in the workbook — `position` is.
+  assert.deepEqual(
+    dealSheetPlacement([...slots].reverse()),
+    { position: 3, before: "LGF" },
+    "the first deal is the lowest position, not the first element",
+  );
+
+  // A fresh year has no deals yet; Template must not be pushed right.
+  assert.deepEqual(
+    dealSheetPlacement([
+      { name: "Template", position: 0 },
+      { name: "Index", position: 1 },
+    ]),
+    { position: 2, before: null },
+  );
+
+  assert.deepEqual(dealSheetPlacement([]), { position: 0, before: null });
+});
+
+test("tracker: Overview, Template, Index and Invoice are not deals", () => {
+  // `Options` and `Invoice` look exactly like tickers, which is why the list is
+  // explicit rather than a pattern.
+  for (const name of ["Template", "Index", "Invoice", "Options", "2026 Overview", "2025 Overview"]) {
+    assert.equal(isDealSheet(name), false, name);
+  }
+  for (const name of ["LGF", "CBE (a)", "BM1", "L1M(T2)"]) {
+    assert.equal(isDealSheet(name), true, name);
+  }
+});
+
+test("tracker: a used range names the columns whose widths have to be replayed", () => {
+  assert.deepEqual(columnsOf("A1:D30"), ["A", "B", "C", "D"]);
+  assert.equal(columnsOf("A1:P30")?.length, 16);
+  assert.deepEqual(columnsOf("C3"), ["C"]);
+  // Past Z, because a template is allowed to grow.
+  assert.deepEqual(columnsOf("Y1:AB1"), ["Y", "Z", "AA", "AB"]);
+  // Anything not shaped like a range skips the width replay rather than
+  // guessing at the whole sheet.
+  assert.equal(columnsOf("Template!A1:P30"), null);
+  assert.equal(columnsOf("D30:A1"), null);
 });
 
 test("tracker: a price of zero is not written as an issue price", () => {
