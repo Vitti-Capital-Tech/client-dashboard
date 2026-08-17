@@ -148,26 +148,51 @@ export function StaffMismatchesClient({
       const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
       const pnl = sellOrCurrent - buyPrice;
 
-      const buySideUnknown = Boolean(r.buySideUnknown || (computed.buyQty === 0 && computed.sellQty > 0));
-      const yearUnresolved = Boolean(r.placementYearUnresolved);
-      const isQtyMismatch = computed.buyQty !== computed.sellQty;
+      /**
+       * What the SOURCES produced — why the row is on this page at all.
+       *
+       * `placementYearUnresolved` is deliberately not one of these. It says the
+       * tracker placed a ticker in more than one year and the engine could not
+       * pick one — a sourcing ambiguity, not a quantity discrepancy. Its rows
+       * balance perfectly, so listing them here filled a page called "Mismatched
+       * Qty" with rows that had nothing wrong with their quantities and buried
+       * the ones that did. A year conflict with no buy side behind it is still
+       * caught, because that is what `buySideUnknown` already means.
+       */
+      const hadDiscrepancy =
+        computed.buyQty !== computed.sellQty ||
+        Boolean(r.buySideUnknown) ||
+        (computed.buyQty === 0 && computed.sellQty > 0);
 
-      // Strict rule: A row MUST have an actual quantity mismatch (computed buyQty !== sellQty),
-      // or a buySideUnknown / yearUnresolved flag, or an active manual override.
-      // Clean rows where buyQty === sellQty are strictly excluded!
-      if (!isQtyMismatch && !buySideUnknown && !yearUnresolved && !edited) {
+      /**
+       * What is TRUE NOW, with the desk's overrides applied.
+       *
+       * Everything below is judged on these rather than on `computed`. Reading
+       * the stored figures is what had a row keep the badge "0 Buys vs 250,000
+       * Sold" after someone had typed 250,000 into its Buy Qty — the fix was in
+       * force everywhere else in the platform, and the one page whose job is to
+       * track fixes was the last to notice.
+       */
+      const stillNoBuySide = buyQty === 0 && sellQty > 0;
+      const stillOff = buyQty !== sellQty || stillNoBuySide;
+
+      // Fixed: it WAS a discrepancy and the values in force reconcile. Only an
+      // override can do that, so this is the audit view's population.
+      const resolved = hadDiscrepancy && !stillOff;
+
+      // Clean rows are strictly excluded. So is a row whose only edit was to a
+      // price — nothing about its quantities was ever in question.
+      if (!hadDiscrepancy && !stillOff) {
         continue;
       }
 
-      // Discrepancy label & type
+      // Discrepancy label & type — from the values in force, so a corrected row
+      // never keeps describing the problem it no longer has.
       let discrepancyType: MismatchItem["discrepancyType"] = "unmatched";
       let discrepancyLabel = "Unmatched Qty";
       const discrepancyDiff = Math.abs(sellQty - buyQty);
 
-      if (yearUnresolved) {
-        discrepancyType = "year_unresolved";
-        discrepancyLabel = "Year Conflict";
-      } else if (buySideUnknown || (computed.buyQty === 0 && computed.sellQty > 0)) {
+      if (stillNoBuySide) {
         discrepancyType = "buy_unknown";
         discrepancyLabel = `0 Buys vs ${sellQty.toLocaleString("en-AU")} Sold`;
       } else if (buyQty < sellQty) {
@@ -175,8 +200,16 @@ export function StaffMismatchesClient({
         discrepancyLabel = `Short Buy (${(sellQty - buyQty).toLocaleString("en-AU")})`;
       } else if (sellQty < buyQty) {
         discrepancyType = "short_sell";
-        discrepancyLabel = `Excess Buy (${(buyQty - sellQty).toLocaleString("en-AU")})`;
-      } else if (edited) {
+        // "Excess Buy" is only true against something sold. With ZERO sells
+        // there is nothing for the buy side to be in excess of — the parcel was
+        // bought and never disposed of, which usually means it is still held and
+        // the holdings snapshot has not caught up. Say what the ledger says and
+        // let the desk decide; `Mark Open` is the one-click answer.
+        discrepancyLabel =
+          sellQty === 0
+            ? `${buyQty.toLocaleString("en-AU")} Bought, 0 Sold`
+            : `Excess Buy (${(buyQty - sellQty).toLocaleString("en-AU")})`;
+      } else if (resolved) {
         discrepancyType = "unmatched";
         discrepancyLabel = "Fixed with Override";
       }
@@ -190,14 +223,18 @@ export function StaffMismatchesClient({
         sellOrCurrent,
         pnl,
         openPosition: r.openQty > 0,
-        type: edited ? "Unmatched (edited)" : "Unmatched",
-        flagged: buySideUnknown || yearUnresolved,
+        type: resolved ? "Matched (edited)" : edited ? "Unmatched (edited)" : "Unmatched",
+        // Red means "the quantities do not add up", so a corrected row stops
+        // being red. The year flag no longer colours anything here either — a
+        // row is on this page for its quantities.
+        flagged: stillNoBuySide,
         edited: !!edited,
+        resolved,
         overridden,
         note: o?.note ?? r.comment ?? null,
         computed,
-        excludedFromTotal: buySideUnknown && buyPrice === 0 && buyQty === 0,
-        isMatched: r.isMatched,
+        excludedFromTotal: r.buySideUnknown && buyPrice === 0 && buyQty === 0,
+        isMatched: !stillOff && buyQty > 0,
         isOption: r.isOption,
         isUnlistedOption: r.isUnlistedOption,
         isDbOpenValued: r.isDbOpenValued,
@@ -223,17 +260,26 @@ export function StaffMismatchesClient({
     });
   }, [storedPnl, overridesMap, clientMap, accountMap]);
 
-  // Counts for KPI cards and filter tabs
+  /**
+   * Counts for the KPI cards and the filter tabs.
+   *
+   * Everything except `fixed` counts OUTSTANDING rows only. A row whose
+   * quantities now reconcile is not a discrepancy — counting it under "Total
+   * Discrepancies" turned a number the desk works down into one that only ever
+   * grows, and left "Affected Clients" naming clients with nothing left to fix.
+   */
+  const outstanding = useMemo(() => allMismatches.filter((m) => !m.resolved), [allMismatches]);
+
   const counts = useMemo(() => {
-    const pending = allMismatches.filter((m) => !m.edited).length;
-    const fixed = allMismatches.filter((m) => m.edited).length;
-    const shortBuy = allMismatches.filter((m) => m.discrepancyType === "short_buy").length;
-    const buyUnknown = allMismatches.filter((m) => m.discrepancyType === "buy_unknown").length;
-    const affectedClients = new Set(allMismatches.map((m) => m.clientId)).size;
-    const affectedAccounts = new Set(allMismatches.map((m) => m.accountId)).size;
+    const pending = outstanding.filter((m) => !m.edited).length;
+    const fixed = allMismatches.filter((m) => m.resolved).length;
+    const shortBuy = outstanding.filter((m) => m.discrepancyType === "short_buy").length;
+    const buyUnknown = outstanding.filter((m) => m.discrepancyType === "buy_unknown").length;
+    const affectedClients = new Set(outstanding.map((m) => m.clientId)).size;
+    const affectedAccounts = new Set(outstanding.map((m) => m.accountId)).size;
 
     return {
-      all: allMismatches.length,
+      all: outstanding.length,
       pending,
       fixed,
       shortBuy,
@@ -241,14 +287,22 @@ export function StaffMismatchesClient({
       affectedClients,
       affectedAccounts,
     };
-  }, [allMismatches]);
+  }, [allMismatches, outstanding]);
 
   // Filtered rows based on tab, client dropdown, and search query
   const filteredRows = useMemo(() => {
     return allMismatches.filter((row) => {
+      // A reconciled row belongs in ONE place: the audit tab that exists to show
+      // what was fixed. Everywhere else it is finished work, and leaving it in
+      // the list is what made a corrected buy side look like it had not taken.
+      if (activeFilterTab === "fixed") {
+        if (!row.resolved) return false;
+      } else if (row.resolved) {
+        return false;
+      }
+
       // Filter tab
       if (activeFilterTab === "pending" && row.edited) return false;
-      if (activeFilterTab === "fixed" && !row.edited) return false;
       if (activeFilterTab === "short_buy" && row.discrepancyType !== "short_buy") return false;
       if (activeFilterTab === "buy_unknown" && row.discrepancyType !== "buy_unknown") return false;
 
@@ -480,8 +534,11 @@ export function StaffMismatchesClient({
               {filteredRows.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="text-center text-mut py-10">
-                    {allMismatches.length === 0
-                      ? "🎉 No quantity mismatches or shortfalls found! All client accounts reconcile cleanly."
+                    {/* An emptied-out page is the GOAL, so it has to read as
+                        one — counting rows the desk has already fixed would
+                        report a finished job as "nothing matches your filter". */}
+                    {outstanding.length === 0
+                      ? "🎉 No quantity mismatches or shortfalls outstanding! All client accounts reconcile cleanly."
                       : "No mismatches match the active filters or search query."}
                   </td>
                 </tr>

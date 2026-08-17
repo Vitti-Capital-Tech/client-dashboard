@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PnlSummaryRow } from "@/lib/export/order-history";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
+import { markPositionOpenAction } from "@/app/actions/trades";
 import { ManageTradesModal } from "./ManageTradesModal";
 
 export interface MismatchItem extends PnlSummaryRow {
@@ -13,9 +14,14 @@ export interface MismatchItem extends PnlSummaryRow {
   clientInitials: string | null;
   accountLabel: string;
   accountExternalRef: string | null;
-  discrepancyType: "short_buy" | "buy_unknown" | "short_sell" | "unmatched" | "year_unresolved";
+  discrepancyType: "short_buy" | "buy_unknown" | "short_sell" | "unmatched";
   discrepancyLabel: string;
   discrepancyDiff: number;
+  /**
+   * The quantities reconcile on the values in FORCE — the desk's override did
+   * its job. Not the same as `edited`: a row can be edited and still not add up.
+   */
+  resolved: boolean;
 }
 
 const money = (n: number) =>
@@ -93,6 +99,32 @@ export function MismatchRow({
     if (!res.ok) return setError(res.error);
     router.refresh();
     onClose();
+  };
+
+  /**
+   * "This is not a mismatch, it is a parcel we still hold."
+   *
+   * Offered only where the claim can be true — units bought, fewer sold. The
+   * override it writes sets both legs to the held quantity and carries the row
+   * at COST, so it reconciles without inventing a gain or a loss. See
+   * `markPositionOpenAction`.
+   */
+  const heldQty = row.buyQty - row.sellQty;
+  const canMarkOpen = !row.resolved && heldQty > 0;
+
+  const markOpen = async () => {
+    setSaving(true);
+    setError(null);
+    const res = await markPositionOpenAction(
+      row.accountId,
+      row.clientId,
+      row.ticker,
+      row.buyQty,
+      row.buyPrice,
+    );
+    setSaving(false);
+    if (!res.ok) return setError(res.error);
+    router.refresh();
   };
 
   const clearOverride = async () => {
@@ -217,9 +249,16 @@ export function MismatchRow({
         {/* Status / Override Note */}
         <td className="px-4.5 py-3 text-xs">
           <div className="flex items-center gap-1.5 flex-wrap">
-            {row.edited ? (
+            {/* Three states, not two. An edited row whose quantities STILL do
+                not add up said "Edited" and read as done — it is the one that
+                most needs another look. */}
+            {row.resolved ? (
               <span className="pill text-[10px] font-semibold rounded-full px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200">
-                Edited
+                Fixed
+              </span>
+            ) : row.edited ? (
+              <span className="pill text-[10px] font-semibold rounded-full px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200">
+                Edited &middot; still off
               </span>
             ) : (
               <span className="pill text-[10px] font-semibold rounded-full px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200">
@@ -237,6 +276,21 @@ export function MismatchRow({
         {/* Actions */}
         <td className="px-4.5 py-3 text-right whitespace-nowrap select-none">
           <div className="flex items-center justify-end gap-1.5">
+            {/* Only where the claim can be true: units bought, fewer sold.
+                Nothing was sold for a buy side to be in excess OF, so "this is
+                still held" is the likeliest reading — and until now the only way
+                to say it was to type the sell leg in by hand. */}
+            {canMarkOpen && (
+              <button
+                type="button"
+                onClick={markOpen}
+                disabled={saving}
+                title={`Record ${qty(heldQty)} units as still held, carried at cost — no unrealised gain or loss is invented`}
+                className="btn ghost sm text-[11px] font-semibold px-2.5 py-1 rounded-[6px] border border-amber-300 text-amber-800 hover:bg-amber-50 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Mark Open
+              </button>
+            )}
             <button
               type="button"
               onClick={onEdit}

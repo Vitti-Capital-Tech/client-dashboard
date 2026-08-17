@@ -210,6 +210,57 @@ export async function deleteAllTradesForTickerAction(
 }
 
 /**
+ * Say that a row is a still-HELD position rather than a quantity discrepancy.
+ *
+ * The shape this exists for: units bought, none sold. That is not an "excess
+ * buy" — nothing was sold for the buy side to be in excess OF — it is an open
+ * parcel the holdings snapshot did not account for, usually because a placement
+ * allocation has not reached the portfolio table yet. The engine already handles
+ * the case it CAN see: `mergeDbHoldings` sets both legs from the held quantity
+ * and marks the row `isDbOpenValued`. This is the desk saying the same thing
+ * about a parcel the snapshot is silent on, and it is a judgement — hence a
+ * recorded override with a note, not an automatic rule.
+ *
+ * Two values are written, and the second matters as much as the first:
+ *
+ *   sellQty = buyQty   both legs from the held quantity, so the row reconciles
+ *                      and stops being reported as a mismatch
+ *   sellOrCurrent = buyPrice
+ *                      carried at COST. Left at zero the row reads as a total
+ *                      loss of its entire cost base — DY6 showed −$2,000.10 on a
+ *                      parcel that had lost nothing — which is a fabricated
+ *                      number, not a conservative one. At cost it shows zero
+ *                      unrealised P&L, which is the honest answer until a real
+ *                      mark arrives.
+ */
+export async function markPositionOpenAction(
+  accountId: string,
+  clientId: string,
+  ticker: string,
+  heldQty: number,
+  costBase: number,
+  note?: string,
+): Promise<Result> {
+  if (!Number.isFinite(heldQty) || heldQty <= 0) {
+    return { ok: false, error: "An open position needs a quantity to hold." };
+  }
+  if (!Number.isFinite(costBase) || costBase < 0) {
+    return { ok: false, error: "The cost base is not a number." };
+  }
+
+  const parent = ticker.replace(/-UO\d*$/i, "").trim().toUpperCase();
+  return savePnlOverride(accountId, clientId, parent, {
+    buyQty: heldQty,
+    sellQty: heldQty,
+    buyPrice: costBase,
+    sellOrCurrent: costBase,
+    note:
+      note?.trim() ||
+      `Open position — ${heldQty.toLocaleString("en-AU")} units still held, carried at cost by the desk.`,
+  });
+}
+
+/**
  * Dismiss or exclude a mismatched position by applying a zeroed override.
  */
 export async function excludePositionAction(
