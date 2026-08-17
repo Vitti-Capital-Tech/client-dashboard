@@ -7,8 +7,14 @@ import {
   deleteTradeAction,
   deleteAllTradesForTickerAction,
   excludePositionAction,
+  reclassifyTradesAsOptionAction,
+  addTradeAction,
+  updateTradeAction,
   type TradeDetail,
+  type TradeInput,
 } from "@/app/actions/trades";
+import { getParentTicker, isOptionCode } from "@/lib/pnl-calculator";
+import { TradeForm } from "./TradeForm";
 
 interface ManageTradesModalProps {
   isOpen: boolean;
@@ -49,6 +55,36 @@ export function ManageTradesModal({
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [confirmExclude, setConfirmExclude] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+
+  /**
+   * Re-filing this ticker's contract notes as options.
+   *
+   * Pre-filled with the ASX convention — the ordinary code plus `O` — because
+   * that is the answer nine times in ten, but left editable: a company with more
+   * than one series in issue uses `FRSOA`, `FRSOB` and so on, and only the desk
+   * knows which one these notes belong to.
+   */
+  const [showReclassify, setShowReclassify] = useState(false);
+  const [optionCode, setOptionCode] = useState(`${getParentTicker(ticker)}O`);
+
+  /**
+   * Hand-entering or amending a line.
+   *
+   * `null` = closed; `{ mode: "add" }` = a new line; `{ mode: "edit", trade }` =
+   * that one. One piece of state so the two forms can never be open at once and
+   * leave the desk unsure which they are typing into.
+   */
+  const [form, setForm] = useState<
+    { mode: "add" } | { mode: "edit"; trade: TradeDetail } | null
+  >(null);
+
+  const closeOthers = () => {
+    setTradeToConfirm(null);
+    setConfirmDeleteAll(false);
+    setConfirmExclude(false);
+    setShowReclassify(false);
+    setForm(null);
+  };
 
   const reloadTrades = useCallback(async () => {
     setLoading(true);
@@ -157,6 +193,73 @@ export function ManageTradesModal({
     }
   };
 
+  const parent = getParentTicker(ticker);
+  const wantedCode = optionCode.trim().toUpperCase();
+  // Checked here as well as in the action so a typo is caught before it costs a
+  // round trip and a full recompute. The action is still the authority.
+  const codeProblem = !wantedCode
+    ? "Enter an option code."
+    : wantedCode === parent
+      ? `${wantedCode} is the ordinary code — an option needs its own.`
+      : !isOptionCode(wantedCode)
+        ? `Needs more than three characters with an O in the suffix, e.g. ${parent}O.`
+        : getParentTicker(wantedCode) !== parent
+          ? `${wantedCode} belongs to ${getParentTicker(wantedCode)}, not ${parent}.`
+          : null;
+
+  const handleTradeSubmit = async (input: TradeInput) => {
+    if (!form) return;
+    setActionLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    const res =
+      form.mode === "add"
+        ? await addTradeAction(accountId, clientId, input)
+        : await updateTradeAction(form.trade.id, accountId, clientId, input);
+
+    setActionLoading(false);
+
+    if (!res.ok) {
+      setError(res.error);
+      return;
+    }
+
+    setForm(null);
+    setSuccess(
+      form.mode === "add"
+        ? `Added ${input.side} ${input.units.toLocaleString("en-AU")} ${input.securityCode.toUpperCase()} (CNote #${res.data.cnote}) and recalculated P&L.`
+        : `CNote #${res.data.cnote} amended and P&L recalculated.`,
+    );
+    router.refresh();
+    if (onSuccess) onSuccess();
+    void reloadTrades();
+  };
+
+  const handleReclassify = async () => {
+    setActionLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    const res = await reclassifyTradesAsOptionAction(accountId, clientId, ticker, wantedCode);
+    setActionLoading(false);
+
+    if (!res.ok) {
+      setError(res.error);
+    } else {
+      setShowReclassify(false);
+      setSuccess(
+        `${res.data.count} contract note(s) re-filed as ${res.data.code} and P&L recalculated. ` +
+          `The row now reports as an option, so it leaves this page.`,
+      );
+      router.refresh();
+      if (onSuccess) onSuccess();
+      setTimeout(() => {
+        onClose();
+      }, 2200);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-xs animate-in fade-in duration-200">
       <div
@@ -164,8 +267,10 @@ export function ManageTradesModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="px-6 py-4.5 bg-paper border-b border-line flex items-center justify-between flex-shrink-0">
-          <div className="space-y-1">
+        <div className="px-6 py-4.5 bg-paper border-b border-line flex items-start justify-between gap-3 flex-shrink-0">
+          {/* `min-w-0` so a long client or account name wraps instead of pushing
+              the close button off the edge. */}
+          <div className="space-y-1 min-w-0">
             <div className="flex items-center gap-2.5 flex-wrap">
               <span className="font-mono font-bold text-sm px-2 py-0.5 rounded-[5px] bg-navy text-white">
                 {ticker}
@@ -185,7 +290,7 @@ export function ManageTradesModal({
                 {discrepancyLabel}
               </span>
             </div>
-            <div className="text-xs text-mut">
+            <div className="text-xs text-mut break-words">
               Client: <span className="font-semibold text-ink">{clientName}</span> &middot; Account:{" "}
               <span className="font-mono text-ink">
                 {accountExternalRef ? `#${accountExternalRef}` : ""} {accountLabel}
@@ -197,7 +302,7 @@ export function ManageTradesModal({
             type="button"
             onClick={onClose}
             disabled={actionLoading}
-            className="w-8 h-8 rounded-full border border-line flex items-center justify-center text-mut hover:text-ink hover:bg-paper-2 transition-colors cursor-pointer"
+            className="w-8 h-8 shrink-0 rounded-full border border-line flex items-center justify-center text-mut hover:text-ink hover:bg-paper-2 transition-colors cursor-pointer"
             title="Close modal (Esc)"
           >
             &times;
@@ -232,7 +337,10 @@ export function ManageTradesModal({
         )}
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-4 flex-1">
+        {/* `overflow-x-hidden` + `min-w-0` keep the WIDE thing — the contract
+            note table — scrolling inside its own box instead of dragging the
+            whole body sideways and taking the panels and the header with it. */}
+        <div className="p-6 overflow-y-auto overflow-x-hidden min-w-0 space-y-4 flex-1">
           {/* Confirmation Prompt for Single Trade Deletion */}
           {tradeToConfirm && (
             <div className="p-4 rounded-[12px] bg-amber-50 border border-amber-200 text-ink space-y-3 animate-in fade-in duration-150">
@@ -365,26 +473,140 @@ export function ManageTradesModal({
             </div>
           )}
 
+          {/* Entering or amending a line by hand.
+              The pair that splits a misbooked note: the original is amended down
+              to the share parcel, the option leg is added beside it under its own
+              code. Neither half is expressible as an override — an override
+              corrects a row's totals; these are ledger lines. */}
+          {form && (
+            <TradeForm
+              key={form.mode === "edit" ? form.trade.id : "add"}
+              mode={form.mode}
+              existing={form.mode === "edit" ? form.trade : undefined}
+              defaultCode={ticker}
+              saving={actionLoading}
+              onCancel={() => setForm(null)}
+              onSubmit={handleTradeSubmit}
+            />
+          )}
+
+          {/* Reclassify as options.
+              For when the broker booked option transactions against the ordinary
+              code: FRS then carries a sell side with no buys behind it and reads
+              as a mismatch forever, when the trades simply belong on their own
+              option line. */}
+          {/* `min-w-0` + `break-words` throughout: the body clips rather than
+              scrolls now, so anything that overflowed here would be invisibly
+              cut off — a worse failure than the sideways scroll it replaced. */}
+          {showReclassify && (
+            <div className="p-4 rounded-[12px] bg-[#f5f3fa] border border-[#d8d3e5] text-ink space-y-3 min-w-0 animate-in fade-in duration-150">
+              <div className="space-y-1 min-w-0">
+                <div className="text-xs font-bold text-[#443f5c]">
+                  Re-file {trades.length} contract note{trades.length === 1 ? "" : "s"} as options
+                </div>
+                <p className="text-xs text-[#5c5775] leading-relaxed break-words">
+                  These trades move from <span className="font-mono font-bold">{ticker}</span>{" "}
+                  onto their own option line. Enter the option code to reclassify them as, or accept the default{" "}
+                </p>
+              </div>
+
+              <div className="flex items-end gap-2.5 flex-wrap">
+                <label className="space-y-1">
+                  <span className="block text-[10.5px] font-semibold uppercase tracking-wider text-[#5c5775]">
+                    Option code
+                  </span>
+                  <input
+                    type="text"
+                    value={optionCode}
+                    onChange={(e) => setOptionCode(e.target.value.toUpperCase())}
+                    disabled={actionLoading}
+                    spellCheck={false}
+                    className="w-40 bg-white border border-[#d8d3e5] rounded-[6px] px-2.5 py-1.5 font-mono text-[13px] font-bold text-ink outline-none focus:border-navy transition-all"
+                  />
+                </label>
+                <div className="text-[11px] text-[#5c5775] pb-2 min-w-0 break-words">
+                  {codeProblem ? (
+                    <span className="text-loss-d font-semibold">{codeProblem}</span>
+                  ) : (
+                    <span>
+                      {ticker} &rarr; <span className="font-mono font-bold">{wantedCode}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowReclassify(false)}
+                  disabled={actionLoading}
+                  className="px-3 py-1.5 rounded-[6px] text-xs font-medium border border-[#d8d3e5] text-[#443f5c] hover:bg-white transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReclassify}
+                  disabled={actionLoading || codeProblem !== null}
+                  className="px-3 py-1.5 rounded-[6px] text-xs font-bold bg-[#5c5775] text-white hover:bg-[#443f5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {actionLoading ? "Re-filing..." : `Convert to ${wantedCode || "Options"}`}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Trades Table */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-mut">
                 Associated Contract Notes ({trades.length})
               </h3>
-              {trades.length > 1 && (
+              <div className="flex items-center gap-3">
+                {/* Available even with no notes on file — a leg the ledger never
+                    had is exactly the thing that has to be typed in. */}
                 <button
                   type="button"
                   onClick={() => {
-                    setConfirmDeleteAll(true);
-                    setTradeToConfirm(null);
-                    setConfirmExclude(false);
+                    closeOthers();
+                    setForm({ mode: "add" });
                   }}
                   disabled={actionLoading}
-                  className="text-[11px] font-semibold text-loss hover:underline cursor-pointer flex items-center gap-1"
+                  title="Enter a contract note line the broker file did not carry"
+                  className="text-[11px] font-semibold text-navy hover:underline cursor-pointer flex items-center gap-1"
                 >
-                  Delete All ({trades.length})
+                  + Add Transaction
                 </button>
-              )}
+                {/* Only with notes to move. Nothing to reclassify on a row that
+                    came from a snapshot or a modelled grant. */}
+                {trades.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeOthers();
+                      setShowReclassify(true);
+                    }}
+                    disabled={actionLoading}
+                    title="These are option transactions booked against the ordinary code"
+                    className="text-[11px] font-semibold text-[#5c5775] hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    Convert to Options
+                  </button>
+                )}
+                {trades.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeOthers();
+                      setConfirmDeleteAll(true);
+                    }}
+                    disabled={actionLoading}
+                    className="text-[11px] font-semibold text-loss hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    Delete All ({trades.length})
+                  </button>
+                )}
+              </div>
             </div>
 
             {loading ? (
@@ -400,18 +622,34 @@ export function ManageTradesModal({
                   <span className="font-mono font-bold text-ink">{ticker}</span>. This mismatch
                   originates from a portfolio snapshot or an unlisted placement grant.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setConfirmExclude(true)}
-                  disabled={actionLoading}
-                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-xs font-bold bg-paper text-navy border border-navy/30 hover:bg-navy hover:text-white transition-colors cursor-pointer"
-                >
-                  Dismiss / Exclude Mismatch
-                </button>
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeOthers();
+                      setForm({ mode: "add" });
+                    }}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-xs font-bold bg-navy text-white hover:bg-navy-d transition-colors cursor-pointer"
+                  >
+                    + Add Transaction
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeOthers();
+                      setConfirmExclude(true);
+                    }}
+                    disabled={actionLoading}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[6px] text-xs font-bold bg-paper text-navy border border-navy/30 hover:bg-navy hover:text-white transition-colors cursor-pointer"
+                  >
+                    Dismiss / Exclude Mismatch
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="border border-line rounded-[10px] overflow-hidden bg-white shadow-xs">
-                <table className="w-full text-xs text-left border-collapse">
+              <div className="border border-line rounded-[10px] overflow-x-auto bg-white shadow-xs">
+                <table className="w-full min-w-[620px] text-xs text-left border-collapse">
                   <thead>
                     <tr className="bg-paper text-mut text-[11px] font-semibold uppercase tracking-wider border-b border-line select-none">
                       <th className="px-3.5 py-2.5">Trade Date</th>
@@ -459,28 +697,44 @@ export function ManageTradesModal({
                           </span>
                         </td>
                         <td className="px-3.5 py-2.5 whitespace-nowrap text-right select-none">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setTradeToConfirm(t);
-                              setConfirmDeleteAll(false);
-                              setConfirmExclude(false);
-                            }}
-                            disabled={actionLoading}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[5px] text-[11px] font-semibold text-loss hover:bg-loss-bg border border-transparent hover:border-loss/30 transition-all cursor-pointer"
-                            title="Delete this contract note"
-                          >
-                            <svg
-                              className="w-3 h-3"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
+                          <div className="inline-flex items-center gap-1">
+                            {/* The other half of splitting a misbooked note:
+                                reduce this line to the share parcel it really
+                                was, then add the option leg beside it. */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeOthers();
+                                setForm({ mode: "edit", trade: t });
+                              }}
+                              disabled={actionLoading}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[5px] text-[11px] font-semibold text-navy hover:bg-paper border border-transparent hover:border-navy/30 transition-all cursor-pointer"
+                              title="Amend the units, price or security on this contract note"
                             >
-                              <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
-                            </svg>
-                            Delete
-                          </button>
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                closeOthers();
+                                setTradeToConfirm(t);
+                              }}
+                              disabled={actionLoading}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[5px] text-[11px] font-semibold text-loss hover:bg-loss-bg border border-transparent hover:border-loss/30 transition-all cursor-pointer"
+                              title="Delete this contract note"
+                            >
+                              <svg
+                                className="w-3 h-3"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                              >
+                                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
+                              </svg>
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

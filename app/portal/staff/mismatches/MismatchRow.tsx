@@ -110,7 +110,13 @@ export function MismatchRow({
    * `markPositionOpenAction`.
    */
   const heldQty = row.buyQty - row.sellQty;
-  const canMarkOpen = !row.resolved && heldQty > 0;
+  // Not offered where the ENGINE has already said the position is open —
+  // `isDbOpenValued` means the holdings snapshot matched the parcel and valued
+  // it, which is the same statement this button makes and a better-sourced one.
+  // Offering it there invited the desk to overwrite a figure read from the
+  // snapshot with one typed at cost. Those rows still belong on the page if
+  // their quantities disagree; there is simply nothing here to declare.
+  const canMarkOpen = !row.resolved && heldQty > 0 && !row.isDbOpenValued;
 
   const markOpen = async () => {
     setSaving(true);
@@ -298,11 +304,16 @@ export function MismatchRow({
             >
               {row.edited ? "Edit Fix" : "Fix Qty"}
             </button>
+            {/* A BIN read as "delete this row" — which is the one thing this
+                button does not do on its own. Behind it now sit adding a line,
+                amending one, reclassifying the lot as options, dismissing the
+                position and, yes, deleting. A ledger icon and a name say that;
+                a trash can promised something destructive and offered a menu. */}
             <button
               type="button"
               onClick={() => setShowManageModal(true)}
-              className="p-1.5 rounded-[6px] text-mut hover:text-loss hover:bg-loss-bg border border-line/70 hover:border-loss/40 transition-all cursor-pointer inline-flex items-center justify-center"
-              title="Manage & Delete Transactions / Exclude Position"
+              className="btn ghost sm inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-[6px] text-mut border border-line/70 hover:text-navy hover:border-navy/40 hover:bg-paper-2 transition-all cursor-pointer"
+              title="Contract notes for this ticker — add, amend, reclassify, delete or dismiss"
             >
               <svg
                 className="w-3.5 h-3.5"
@@ -310,9 +321,11 @@ export function MismatchRow({
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
+                strokeLinecap="round"
               >
-                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6" />
+                <path d="M4 6h10M4 12h10M4 18h7M18 15v6M15 18h6" />
               </svg>
+              Txns
             </button>
           </div>
 

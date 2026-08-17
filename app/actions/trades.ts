@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActor } from "@/lib/session";
 import { recomputeClient } from "@/lib/pnl/batch";
+import { getParentTicker, isOptionCode } from "@/lib/pnl-calculator";
 import { savePnlOverride } from "./pnl-overrides";
 
 export interface TradeDetail {
@@ -43,12 +44,18 @@ export async function getTradesForMismatch(
     const supabase = await createClient();
     const parent = ticker.replace(/-UO\d*$/i, "").trim().toUpperCase();
 
+    // `raw_security` is in the net because it is the field the P&L engine reads
+    // the ticker from (`dbTradesToParsedRows`). A note whose `security_code` was
+    // normalised away from it still feeds the row on screen, so it has to be
+    // listed here — and re-filed with the rest when the desk reclassifies.
     const { data, error } = await supabase
       .from("trades")
       .select("*")
       .eq("account_id", accountId)
       .neq("status", "CANCELLED")
-      .or(`security_code.eq.${ticker},parent_code.eq.${parent},security_code.eq.${parent}`)
+      .or(
+        `security_code.eq.${ticker},parent_code.eq.${parent},security_code.eq.${parent},raw_security.eq.${ticker},raw_security.eq.${parent}`,
+      )
       .order("trade_date", { ascending: false })
       .order("cnote", { ascending: false });
 
@@ -205,6 +212,448 @@ export async function deleteAllTradesForTickerAction(
     return {
       ok: false,
       error: err instanceof Error ? err.message : "Failed to delete trades.",
+    };
+  }
+}
+
+/**
+ * Make sure `securities` carries a code before a trade points at it.
+ *
+ * `trades.security_code` and `trades.parent_code` are both FOREIGN KEYS into
+ * `securities`, so writing a code the catalogue has never seen fails on the
+ * constraint rather than on anything a reader would recognise. That is the
+ * normal case here, not an edge one: an option series the broker never booked
+ * against — the whole reason the desk is reclassifying or hand-entering — has
+ * no catalogue row by definition.
+ *
+ * Existing rows are LEFT ALONE. The catalogue owns names, prices and sectors,
+ * and a placeholder name written over a real one would show up on every screen
+ * that renders the security.
+ */
+async function ensureSecurityExists(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  code: string,
+  name?: string,
+): Promise<string | null> {
+  const parent = getParentTicker(code);
+
+  // The parent has to exist first — it is the FK target of the child's own
+  // `parent_code`, and an option's ordinary may itself be absent.
+  const rows = [
+    ...(parent && parent !== code
+      ? [{ code: parent, name: parent, parent_code: null, security_class: "Ordinary" }]
+      : []),
+    {
+      code,
+      name: name?.trim() || code,
+      parent_code: parent && parent !== code ? parent : null,
+      security_class: isOptionCode(code) ? "Options" : "Ordinary",
+    },
+  ];
+
+  for (const row of rows) {
+    // `ignoreDuplicates` is what keeps this from overwriting the catalogue.
+    const { error } = await supabase
+      .from("securities")
+      .upsert(row, { onConflict: "code", ignoreDuplicates: true });
+    if (error) return `Could not add ${row.code} to the securities catalogue: ${error.message}`;
+  }
+
+  return null;
+}
+
+/**
+ * Re-file a ticker's contract notes as OPTION trades under an option code.
+ *
+ * The case this exists for: the broker booked what were plainly option
+ * transactions against the ordinary code, so `FRS` carries a sell side with no
+ * buys behind it and reads as a quantity mismatch forever. It is not one — the
+ * trades belong on their own option line, which the P&L already knows how to
+ * report and which the mismatch page skips entirely.
+ *
+ * **`raw_security` is the field that matters.** The engine reads the ticker from
+ * there and nowhere else (`dbTradesToParsedRows`), so updating `security_code`
+ * alone would change what the UI lists and leave every figure exactly as it was.
+ * All four columns are written so the ledger stays internally consistent:
+ * `raw_security` and `security_code` take the new code, `parent_code` its
+ * 3-character underlying — `FRSO` stays a derivative OF `FRS`, which is what
+ * keeps the option line beside the ordinary rather than orphaned — and
+ * `instrument` replaces the broker's "ORDINARY FULLY PAID" description.
+ *
+ * Two guards, both about not moving money to the wrong company:
+ *
+ *   1. The new code must READ as an option (`isOptionCode`) — length past three
+ *      with an `O` in the suffix, the ASX convention the whole engine keys on.
+ *      `FRSX` would rename the trades and reclassify nothing.
+ *   2. Its parent must be the SAME underlying. `FRS → FRSO` and `FRS → FRSOE`
+ *      are the desk correcting a description; `FRS → ABCO` is a different
+ *      company's option, and would move settled contract notes onto it.
+ *
+ * Destructive in the sense that it rewrites ledger rows, so it is audited by
+ * count and by both codes, and the P&L is recomputed before it returns.
+ */
+export async function reclassifyTradesAsOptionAction(
+  accountId: string,
+  clientId: string,
+  ticker: string,
+  newCodeInput: string,
+  instrumentLabel?: string,
+): Promise<Result<{ count: number; code: string }>> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  const from = ticker.replace(/-UO\d*$/i, "").trim().toUpperCase();
+  const code = String(newCodeInput || "").trim().toUpperCase();
+
+  if (!code) return { ok: false, error: "Enter the option code to file these trades under." };
+  if (code === from) {
+    return { ok: false, error: `${code} is the ordinary code — an option needs its own.` };
+  }
+  if (!isOptionCode(code)) {
+    return {
+      ok: false,
+      error: `"${code}" does not read as an option code. It needs more than three characters with an O in the suffix — ${getParentTicker(from)}O or ${getParentTicker(from)}OE, for example.`,
+    };
+  }
+  if (getParentTicker(code) !== getParentTicker(from)) {
+    return {
+      ok: false,
+      error: `"${code}" belongs to ${getParentTicker(code)}, not ${getParentTicker(from)}. Reclassifying would move these contract notes onto a different company.`,
+    };
+  }
+
+  try {
+    const supabase = await createClient();
+    const parent = getParentTicker(code);
+
+    // The same net the mismatch page casts, so what is re-filed is exactly what
+    // the row on screen was built from.
+    const { data: trades, error: fetchErr } = await supabase
+      .from("trades")
+      .select("id, cnote, raw_security, security_code, units, side")
+      .eq("account_id", accountId)
+      .neq("status", "CANCELLED")
+      .or(
+        `security_code.eq.${from},parent_code.eq.${from},raw_security.eq.${from}`,
+      );
+
+    if (fetchErr) return { ok: false, error: fetchErr.message };
+
+    // Trades already sitting on the target code are left alone — re-filing them
+    // onto themselves would inflate the audited count with rows nothing changed.
+    const moving = (trades ?? []).filter(
+      (t) => String(t.raw_security ?? "").trim().toUpperCase() !== code,
+    );
+    if (moving.length === 0) {
+      return { ok: false, error: `No contract notes found under ${from} to reclassify.` };
+    }
+
+    // The option series the desk is moving these onto has, by definition, never
+    // been booked against — so the catalogue has no row for it and the FK below
+    // would fail.
+    const catalogueErr = await ensureSecurityExists(supabase, code);
+    if (catalogueErr) return { ok: false, error: catalogueErr };
+
+    const { error: updateErr } = await supabase
+      .from("trades")
+      .update({
+        raw_security: code,
+        security_code: code,
+        parent_code: parent,
+        instrument: instrumentLabel?.trim() || "OPTION",
+      })
+      .in(
+        "id",
+        moving.map((t) => t.id),
+      );
+
+    if (updateErr) return { ok: false, error: updateErr.message };
+
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Reclassified trades as options",
+      detail: `Re-filed ${moving.length} contract note(s) from ${from} to ${code} (parent ${parent}) on account ${accountId}`,
+      client_id: clientId,
+    });
+
+    // The stored P&L still describes the old shape until this runs — the row
+    // would otherwise sit on the mismatch page reading FRS until tomorrow.
+    await recomputeClient(clientId, { trigger: "manual" });
+    revalidatePath("/portal", "layout");
+
+    return { ok: true, data: { count: moving.length, code } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to reclassify the trades.",
+    };
+  }
+}
+
+/** What the desk types to add or amend one contract note line. */
+export type TradeInput = {
+  /** Raw security code — `FRS`, `FRSO`. Drives which P&L row the line lands on. */
+  securityCode: string;
+  side: "BUY" | "SELL";
+  /** `yyyy-mm-dd`. */
+  tradeDate: string;
+  units: number;
+  avgPrice: number;
+  /** Gross before fees. Left blank it is taken as `units × avgPrice`. */
+  consideration?: number | null;
+  brokerage?: number | null;
+  otherCharges?: number | null;
+  gst?: number | null;
+  /** The broker's note number. Blank generates a `MANUAL-…` one. */
+  cnote?: string | null;
+  /** The description column — `FPO`, `OPTION`. Defaults from the code. */
+  instrument?: string | null;
+};
+
+/**
+ * `value` is the NET cash flow and already carries the fees, which is what lets
+ * the P&L math use it alone and stay fee-inclusive:
+ *
+ *   BUY  → consideration + fees   (cash out)
+ *   SELL → consideration − fees   (cash in)
+ *
+ * Restated from the ledger migration's own comment rather than left to the
+ * caller: a hand-entered line that gets this backwards is indistinguishable
+ * from a real one and quietly moves the client's P&L by twice the brokerage.
+ */
+function tradeMoney(input: TradeInput): {
+  consideration: number;
+  brokerage: number;
+  otherCharges: number;
+  gst: number;
+  value: number;
+} {
+  const n = (v: number | null | undefined) =>
+    typeof v === "number" && Number.isFinite(v) ? v : 0;
+
+  const consideration =
+    typeof input.consideration === "number" && Number.isFinite(input.consideration)
+      ? input.consideration
+      : input.units * input.avgPrice;
+
+  const brokerage = n(input.brokerage);
+  const otherCharges = n(input.otherCharges);
+  const gst = n(input.gst);
+  const fees = brokerage + otherCharges + gst;
+
+  return {
+    consideration: round2(consideration),
+    brokerage: round2(brokerage),
+    otherCharges: round2(otherCharges),
+    gst: round2(gst),
+    value: round2(input.side === "BUY" ? consideration + fees : consideration - fees),
+  };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Shared shape checks — the same ones whether a line is new or amended. */
+function validateTrade(input: TradeInput): string | null {
+  if (!input.securityCode?.trim()) return "Enter the security code.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.tradeDate ?? "")) {
+    return "Enter the trade date as yyyy-mm-dd.";
+  }
+  // The ledger's own constraint: a SETTLED line must carry positive units.
+  if (!Number.isFinite(input.units) || input.units <= 0) {
+    return "Units must be greater than zero.";
+  }
+  if (!Number.isFinite(input.avgPrice) || input.avgPrice < 0) {
+    return "The price is not a number.";
+  }
+  if (input.side !== "BUY" && input.side !== "SELL") return "Choose BUY or SELL.";
+  return null;
+}
+
+/**
+ * Add one contract note line to the ledger by hand.
+ *
+ * The case this exists for: a note the broker booked as a single ORDINARY line
+ * that was really two instruments — shares plus the attaching options. The desk
+ * amends the original down to the share parcel and enters the option leg here,
+ * under its own code, so each lands on the P&L row it belongs to. Neither half
+ * can be expressed by an override: an override corrects a row's totals, and this
+ * is a line the ledger never had.
+ *
+ * Written as `SETTLED`, because a line entered by hand is one the desk has a
+ * statement for — a pending trade has nothing to type in from yet.
+ *
+ * Marked in the ledger rather than hidden: `source_file` records who entered it
+ * and when, so a hand-keyed line is never mistaken for one the broker sent.
+ */
+export async function addTradeAction(
+  accountId: string,
+  clientId: string,
+  input: TradeInput,
+): Promise<Result<{ cnote: string; code: string }>> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  const invalid = validateTrade(input);
+  if (invalid) return { ok: false, error: invalid };
+
+  const code = input.securityCode.trim().toUpperCase();
+  const parent = getParentTicker(code);
+  const money = tradeMoney({ ...input, securityCode: code });
+
+  // A note number the desk did not supply still has to be unique on
+  // (cnote, raw_security, side), and readable enough to find later.
+  const cnote =
+    input.cnote?.trim() ||
+    `MANUAL-${input.tradeDate.replace(/-/g, "")}-${Math.random().toString(16).slice(2, 6).toUpperCase()}`;
+
+  try {
+    const supabase = await createClient();
+
+    const catalogueErr = await ensureSecurityExists(supabase, code);
+    if (catalogueErr) return { ok: false, error: catalogueErr };
+
+    const { error } = await supabase.from("trades").insert({
+      cnote,
+      account_id: accountId,
+      client_id: clientId,
+      raw_security: code,
+      security_code: code,
+      parent_code: parent,
+      instrument: input.instrument?.trim() || (isOptionCode(code) ? "OPTION" : "FPO"),
+      side: input.side,
+      trade_date: input.tradeDate,
+      units: input.units,
+      avg_price: input.avgPrice,
+      consideration: money.consideration,
+      brokerage: money.brokerage,
+      other_charges: money.otherCharges,
+      gst: money.gst,
+      value: money.value,
+      status: "SETTLED",
+      source_file: `Manual entry by ${actor}`,
+    });
+
+    if (error) {
+      // The ledger is keyed on (cnote, raw_security, side) so a re-used note
+      // number for the same leg is a duplicate, not a database problem.
+      if (error.code === "23505") {
+        return {
+          ok: false,
+          error: `Contract note "${cnote}" already exists for ${code} ${input.side}. Use a different note number.`,
+        };
+      }
+      return { ok: false, error: error.message };
+    }
+
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Added trade",
+      detail: `Added ${input.side} ${input.units.toLocaleString("en-AU")} ${code} @ $${input.avgPrice.toFixed(4)} (CNote #${cnote}) on account ${accountId}`,
+      client_id: clientId,
+    });
+
+    await recomputeClient(clientId, { trigger: "manual" });
+    revalidatePath("/portal", "layout");
+
+    return { ok: true, data: { cnote, code } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to add the trade.",
+    };
+  }
+}
+
+/**
+ * Amend one contract note line.
+ *
+ * The other half of splitting a misbooked note: the original is reduced to the
+ * share parcel it really was, and the option leg is added beside it. Every
+ * figure is rewritten from the input rather than patched field by field, so the
+ * money stays internally consistent — an amended `units` with a stale `value`
+ * is a line whose price no longer divides into its own cash flow.
+ */
+export async function updateTradeAction(
+  tradeId: string,
+  accountId: string,
+  clientId: string,
+  input: TradeInput,
+): Promise<Result<{ cnote: string }>> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  const invalid = validateTrade(input);
+  if (invalid) return { ok: false, error: invalid };
+
+  const code = input.securityCode.trim().toUpperCase();
+  const parent = getParentTicker(code);
+  const money = tradeMoney({ ...input, securityCode: code });
+
+  try {
+    const supabase = await createClient();
+
+    const { data: before, error: fetchErr } = await supabase
+      .from("trades")
+      .select("cnote, raw_security, side, units, avg_price")
+      .eq("id", tradeId)
+      .single();
+    if (fetchErr || !before) return { ok: false, error: "Trade not found." };
+
+    const catalogueErr = await ensureSecurityExists(supabase, code);
+    if (catalogueErr) return { ok: false, error: catalogueErr };
+
+    const { error } = await supabase
+      .from("trades")
+      .update({
+        raw_security: code,
+        security_code: code,
+        parent_code: parent,
+        ...(input.instrument?.trim() ? { instrument: input.instrument.trim() } : {}),
+        side: input.side,
+        trade_date: input.tradeDate,
+        units: input.units,
+        avg_price: input.avgPrice,
+        consideration: money.consideration,
+        brokerage: money.brokerage,
+        other_charges: money.otherCharges,
+        gst: money.gst,
+        value: money.value,
+      })
+      .eq("id", tradeId);
+
+    if (error) {
+      if (error.code === "23505") {
+        return {
+          ok: false,
+          error: `Another line already uses note "${before.cnote}" for ${code} ${input.side}.`,
+        };
+      }
+      return { ok: false, error: error.message };
+    }
+
+    // Both the before and the after, because "amended CNote #123" on its own
+    // does not say what it used to be.
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Amended trade",
+      detail:
+        `Amended CNote #${before.cnote} on account ${accountId}: ` +
+        `${before.side} ${Number(before.units).toLocaleString("en-AU")} ${before.raw_security} @ $${Number(before.avg_price).toFixed(4)} → ` +
+        `${input.side} ${input.units.toLocaleString("en-AU")} ${code} @ $${input.avgPrice.toFixed(4)}`,
+      client_id: clientId,
+    });
+
+    await recomputeClient(clientId, { trigger: "manual" });
+    revalidatePath("/portal", "layout");
+
+    return { ok: true, data: { cnote: before.cnote } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to amend the trade.",
     };
   }
 }
