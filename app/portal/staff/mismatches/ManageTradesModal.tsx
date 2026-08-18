@@ -7,9 +7,10 @@ import {
   deleteTradeAction,
   deleteAllTradesForTickerAction,
   excludePositionAction,
-  reclassifyTradesAsOptionAction,
+  reclassifyTradesAction,
   addTradeAction,
   updateTradeAction,
+  type TradeClass,
   type TradeDetail,
   type TradeInput,
 } from "@/app/actions/trades";
@@ -57,15 +58,27 @@ export function ManageTradesModal({
   const [actionLoading, setActionLoading] = useState(false);
 
   /**
-   * Re-filing this ticker's contract notes as options.
+   * Re-filing this ticker's contract notes as one thing or the other.
    *
-   * Pre-filled with the ASX convention — the ordinary code plus `O` — because
-   * that is the answer nine times in ten, but left editable: a company with more
-   * than one series in issue uses `FRSOA`, `FRSOB` and so on, and only the desk
-   * knows which one these notes belong to.
+   * `null` = closed. The code pre-fills to the ASX convention for whichever
+   * direction was chosen — the ordinary plus `O` for an option, the plain
+   * 3-character code for ordinary shares — but stays editable: a company with
+   * more than one series in issue uses `FRSOA`, `FRSOB`, and only the desk knows
+   * which one these notes belong to.
    */
-  const [showReclassify, setShowReclassify] = useState(false);
-  const [optionCode, setOptionCode] = useState(`${getParentTicker(ticker)}O`);
+  const [reclassifyTo, setReclassifyTo] = useState<TradeClass | null>(null);
+  const [targetCode, setTargetCode] = useState("");
+  /** The label printed under the ticker. Blank leaves the catalogue alone. */
+  const [securityName, setSecurityName] = useState("");
+
+  const openReclassify = (kind: TradeClass) => {
+    closeOthers();
+    setReclassifyTo(kind);
+    setTargetCode(
+      kind === "OPTION" ? `${getParentTicker(ticker)}O` : getParentTicker(ticker),
+    );
+    setSecurityName(companyName ?? "");
+  };
 
   /**
    * Hand-entering or amending a line.
@@ -82,7 +95,7 @@ export function ManageTradesModal({
     setTradeToConfirm(null);
     setConfirmDeleteAll(false);
     setConfirmExclude(false);
-    setShowReclassify(false);
+    setReclassifyTo(null);
     setForm(null);
   };
 
@@ -194,18 +207,21 @@ export function ManageTradesModal({
   };
 
   const parent = getParentTicker(ticker);
-  const wantedCode = optionCode.trim().toUpperCase();
+  const wantedCode = targetCode.trim().toUpperCase();
   // Checked here as well as in the action so a typo is caught before it costs a
-  // round trip and a full recompute. The action is still the authority.
-  const codeProblem = !wantedCode
-    ? "Enter an option code."
-    : wantedCode === parent
-      ? `${wantedCode} is the ordinary code — an option needs its own.`
-      : !isOptionCode(wantedCode)
+  // round trip and a full recompute. The action is still the authority, and the
+  // two ladders read the same way in both directions on purpose.
+  const codeProblem = !reclassifyTo
+    ? null
+    : !wantedCode
+      ? `Enter the ${reclassifyTo === "OPTION" ? "option" : "ordinary"} code.`
+      : reclassifyTo === "OPTION" && !isOptionCode(wantedCode)
         ? `Needs more than three characters with an O in the suffix, e.g. ${parent}O.`
-        : getParentTicker(wantedCode) !== parent
-          ? `${wantedCode} belongs to ${getParentTicker(wantedCode)}, not ${parent}.`
-          : null;
+        : reclassifyTo === "FPO" && isOptionCode(wantedCode)
+          ? `${wantedCode} still reads as an option code. Ordinary shares use ${parent}.`
+          : getParentTicker(wantedCode) !== parent
+            ? `${wantedCode} belongs to ${getParentTicker(wantedCode)}, not ${parent}.`
+            : null;
 
   const handleTradeSubmit = async (input: TradeInput) => {
     if (!form) return;
@@ -237,27 +253,44 @@ export function ManageTradesModal({
   };
 
   const handleReclassify = async () => {
+    if (!reclassifyTo) return;
     setActionLoading(true);
     setError(null);
     setSuccess(null);
 
-    const res = await reclassifyTradesAsOptionAction(accountId, clientId, ticker, wantedCode);
+    const res = await reclassifyTradesAction(
+      accountId,
+      clientId,
+      ticker,
+      wantedCode,
+      reclassifyTo,
+      // Unchanged means "leave the catalogue alone" — that name is shared by
+      // every screen, so it moves only when the desk actually retyped it.
+      securityName.trim() && securityName.trim() !== (companyName ?? "").trim()
+        ? securityName.trim()
+        : undefined,
+    );
     setActionLoading(false);
 
     if (!res.ok) {
       setError(res.error);
-    } else {
-      setShowReclassify(false);
-      setSuccess(
-        `${res.data.count} contract note(s) re-filed as ${res.data.code} and P&L recalculated. ` +
-          `The row now reports as an option, so it leaves this page.`,
-      );
-      router.refresh();
-      if (onSuccess) onSuccess();
-      setTimeout(() => {
-        onClose();
-      }, 2200);
+      return;
     }
+
+    const asOption = reclassifyTo === "OPTION";
+    setReclassifyTo(null);
+    setSuccess(
+      `${res.data.count} contract note(s) re-filed as ${res.data.code} (${reclassifyTo}) and P&L recalculated. ` +
+        (asOption
+          ? "The row now reports as an option, so it leaves this page."
+          : "The row now reports as ordinary shares."),
+    );
+    router.refresh();
+    if (onSuccess) onSuccess();
+    // Only the option direction takes the row off this page; an ordinary line
+    // stays, so closing the modal on the desk would hide the result.
+    if (asOption) setTimeout(() => onClose(), 2200);
+    else void reloadTrades();
   };
 
   return (
@@ -490,55 +523,92 @@ export function ManageTradesModal({
             />
           )}
 
-          {/* Reclassify as options.
-              For when the broker booked option transactions against the ordinary
-              code: FRS then carries a sell side with no buys behind it and reads
-              as a mismatch forever, when the trades simply belong on their own
-              option line. */}
-          {/* `min-w-0` + `break-words` throughout: the body clips rather than
+          {/* Reclassifying, in whichever direction the broker got it wrong.
+              → OPTION: option transactions booked against the ordinary code, so
+                the row carries a sell side with no buys and reads as a mismatch
+                forever when the trades belong on their own option line.
+              → FPO:    the mirror. Fully Paid Ordinary — plain equity — wearing
+                an option description, so a share parcel is reported as a
+                derivative and kept out of the equity totals it belongs in.
+
+              `min-w-0` + `break-words` throughout: the body clips rather than
               scrolls now, so anything that overflowed here would be invisibly
               cut off — a worse failure than the sideways scroll it replaced. */}
-          {showReclassify && (
+          {reclassifyTo && (
             <div className="p-4 rounded-[12px] bg-[#f5f3fa] border border-[#d8d3e5] text-ink space-y-3 min-w-0 animate-in fade-in duration-150">
               <div className="space-y-1 min-w-0">
                 <div className="text-xs font-bold text-[#443f5c]">
-                  Re-file {trades.length} contract note{trades.length === 1 ? "" : "s"} as options
+                  Re-file {trades.length} contract note{trades.length === 1 ? "" : "s"} as{" "}
+                  {reclassifyTo === "OPTION" ? "options" : "ordinary shares (FPO)"}
                 </div>
                 <p className="text-xs text-[#5c5775] leading-relaxed break-words">
-                  These trades move from <span className="font-mono font-bold">{ticker}</span>{" "}
-                  onto their own option line. Enter the option code to reclassify them as, or accept the default{" "}
+                  {reclassifyTo === "OPTION" ? (
+                    <>
+                      These trades move from{" "}
+                      <span className="font-mono font-bold">{ticker}</span> onto their own option
+                      line, and stop being reported as a quantity mismatch.
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-mono font-bold">FPO</span> is Fully Paid Ordinary —
+                      plain equity, not a derivative. These trades stay on{" "}
+                      <span className="font-mono font-bold">{parent}</span> and are reported as
+                      shares rather than options.
+                    </>
+                  )}{" "}
+                  The underlying stays <span className="font-mono font-bold">{parent}</span> either
+                  way, and the P&amp;L is recalculated before this closes.
                 </p>
               </div>
 
-              <div className="flex items-end gap-2.5 flex-wrap">
+              <div className="flex items-end gap-2.5 flex-wrap min-w-0">
                 <label className="space-y-1">
                   <span className="block text-[10.5px] font-semibold uppercase tracking-wider text-[#5c5775]">
-                    Option code
+                    {reclassifyTo === "OPTION" ? "Option code" : "Ordinary code"}
                   </span>
                   <input
                     type="text"
-                    value={optionCode}
-                    onChange={(e) => setOptionCode(e.target.value.toUpperCase())}
+                    value={targetCode}
+                    onChange={(e) => setTargetCode(e.target.value.toUpperCase())}
                     disabled={actionLoading}
                     spellCheck={false}
-                    className="w-40 bg-white border border-[#d8d3e5] rounded-[6px] px-2.5 py-1.5 font-mono text-[13px] font-bold text-ink outline-none focus:border-navy transition-all"
+                    className="w-32 bg-white border border-[#d8d3e5] rounded-[6px] px-2.5 py-1.5 font-mono text-[13px] font-bold text-ink outline-none focus:border-navy transition-all"
                   />
                 </label>
-                <div className="text-[11px] text-[#5c5775] pb-2 min-w-0 break-words">
-                  {codeProblem ? (
-                    <span className="text-loss-d font-semibold">{codeProblem}</span>
-                  ) : (
-                    <span>
-                      {ticker} &rarr; <span className="font-mono font-bold">{wantedCode}</span>
-                    </span>
-                  )}
-                </div>
+
+                {/* The label printed under the ticker — "FLYNNGOLD - OPTION 14-…"
+                    on a parcel of ordinary shares is the thing this fixes. */}
+                <label className="space-y-1 flex-1 min-w-[180px]">
+                  <span className="block text-[10.5px] font-semibold uppercase tracking-wider text-[#5c5775]">
+                    Company label
+                  </span>
+                  <input
+                    type="text"
+                    value={securityName}
+                    onChange={(e) => setSecurityName(e.target.value)}
+                    disabled={actionLoading}
+                    placeholder="leave as is"
+                    className="w-full bg-white border border-[#d8d3e5] rounded-[6px] px-2.5 py-1.5 text-[12px] text-ink outline-none focus:border-navy transition-all"
+                  />
+                </label>
+              </div>
+
+              <div className="text-[11px] text-[#5c5775] min-w-0 break-words">
+                {codeProblem ? (
+                  <span className="text-loss-d font-semibold">{codeProblem}</span>
+                ) : (
+                  <span>
+                    {ticker} &rarr; <span className="font-mono font-bold">{wantedCode}</span>{" "}
+                    &middot; described as{" "}
+                    <span className="font-mono font-bold">{reclassifyTo}</span>
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowReclassify(false)}
+                  onClick={() => setReclassifyTo(null)}
                   disabled={actionLoading}
                   className="px-3 py-1.5 rounded-[6px] text-xs font-medium border border-[#d8d3e5] text-[#443f5c] hover:bg-white transition-colors cursor-pointer"
                 >
@@ -550,7 +620,7 @@ export function ManageTradesModal({
                   disabled={actionLoading || codeProblem !== null}
                   className="px-3 py-1.5 rounded-[6px] text-xs font-bold bg-[#5c5775] text-white hover:bg-[#443f5c] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
-                  {actionLoading ? "Re-filing..." : `Convert to ${wantedCode || "Options"}`}
+                  {actionLoading ? "Re-filing..." : `Convert to ${wantedCode || reclassifyTo}`}
                 </button>
               </div>
             </div>
@@ -578,20 +648,30 @@ export function ManageTradesModal({
                   + Add Transaction
                 </button>
                 {/* Only with notes to move. Nothing to reclassify on a row that
-                    came from a snapshot or a modelled grant. */}
+                    came from a snapshot or a modelled grant. Both directions are
+                    offered because the broker's description gets it wrong both
+                    ways. */}
                 {trades.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeOthers();
-                      setShowReclassify(true);
-                    }}
-                    disabled={actionLoading}
-                    title="These are option transactions booked against the ordinary code"
-                    className="text-[11px] font-semibold text-[#5c5775] hover:underline cursor-pointer flex items-center gap-1"
-                  >
-                    Convert to Options
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openReclassify("OPTION")}
+                      disabled={actionLoading}
+                      title="These are option transactions booked against the ordinary code"
+                      className="text-[11px] font-semibold text-[#5c5775] hover:underline cursor-pointer flex items-center gap-1"
+                    >
+                      Convert to Options
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openReclassify("FPO")}
+                      disabled={actionLoading}
+                      title="These are ordinary shares — Fully Paid Ordinary — described as options"
+                      className="text-[11px] font-semibold text-[#5c5775] hover:underline cursor-pointer flex items-center gap-1"
+                    >
+                      Convert to FPO
+                    </button>
+                  </>
                 )}
                 {trades.length > 1 && (
                   <button

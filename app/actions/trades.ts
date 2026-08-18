@@ -263,56 +263,89 @@ async function ensureSecurityExists(
 }
 
 /**
- * Re-file a ticker's contract notes as OPTION trades under an option code.
+ * What a line is: an option series, or fully paid ordinary shares.
  *
- * The case this exists for: the broker booked what were plainly option
- * transactions against the ordinary code, so `FRS` carries a sell side with no
- * buys behind it and reads as a quantity mismatch forever. It is not one — the
- * trades belong on their own option line, which the P&L already knows how to
- * report and which the mismatch page skips entirely.
+ * `FPO` is the broker's own abbreviation for **Fully Paid Ordinary** — plain
+ * equity, not a derivative — and it is spelled out here because "OPTION" and
+ * "FPO" sitting next to each other in a union invites reading the second as
+ * some kind of option too.
+ */
+export type TradeClass = "OPTION" | "FPO";
+
+/**
+ * Re-file a ticker's contract notes as OPTION trades or as ORDINARY shares.
+ *
+ * The broker's description gets this wrong in both directions and the fix is the
+ * same shape each way, so it is one action rather than two that could drift:
+ *
+ *   → OPTION   Option transactions booked against the ordinary code. `FRS` then
+ *              carries a sell side with no buys behind it and reads as a
+ *              quantity mismatch forever. It is not one — the trades belong on
+ *              their own option line, which the P&L already reports and which
+ *              the mismatch page skips entirely.
+ *   → FPO      The mirror: ordinary shares wearing an option description, so a
+ *              plain equity parcel is reported as a derivative and kept out of
+ *              the equity totals it belongs in.
  *
  * **`raw_security` is the field that matters.** The engine reads the ticker from
  * there and nowhere else (`dbTradesToParsedRows`), so updating `security_code`
  * alone would change what the UI lists and leave every figure exactly as it was.
  * All four columns are written so the ledger stays internally consistent:
- * `raw_security` and `security_code` take the new code, `parent_code` its
- * 3-character underlying — `FRSO` stays a derivative OF `FRS`, which is what
- * keeps the option line beside the ordinary rather than orphaned — and
- * `instrument` replaces the broker's "ORDINARY FULLY PAID" description.
+ * `raw_security` and `security_code` take the target code, `parent_code` its
+ * 3-character underlying — `FRSO` stays a derivative OF `FRS`, which keeps the
+ * option line beside the ordinary rather than orphaned — and `instrument`
+ * replaces the broker's description.
  *
  * Two guards, both about not moving money to the wrong company:
  *
- *   1. The new code must READ as an option (`isOptionCode`) — length past three
- *      with an `O` in the suffix, the ASX convention the whole engine keys on.
- *      `FRSX` would rename the trades and reclassify nothing.
- *   2. Its parent must be the SAME underlying. `FRS → FRSO` and `FRS → FRSOE`
- *      are the desk correcting a description; `FRS → ABCO` is a different
- *      company's option, and would move settled contract notes onto it.
+ *   1. The target code must READ as what it is being called. Options need more
+ *      than three characters with an `O` in the suffix (`isOptionCode`, the ASX
+ *      convention the whole engine keys on); ordinaries must NOT, or the engine
+ *      would keep reporting the line as a derivative whatever the description
+ *      says. `FRS → FRSX` reclassifies nothing and is refused.
+ *   2. Its parent must be the SAME underlying. `FRS → FRSO` is the desk
+ *      correcting a description; `FRS → ABCO` is a different company's option,
+ *      and would move settled contract notes onto it.
+ *
+ * `securityName` is optional and updates the CATALOGUE label — the line under
+ * the ticker that read "FLYNNGOLD - OPTION 14-…" on a parcel of ordinary
+ * shares. Applied only when supplied, because that name is shared by every
+ * screen and blanking it to reclassify a ledger line would be a poor trade.
  *
  * Destructive in the sense that it rewrites ledger rows, so it is audited by
  * count and by both codes, and the P&L is recomputed before it returns.
  */
-export async function reclassifyTradesAsOptionAction(
+export async function reclassifyTradesAction(
   accountId: string,
   clientId: string,
   ticker: string,
   newCodeInput: string,
-  instrumentLabel?: string,
+  kind: TradeClass,
+  securityName?: string,
 ): Promise<Result<{ count: number; code: string }>> {
   const { role, actor } = await getActor();
   if (role !== "admin") return { ok: false, error: "Staff only." };
 
   const from = ticker.replace(/-UO\d*$/i, "").trim().toUpperCase();
   const code = String(newCodeInput || "").trim().toUpperCase();
+  const wantsOption = kind === "OPTION";
 
-  if (!code) return { ok: false, error: "Enter the option code to file these trades under." };
-  if (code === from) {
-    return { ok: false, error: `${code} is the ordinary code — an option needs its own.` };
+  if (!code) {
+    return {
+      ok: false,
+      error: `Enter the ${wantsOption ? "option" : "ordinary"} code to file these trades under.`,
+    };
   }
-  if (!isOptionCode(code)) {
+  if (wantsOption && !isOptionCode(code)) {
     return {
       ok: false,
       error: `"${code}" does not read as an option code. It needs more than three characters with an O in the suffix — ${getParentTicker(from)}O or ${getParentTicker(from)}OE, for example.`,
+    };
+  }
+  if (!wantsOption && isOptionCode(code)) {
+    return {
+      ok: false,
+      error: `"${code}" still reads as an option code, so the engine would keep reporting it as one. Ordinary shares use the plain code — ${getParentTicker(from)}.`,
     };
   }
   if (getParentTicker(code) !== getParentTicker(from)) {
@@ -339,41 +372,52 @@ export async function reclassifyTradesAsOptionAction(
 
     if (fetchErr) return { ok: false, error: fetchErr.message };
 
-    // Trades already sitting on the target code are left alone — re-filing them
-    // onto themselves would inflate the audited count with rows nothing changed.
-    const moving = (trades ?? []).filter(
-      (t) => String(t.raw_security ?? "").trim().toUpperCase() !== code,
-    );
-    if (moving.length === 0) {
+    if ((trades ?? []).length === 0) {
       return { ok: false, error: `No contract notes found under ${from} to reclassify.` };
     }
 
-    // The option series the desk is moving these onto has, by definition, never
-    // been booked against — so the catalogue has no row for it and the FK below
-    // would fail.
-    const catalogueErr = await ensureSecurityExists(supabase, code);
+    // A code the desk is moving onto may never have been booked against — the
+    // catalogue would then have no row for it and the FK below would fail.
+    const catalogueErr = await ensureSecurityExists(supabase, code, securityName);
     if (catalogueErr) return { ok: false, error: catalogueErr };
 
+    // Every matched note is rewritten, including any already sitting on the
+    // target code: the description is half the point here, and a line that is
+    // ALREADY `FG1` but still labelled "FLYNNGOLD - OPTION 14-…" is exactly the
+    // one the desk opened this for.
     const { error: updateErr } = await supabase
       .from("trades")
       .update({
         raw_security: code,
         security_code: code,
         parent_code: parent,
-        instrument: instrumentLabel?.trim() || "OPTION",
+        instrument: kind,
       })
       .in(
         "id",
-        moving.map((t) => t.id),
+        (trades ?? []).map((t) => t.id),
       );
 
     if (updateErr) return { ok: false, error: updateErr.message };
 
+    // The catalogue name is what the client profile and the mismatch page print
+    // under the ticker, and it is shared by every screen — so it moves only when
+    // the desk actually supplies one.
+    if (securityName?.trim()) {
+      const { error: nameErr } = await supabase
+        .from("securities")
+        .update({ name: securityName.trim() })
+        .eq("code", code);
+      if (nameErr) return { ok: false, error: nameErr.message };
+    }
+
     await supabase.from("audit_log").insert({
       actor,
       role,
-      action: "Reclassified trades as options",
-      detail: `Re-filed ${moving.length} contract note(s) from ${from} to ${code} (parent ${parent}) on account ${accountId}`,
+      action: kind === "OPTION" ? "Reclassified trades as options" : "Reclassified trades as ordinary",
+      detail:
+        `Re-filed ${trades!.length} contract note(s) from ${from} to ${code} (parent ${parent}, ${kind}) ` +
+        `on account ${accountId}${securityName?.trim() ? `; renamed to "${securityName.trim()}"` : ""}`,
       client_id: clientId,
     });
 
@@ -382,7 +426,7 @@ export async function reclassifyTradesAsOptionAction(
     await recomputeClient(clientId, { trigger: "manual" });
     revalidatePath("/portal", "layout");
 
-    return { ok: true, data: { count: moving.length, code } };
+    return { ok: true, data: { count: trades!.length, code } };
   } catch (err) {
     return {
       ok: false,
