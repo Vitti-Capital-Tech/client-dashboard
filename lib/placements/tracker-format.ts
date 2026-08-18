@@ -130,6 +130,26 @@ export function formulaSheetRef(sheet: string): string {
 }
 
 /**
+ * The Overview's ticker, as a link to the deal's own tab.
+ *
+ * The Overview is the index of a ~190-tab workbook, and the ticker column is how
+ * the desk navigates it: click `LGF`, land on the LGF tab. Written as plain text
+ * a new deal reads correctly and goes nowhere, which in a tab bar that scrolls
+ * past its own end means scrolling for it.
+ *
+ * `HYPERLINK` rather than an attached link, because Graph has no hyperlink
+ * property on a range — `values`, `formulas` and `numberFormat` are what it
+ * writes. The `#` makes the target a place in this workbook rather than a URL,
+ * and the formula's VALUE is the friendly name, so everything that reads this
+ * column — the duplicate guard here, the P&L engine's ticker lookup — still
+ * reads `LGF` and not a formula.
+ */
+export function sheetLinkFormula(sheet: string, label: string): string {
+  const quoted = (text: string) => text.replace(/"/g, '""');
+  return `=HYPERLINK("${quoted(`#${formulaSheetRef(sheet)}!A1`)}","${quoted(label)}")`;
+}
+
+/**
  * The name for this deal's tab, given the sheets that already exist.
  *
  * A stock can be placed more than once in a year, and the desk's convention for
@@ -214,7 +234,7 @@ export function overviewRowFormulas(
   const s = formulaSheetRef(sheet);
   return [
     counter, // B — the desk's own sequence number
-    ticker.trim().toUpperCase(), // C — Counter (the stock), plain text
+    sheetLinkFormula(sheet, ticker.trim().toUpperCase()), // C — Counter, linked to the tab
     `=${s}!B3`, // D — Date Issued
     `=${s}!L3`, // E — Settlement Date
     "", // F — T2 Settlement, filled by hand when a deal has one

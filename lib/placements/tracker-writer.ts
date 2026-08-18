@@ -13,6 +13,7 @@ import {
   type SheetSlot,
   type TrackerDeal,
 } from "./tracker-format.ts";
+import { dressSheetLikeTemplate } from "./tracker-style.ts";
 
 /**
  * Writing a new deal into the Placement Tracker workbook.
@@ -29,20 +30,19 @@ import {
  * workbook is touched, and a failure halfway leaves the sheets it did not reach
  * exactly as they were.
  *
- * ── Copy the sheet if Graph will, replay it if it will not ───────────────────
- * A real `worksheets/{id}/copy` brings EVERYTHING — fills, borders, column
- * widths, validation, conditional formatting, the yellow highlighting the desk's
- * "ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW" convention depends on — and puts the
- * tab in the right place in the same call. It is tried first, always.
+ * ── There is no worksheet copy, so the tab is rebuilt ────────────────────────
+ * A real `worksheets/{id}/copy` would bring everything across in one call. It
+ * does not exist: `copy` is an Office.js method, and the Graph reference gives a
+ * worksheet `add`, `get`, `update` and `delete` and nothing else, in v1.0 and in
+ * beta. The `400 Resource not found for the segment 'copy'` this code once read
+ * as a tenant quirk is simply the API saying so.
  *
- * It was once probed against this workbook and answered `400 Resource not found
- * for the segment 'copy'`, which is why this module used to replay only. That is
- * a per-tenant/per-endpoint answer, not a law, so the code no longer assumes it:
- * a 400 falls through to the replay, a 403 is reported as the permission problem
- * it is, and the result says which path ran (`via`) so a look at one ingest log
- * answers "is copy working here yet?".
+ * The call is still made first, and costs one request per deal. If Graph ever
+ * ships the action the workbook gets a true copy — validation, conditional
+ * formatting and all — the moment it does, and `via` in the result says which
+ * path ran.
  *
- * ── The replay fallback ──────────────────────────────────────────────────────
+ * ── The rebuild ──────────────────────────────────────────────────────────────
  * `worksheets/add`, then Template's own used range written in at the same
  * addresses, where its sheet-relative formulas (`=D6/C6`, `=SUM(C7:C21)`) and its
  * `Index` lookups stay correct. Carried with it:
@@ -50,16 +50,13 @@ import {
  *   formulas      the whole point — the tab computes
  *   numberFormat  per cell, so dates read `17/08/2026` rather than `46251`, and
  *                 money reads as money instead of a bare number
- *   columnWidth   per column, because a tab whose columns are all 8.43 wide does
- *                 not look like the template even when every cell is right
+ *   fills, fonts  the black header bands and the yellow input cells the desk's
+ *   and widths    "ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW" convention is written
+ *                 in — read off Template rather than guessed at, by
+ *                 `tracker-style.ts`, which explains how
  *
- * **What the replay still cannot carry: fills, borders and fonts.** There is no
- * bulk per-cell format read to replay them from — `range/format` reports a
- * single value for a range and `null` wherever the cells differ, which is
- * precisely the case that matters. Guessing which cells are meant to be yellow
- * would mark the wrong ones editable, which is worse than plain. So a replayed
- * tab computes and reads correctly but stays unshaded until copy is available or
- * someone formats it.
+ * Still not carried: data validation and conditional formatting, which have no
+ * range-level read to recover them from.
  *
  * ── Order matters ────────────────────────────────────────────────────────────
  * The tab is created BEFORE the Overview row, because every cell in that row is
@@ -67,6 +64,11 @@ import {
  * the two leaves a row of `#REF!` in the sheet the desk reads every morning.
  * This way the same failure leaves an unreferenced tab, which is invisible until
  * someone looks for it — and it is reported either way.
+ *
+ * The shading goes on LAST, after the row — it is the slowest step and the only
+ * one nothing depends on. A cron that runs out of its 60 seconds part-way
+ * through it leaves a deal that is filed, correct and a bit plain, rather than a
+ * beautifully formatted tab no row points at.
  *
  * Dependency-injected and free of `server-only` on purpose: the whole flow is
  * covered by tests against a fake Graph, with no network and no workbook.
@@ -292,6 +294,12 @@ type MadeSheet = {
   ok: boolean;
   via?: "copy" | "replay";
   sheet?: string;
+  /**
+   * Template's used range, when the tab was rebuilt from it. The shading pass
+   * needs the same address, and reading `usedRange` twice for one tab would be
+   * a wasted call.
+   */
+  shape?: string;
   error?: string;
   hint?: string;
   notes?: string[];
@@ -301,84 +309,14 @@ const sheetPath = (item: string, name: string) =>
   `${item}/worksheets('${encodeURIComponent(name)}')`;
 
 /**
- * `A1:P30` → the column letters it spans. Widths are a per-COLUMN property, so
- * this is what has to be walked; `null` for anything not shaped like a range,
- * which then simply skips the width replay rather than guessing at `A:XFD`.
- */
-export function columnsOf(shape: string): string[] | null {
-  const m = /^([A-Z]+)\d+(?::([A-Z]+)\d+)?$/i.exec(shape.trim());
-  if (!m) return null;
-
-  const toIndex = (s: string) =>
-    [...s.toUpperCase()].reduce((n, c) => n * 26 + (c.charCodeAt(0) - 64), 0);
-  const toLetters = (n: number) => {
-    let out = "";
-    for (let v = n; v > 0; v = Math.floor((v - 1) / 26)) {
-      out = String.fromCharCode(65 + ((v - 1) % 26)) + out;
-    }
-    return out;
-  };
-
-  const from = toIndex(m[1]);
-  const to = m[2] ? toIndex(m[2]) : from;
-  if (to < from) return null;
-
-  return Array.from({ length: to - from + 1 }, (_, i) => toLetters(from + i));
-}
-
-/**
- * Column widths, one column at a time, Template → new tab.
- *
- * One call per column each way, which is the only granularity there is: asking
- * `range/format` about several columns at once answers `null` the moment two of
- * them differ, and differing is the normal case. Bounded by the template's own
- * width (~16 columns) and it runs once per new deal, so the chattiness buys a
- * tab that looks like the others.
- *
- * Never fatal. A tab with the right numbers in the wrong-width columns is a
- * cosmetic problem; refusing to file the deal over it would not be.
- */
-async function replayColumnWidths(
-  graph: GraphCall,
-  item: string,
-  sheet: string,
-  shape: string,
-): Promise<string | null> {
-  const columns = columnsOf(shape);
-  if (!columns) return null;
-
-  let failed = 0;
-  for (const col of columns) {
-    const cell = `${col}1:${col}1`;
-    const read = await graph(
-      `${sheetPath(item, TEMPLATE_SHEET)}/range(address='${cell}')/format?$select=columnWidth`,
-    );
-    const width = (read.body as { columnWidth?: number } | null)?.columnWidth;
-    if (!read.ok || typeof width !== "number") {
-      failed++;
-      continue;
-    }
-
-    const set = await graph(`${sheetPath(item, sheet)}/range(address='${cell}')/format`, {
-      method: "PATCH",
-      body: { columnWidth: width },
-    });
-    if (!set.ok) failed++;
-  }
-
-  return failed === 0
-    ? null
-    : `${failed} of ${columns.length} column widths on "${sheet}" did not copy across; the tab computes but is narrower than Template.`;
-}
-
-/**
  * Create the deal's tab, in the right place, looking as much like Template as
  * the API allows.
  *
- * Copy first — it carries the formatting and positions the tab in one call. A
- * tenant where copy is unavailable answers 400 and gets the replay instead; a
- * tenant where it is available but not permitted answers 403, and retrying that
- * as an `add` would fail identically, so it is reported rather than retried.
+ * Copy first — it would carry the formatting and position the tab in one call,
+ * and it is one request to find out. Graph has no such action today, so the 400
+ * falls through to the rebuild; a 403 would mean the action existed and was not
+ * permitted, and retrying that as an `add` would fail identically, so it is
+ * reported rather than retried.
  */
 async function createDealSheet(
   graph: GraphCall,
@@ -488,8 +426,8 @@ async function replayTemplate(
     };
   }
 
-  // Neither of the two below is worth failing a deal over: the tab is complete
-  // and correct, and both are things a person can fix in seconds once told.
+  // Not worth failing a deal over: the tab is complete and correct, and a tab in
+  // the wrong place is something a person can fix in seconds once told.
   const notes: string[] = [];
 
   const moved = await graph(sheetPath(item, sheet), {
@@ -502,10 +440,7 @@ async function replayTemplate(
     );
   }
 
-  const widthNote = await replayColumnWidths(graph, item, sheet, shape);
-  if (widthNote) notes.push(widthNote);
-
-  return { ok: true, via: "replay", sheet, notes };
+  return { ok: true, via: "replay", sheet, shape, notes };
 }
 
 /* ------------------------------------------------------------------ */
@@ -653,6 +588,23 @@ export async function writeDealToTracker(
         error: `Sheet "${sheet}" was created but its ${target.overviewSheet} row was not: ${graphError(written.body)}`,
         hint: `Add a row for "${sheet}" at ${overviewRowAddress(target.overviewSheet, slot.row)} by hand, or delete the tab and retry.`,
       };
+    }
+
+    // ── Last: make it look like Template ────────────────────────────────────
+    // The deal is filed as of the line above. Everything from here is shading,
+    // which is why it runs after the row rather than with the rest of the tab —
+    // see the header. A copied tab already carries it and skips this entirely.
+    if (made.via === "replay" && made.shape) {
+      notes.push(
+        ...(await dressSheetLikeTemplate(
+          graph,
+          item,
+          TEMPLATE_SHEET,
+          sheet,
+          made.shape,
+          sessionId,
+        )),
+      );
     }
 
     return {

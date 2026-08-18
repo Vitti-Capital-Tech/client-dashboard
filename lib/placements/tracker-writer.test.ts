@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -10,9 +10,11 @@ import {
   nextOverviewSlot,
   nextSheetName,
   overviewRowFormulas,
+  sheetLinkFormula,
   tabCellWrites,
 } from "./tracker-format.ts";
-import { columnsOf, writeDealToTracker, type GraphCall } from "./tracker-writer.ts";
+import { writeDealToTracker, type GraphCall } from "./tracker-writer.ts";
+import { clearTemplatePlanCache, columnsOf, rectOf } from "./tracker-style.ts";
 import { dealFromCandidate, syncTrackerRows } from "./tracker-sync.ts";
 import type { CandidateFeedItem } from "./candidates.ts";
 
@@ -55,6 +57,65 @@ const TEMPLATE_NUMBER_FORMATS = [
 ];
 
 const TEMPLATE_COLUMN_WIDTH = 14.5;
+
+/**
+ * Template's shading, as the real sheet is shaded: a yellow banner, a black
+ * header band with white bold type under it, and plain cells below.
+ *
+ * Expressed as a function of the cell rather than a grid because that is how the
+ * writer has to discover it — by asking Graph whether a rectangle is uniform and
+ * splitting the ones that are not.
+ */
+const TEMPLATE_FILL = (row: number): string =>
+  row <= 2 ? "#FFFF00" : row === 3 ? "#000000" : "#FFFFFF";
+
+const TEMPLATE_FONT = (row: number) => ({
+  name: "Calibri",
+  size: 11,
+  color: row === 3 ? "#FFFFFF" : "#000000",
+  bold: row === 3,
+  italic: false,
+  underline: "None",
+});
+
+/** Graph's answer for a range: the value where the cells agree, null where not. */
+function uniformOver<T>(address: string, at: (row: number) => T): T | null {
+  const rect = rectOf(address);
+  if (!rect) return null;
+
+  let first: T | null = null;
+  for (let row = rect.r1; row <= rect.r2; row++) {
+    const value = at(row);
+    if (first === null) first = value;
+    else if (JSON.stringify(value) !== JSON.stringify(first)) return null;
+  }
+  return first;
+}
+
+/** A font nulls PER PROPERTY, which is why the reader insists on all six. */
+function fontOver(address: string): Record<string, unknown> {
+  const rect = rectOf(address);
+  if (!rect) return {};
+
+  const rows: ReturnType<typeof TEMPLATE_FONT>[] = [];
+  for (let row = rect.r1; row <= rect.r2; row++) rows.push(TEMPLATE_FONT(row));
+
+  const agreed = (key: keyof ReturnType<typeof TEMPLATE_FONT>) => {
+    const seen = new Set(rows.map((f) => f[key]));
+    return seen.size === 1 ? rows[0][key] : null;
+  };
+
+  return {
+    name: agreed("name"),
+    size: agreed("size"),
+    color: agreed("color"),
+    bold: agreed("bold"),
+    italic: agreed("italic"),
+    underline: agreed("underline"),
+  };
+}
+
+const addressIn = (path: string) => /range\(address='([^']+)'\)/.exec(path)?.[1] ?? "";
 
 /**
  * A Graph that records calls and answers from a literal workbook.
@@ -107,11 +168,42 @@ function fakeGraph(
         },
       };
     }
+    if (method === "GET" && path.includes("/format/fill")) {
+      return { ok: true, status: 200, body: { color: uniformOver(addressIn(path), TEMPLATE_FILL) } };
+    }
+    if (method === "GET" && path.includes("/format/font")) {
+      return { ok: true, status: 200, body: fontOver(addressIn(path)) };
+    }
     if (method === "GET" && path.includes("/format")) {
       return { ok: true, status: 200, body: { columnWidth: TEMPLATE_COLUMN_WIDTH } };
     }
     if (method === "GET" && path.includes("range(address=")) {
       return { ok: true, status: 200, body: { values: workbook.overview } };
+    }
+    // `$batch` carries twenty of the format reads per round trip. Replaying each
+    // inner request through this same fake is what the real endpoint does, and it
+    // means every assertion below can go on ignoring that batching exists.
+    if (method === "POST" && path === "/$batch") {
+      const inner = (
+        init.body as {
+          requests: {
+            id: string;
+            method: string;
+            url: string;
+            body?: unknown;
+            headers?: Record<string, string>;
+          }[];
+        }
+      ).requests;
+
+      const responses = [];
+      for (const r of inner) {
+        // Headers and all: a batch is twenty independent requests, and the
+        // session id has to be on each of them rather than on the envelope.
+        const answer = await graph(r.url, { method: r.method, body: r.body, headers: r.headers });
+        responses.push({ id: r.id, status: answer.status, body: answer.body });
+      }
+      return { ok: true, status: 200, body: { responses } };
     }
     if (method === "POST" && path.includes("/createSession")) {
       return { ok: true, status: 201, body: { id: "session-1" } };
@@ -173,6 +265,11 @@ const cellWrites = (calls: { method: string; path: string; body?: unknown }[]) =
   calls.filter((c) => c.method === "PATCH" && /range\(address='[A-Z]+\d+'\)$/.test(c.path));
 
 const target = { driveId: "d", itemId: "i", overviewSheet: "2026 Overview" };
+
+// Template's look is cached across deals — deliberately, so a morning's second
+// placement pays for the paint and not the scan. Every case here has to start
+// from cold or it would be asserting against the case before it.
+beforeEach(() => clearTemplatePlanCache());
 
 /** Two real rows from the file: LGF at counter 57, then blanks. */
 const OVERVIEW = [
@@ -298,20 +395,124 @@ test("tracker: the replay carries Template's number formats, not just its formul
 
 test("tracker: the replay carries Template's column widths", async () => {
   // A tab whose columns are all 8.43 wide does not look like the template even
-  // when every cell in it is correct. Widths are a per-column property and
-  // `range/format` answers null the moment two columns differ, so they are
-  // walked one at a time.
+  // when every cell in it is correct. Widths are a per-column property, so they
+  // are their own pass — one batch of reads, one batch of writes.
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
   const res = await writeDealToTracker(DEAL, { graph, target });
   assert.equal(res.ok, true);
   assert.equal(res.notes, undefined, "nothing degraded, so nothing to report");
 
   const widths = calls.filter(
-    (c) => c.method === "PATCH" && c.path.includes("/format") && c.path.includes("PGF"),
+    (c) => c.method === "PATCH" && /\/format$/.test(c.path) && c.path.includes("PGF"),
   );
   // Template's used range is A1:P30 — sixteen columns, A through P.
   assert.equal(widths.length, 16);
   assert.deepEqual(widths[0].body, { columnWidth: TEMPLATE_COLUMN_WIDTH });
+});
+
+test("tracker: the rebuilt tab is shaded like Template", async () => {
+  // The complaint this fixes: a new placement arrived as a plain white grid, so
+  // nothing on it said which cells the desk is meant to type into. There is no
+  // worksheet copy in Graph to bring the shading across, so it is read off
+  // Template a rectangle at a time and painted back on.
+  const { graph, calls } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+
+  const painted = (kind: string) =>
+    new Map(
+      calls
+        .filter((c) => c.method === "PATCH" && c.path.includes(`/format/${kind}`) && c.path.includes("PGF"))
+        .map((c) => [addressIn(c.path), c.body]),
+    );
+
+  const fills = painted("fill");
+  assert.deepEqual(fills.get("A1:P2"), { color: "#FFFF00" }, "the yellow banner, in one write");
+  assert.deepEqual(fills.get("A3:P3"), { color: "#000000" }, "the black header band");
+  // White is left alone: Graph reports an unfilled cell as #FFFFFF too, and a
+  // white fill would hide the gridlines a plain area is meant to show.
+  assert.equal(fills.has("A4:P30"), false, "the plain cells stay unfilled");
+
+  const fonts = painted("font");
+  assert.deepEqual(fonts.get("A3:P3"), {
+    name: "Calibri",
+    size: 11,
+    color: "#FFFFFF",
+    bold: true,
+    italic: false,
+    underline: "None",
+  });
+
+  // Read from Template, written to the new tab — never the other way round.
+  const reads = calls.filter((c) => c.method === "GET" && c.path.includes("/format/"));
+  assert.ok(reads.length > 0);
+  assert.ok(reads.every((c) => c.path.includes("Template")), "Template is only ever read");
+});
+
+test("tracker: the shading scan splits rather than walking every cell", async () => {
+  // A1:P30 is 480 cells. Asking about each one would be 480 reads inside a cron
+  // that has 60 seconds for the whole ingest. Asking about rectangles and only
+  // splitting the ones that come back non-uniform costs a couple of dozen.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const reads = calls.filter((c) => c.method === "GET" && /\/format\/(fill|font)/.test(c.path));
+  assert.ok(reads.length < 60, `expected a few dozen format reads, got ${reads.length}`);
+
+  // And they go out batched: twenty independent reads per HTTP request.
+  const batches = calls.filter((c) => c.path === "/$batch");
+  assert.ok(batches.length > 0, "the scan is batched");
+  assert.ok(
+    batches.length < reads.length,
+    "fewer round trips than reads, which is the point of batching",
+  );
+});
+
+test("tracker: Template's look is read once, not once per deal", async () => {
+  // A morning can bring four deals. Re-scanning Template for each would spend
+  // the ingest's budget four times over on an answer that did not change.
+  const workbook = { sheets: ["Template", "LGF"], overview: OVERVIEW };
+  const { graph, calls } = fakeGraph(workbook);
+
+  await writeDealToTracker(DEAL, { graph, target });
+  const afterFirst = calls.filter((c) => c.method === "GET" && c.path.includes("/format")).length;
+
+  await writeDealToTracker({ ...DEAL, ticker: "KNI" }, { graph, target });
+  const afterSecond = calls.filter((c) => c.method === "GET" && c.path.includes("/format")).length;
+
+  assert.equal(afterSecond, afterFirst, "the second deal reads no formatting at all");
+  assert.ok(
+    calls.some((c) => c.method === "PATCH" && c.path.includes("/format/fill") && c.path.includes("KNI")),
+    "but it is still painted",
+  );
+});
+
+test("tracker: the shading goes on AFTER the deal is on the Overview", async () => {
+  // It is the slowest step and nothing depends on it. A cron that runs out of
+  // time part-way through it should leave a filed deal that is a bit plain, not
+  // a beautiful tab no row points at.
+  const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const rowAt = calls.findIndex((c) => c.method === "PATCH" && c.path.includes("2026%20Overview"));
+  const shadeAt = calls.findIndex((c) => c.method === "PATCH" && c.path.includes("/format/fill"));
+  assert.ok(rowAt >= 0 && shadeAt >= 0);
+  assert.ok(rowAt < shadeAt, "the row is written first");
+});
+
+test("tracker: refused formatting is a note, not a failed deal", async () => {
+  // The deal is in the workbook and every figure on it is right. A protected
+  // range or a missing format permission must not undo that.
+  const { graph } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW }, {
+    path: /\/format/,
+    status: 403,
+    message: "range is protected",
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true, "the deal is still filed");
+  assert.equal(res.sheet, "PGF");
+  assert.match(res.notes?.join(" ") ?? "", /not shaded like Template/);
 });
 
 test("tracker: a new deal lands at the FRONT of the deal tabs, not the far right", async () => {
@@ -367,7 +568,11 @@ test("tracker: a new deal lands on the first empty row, continuing the counter",
   assert.ok(row, "the row is written as one range");
   const formulas = (row!.body as { formulas: string[][] }).formulas[0];
   assert.equal(formulas[0], 58, "counter");
-  assert.equal(formulas[1], "PGF", "the Counter column holds the plain ticker");
+  assert.equal(
+    formulas[1],
+    `=HYPERLINK("#'PGF'!A1","PGF")`,
+    "the Counter column links to the tab it was written for",
+  );
   assert.equal(formulas[2], "='PGF'!B3", "Date Issued reads the tab");
   assert.equal(formulas[4], "", "T2 Settlement is left for the desk");
   assert.equal(formulas[12], "=M6*(1.1)", "GST grosses up this row, not row 5");
@@ -555,6 +760,23 @@ test("tracker: duplicate detection needs ticker AND date", () => {
 test("tracker: the Overview row is 19 cells, B through T", () => {
   const row = overviewRowFormulas("PGF", "PGF", 61, 58);
   assert.equal(row.length, 19, "B..T inclusive — matches the header on row 3");
+});
+
+test("tracker: the Counter cell is a link to the deal's own tab", () => {
+  // The Overview is the index of ~190 tabs and this column is how the desk
+  // navigates it. `#` makes the target a place in this workbook rather than a
+  // URL; the friendly name is what every reader of the column still sees.
+  assert.equal(sheetLinkFormula("PGF", "PGF"), `=HYPERLINK("#'PGF'!A1","PGF")`);
+
+  // A repeat issuer's tab has a space in it, which is exactly why the sheet ref
+  // is quoted — and an apostrophe in a name is doubled, Excel's own rule.
+  assert.equal(sheetLinkFormula("CBE (b)", "CBE"), `=HYPERLINK("#'CBE (b)'!A1","CBE")`);
+  assert.equal(sheetLinkFormula("O'Brien", "OBR"), `=HYPERLINK("#'O''Brien'!A1","OBR")`);
+
+  // The row still reads as the ticker: HYPERLINK's value IS the friendly name,
+  // so the duplicate guard and the P&L engine's lookup are unaffected.
+  const row = overviewRowFormulas("KNI (b)", "kni", 61, 58);
+  assert.equal(row[1], `=HYPERLINK("#'KNI (b)'!A1","KNI")`);
 });
 
 test("tracker: a new tab goes in front of the deals, behind the scaffolding", () => {

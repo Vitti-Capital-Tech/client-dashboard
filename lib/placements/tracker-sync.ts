@@ -138,14 +138,14 @@ export async function syncTrackerRows(
     `Tracker: ${report.written.length} written, ${report.skipped} already there, ${report.failed.length} failed.`,
   );
 
-  // Said once per run, not once per deal. It is the answer to "why does the new
-  // tab have no yellow on it?" — this tenant's Graph has no worksheet copy, so
-  // the tab was rebuilt: formulas, number formats and column widths carry, fills
-  // and borders do not.
+  // Said once per run, not once per deal. Graph has no worksheet copy, so this
+  // is every tab, every time: formulas, number formats, fills, fonts and widths
+  // are replayed from Template; data validation and conditional formatting have
+  // no range-level read and cannot be.
   if (replayed > 0) {
     report.notes.push(
       `${replayed} tab${replayed === 1 ? "" : "s"} rebuilt from Template rather than copied — ` +
-        `this workbook's Graph endpoint has no worksheet copy, so fills and borders did not carry.`,
+        `Graph has no worksheet copy, so validation and conditional formatting did not carry.`,
     );
   }
 
