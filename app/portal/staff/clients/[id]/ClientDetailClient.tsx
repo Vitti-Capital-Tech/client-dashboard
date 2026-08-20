@@ -498,11 +498,13 @@ export function ClientDetailClient({
       // An unlisted grant's count sits on the sell side (it was never bought)
       // and its open quantity is negative, so magnitude is what is held.
       const qty =
-        r.openQty !== undefined && r.openQty > 0
-          ? r.openQty
-          : r.buyQty > 0
+        r.buyQty > 0
           ? r.buyQty
-          : r.sellQty || Math.abs(r.openQty ?? 0);
+          : r.sellQty > 0
+          ? r.sellQty
+          : r.openQty !== undefined && r.openQty !== 0
+          ? Math.abs(r.openQty)
+          : 0;
 
       // ONLY the modelled grants. A listed series is quoted and traded on its
       // own market — the Current Value column already carries what it is worth,

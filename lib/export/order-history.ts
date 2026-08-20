@@ -196,9 +196,17 @@ export function buildPnlSummary(
     const h = held.get(ticker);
     const o = overrides.get(ticker);
 
+    const isOpt = Boolean(
+      ticker.endsWith("-UO") ||
+      (ticker.length > 3 && ticker.includes("O"))
+    );
+    const optQty = isOpt ? ((rz?.unitsSold ?? 0) || (rz?.unitsBought ?? 0) || (h?.qty ?? 0)) : 0;
+    const computedBuyQty = isOpt ? ((rz?.unitsBought ?? 0) || optQty) : (rz?.unitsBought ?? 0);
+    const computedSellQty = isOpt ? ((rz?.unitsSold ?? 0) || optQty) : (rz?.unitsSold ?? 0);
+
     const computed = {
-      buyQty: rz?.unitsBought ?? 0,
-      sellQty: rz?.unitsSold ?? 0,
+      buyQty: isOpt ? (computedBuyQty || computedSellQty) : computedBuyQty,
+      sellQty: isOpt ? (computedSellQty || computedBuyQty) : computedSellQty,
       buyPrice: (rz?.costOfSold ?? 0) + (h?.costBase ?? 0),
       sellOrCurrent: (rz?.proceeds ?? 0) + (h?.marketValue ?? 0),
       pnl: 0,
@@ -217,10 +225,21 @@ export function buildPnlSummary(
       overridden.buyPrice ||
       overridden.sellOrCurrent;
 
-    const buyQty = o?.buyQty ?? computed.buyQty;
-    const sellQty = o?.sellQty ?? computed.sellQty;
+    let buyQty = o?.buyQty ?? computed.buyQty;
+    let sellQty = o?.sellQty ?? computed.sellQty;
     const buyPrice = o?.buyPrice ?? computed.buyPrice;
     const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
+
+    if (isOpt) {
+      if (!overridden.buyQty && overridden.sellQty) {
+        buyQty = sellQty;
+      } else if (overridden.buyQty && !overridden.sellQty) {
+        sellQty = buyQty;
+      } else if (!overridden.buyQty && !overridden.sellQty) {
+        if (buyQty === 0 && sellQty > 0) buyQty = sellQty;
+        if (sellQty === 0 && buyQty > 0) sellQty = buyQty;
+      }
+    }
 
     // Classify against the values actually in force — correcting the quantities
     // is precisely how a `CHECK - …` row becomes a clean `Full exit`.

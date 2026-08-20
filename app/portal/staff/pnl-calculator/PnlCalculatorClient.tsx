@@ -2287,10 +2287,18 @@ export function PnlCalculatorClient() {
                             className="py-3.5 px-4 text-right font-mono text-navy"
                             title={buyUnknown ? item.placementYearNote : undefined}
                           >
-                            {buyUnknown ? <span className="text-loss-d font-bold">—</span> : fmtQty(item.buyQty)}
+                            {buyUnknown ? (
+                              <span className="text-loss-d font-bold">—</span>
+                            ) : isOptionRow(item) && item.buyQty === 0 && item.sellQty > 0 ? (
+                              fmtQty(item.sellQty)
+                            ) : (
+                              fmtQty(item.buyQty)
+                            )}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono text-navy">
-                            {fmtQty(item.sellQty)}
+                            {isOptionRow(item) && item.sellQty === 0 && item.buyQty > 0
+                              ? fmtQty(item.buyQty)
+                              : fmtQty(item.sellQty)}
                           </td>
                           <td
                             className="py-3.5 px-4 text-right font-mono text-navy"

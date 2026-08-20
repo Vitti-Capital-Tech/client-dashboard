@@ -61,8 +61,8 @@ function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
   // always used for the same case.
   if (r.isDbOnly) return r.isOption ? "Listed Options" : "Open - no ledger history";
   if (r.isUnlistedOption) return "Unlisted Option";
-  if (eff.isMatched) return "Matched";
   if (r.isOption) return "Option";
+  if (eff.isMatched) return "Matched";
   if (r.isPartialExit) return "Partial exit";
   if (eff.openQty > 0) return "Open";
   return "Unmatched";
@@ -89,9 +89,23 @@ export function storedToSummaryRows(
   const rows: PnlSummaryRow[] = stored.map((r) => {
     const o = overrideFor(r, overrides);
 
+    const isOption = Boolean(
+      r.isOption ||
+      r.isUnlistedOption ||
+      r.ticker.endsWith("-UO") ||
+      (r.instrument && r.instrument.toLowerCase().includes("option"))
+    );
+
+    const optQty = isOption
+      ? (r.sellQty || r.buyQty || Math.abs(r.openQty) || 0)
+      : 0;
+
+    const baseBuyQty = isOption && r.buyQty === 0 ? optQty : r.buyQty;
+    const baseSellQty = isOption && r.sellQty === 0 ? optQty : r.sellQty;
+
     const computed = {
-      buyQty: r.buyQty,
-      sellQty: r.sellQty,
+      buyQty: isOption ? (baseBuyQty || baseSellQty || optQty) : baseBuyQty,
+      sellQty: isOption ? (baseSellQty || baseBuyQty || optQty) : baseSellQty,
       buyPrice: r.buyPrice,
       sellOrCurrent: r.sellPrice,
       pnl: r.pnl,
@@ -109,10 +123,21 @@ export function storedToSummaryRows(
       overridden.buyPrice ||
       overridden.sellOrCurrent;
 
-    const buyQty = o?.buyQty ?? computed.buyQty;
-    const sellQty = o?.sellQty ?? computed.sellQty;
+    let buyQty = o?.buyQty ?? computed.buyQty;
+    let sellQty = o?.sellQty ?? computed.sellQty;
     const buyPrice = o?.buyPrice ?? computed.buyPrice;
     const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
+
+    if (isOption) {
+      if (!overridden.buyQty && overridden.sellQty) {
+        buyQty = sellQty;
+      } else if (overridden.buyQty && !overridden.sellQty) {
+        sellQty = buyQty;
+      } else if (!overridden.buyQty && !overridden.sellQty) {
+        if (buyQty === 0 && sellQty > 0) buyQty = sellQty;
+        if (sellQty === 0 && buyQty > 0) sellQty = buyQty;
+      }
+    }
 
     // P&L is never taken from an override — it stays `sell − buy`, recomputed
     // from whichever values are in force. That is what keeps a hand-edited row
@@ -126,7 +151,11 @@ export function storedToSummaryRows(
     // stored answers stand, untouched.
     const qtyEdited = overridden.buyQty || overridden.sellQty;
     const eff: EffectiveState = {
-      isMatched: qtyEdited ? buyQty === sellQty && buyQty > 0 : r.isMatched,
+      isMatched: isOption
+        ? (buyQty > 0 && buyQty === sellQty)
+        : qtyEdited
+        ? buyQty === sellQty && buyQty > 0
+        : r.isMatched,
       openQty: qtyEdited ? Math.max(buyQty - sellQty, 0) : r.openQty,
       // Judged on the QUANTITY, which is the leg the label names — the
       // Mismatches page words the same row "0 Buys vs N Sold". A desk that

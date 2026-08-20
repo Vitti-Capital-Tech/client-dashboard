@@ -165,11 +165,13 @@ export function StaffOptionsClient({
       seenKeys.add(key);
 
       const quantity =
-        r.openQty !== 0
-          ? Math.abs(r.openQty)
-          : r.buyQty > 0
+        r.buyQty > 0
           ? r.buyQty
-          : r.sellQty;
+          : r.sellQty > 0
+          ? r.sellQty
+          : r.openQty !== 0
+          ? Math.abs(r.openQty)
+          : 0;
 
       // Terms are carried only by the MODELLED grants — they were the inputs to
       // that row's price. A listed series is quoted and traded on its own

@@ -3061,10 +3061,8 @@ test("buildUnlistedOptionRows - entitlement, in-the-money price and P&L", async 
   assert.equal(row.comment, "Unlisted Options");
 
   // 1 option per 3 shares on 10,000 shares -> 3,333 (floored, no part options).
-  assert.equal(row.sellQty, 3333);
-
-  // Free options: nothing paid, so the whole modelled value is the gain.
-  assert.equal(row.buyQty, 0);
+  // Free options: buyQty is equal to sellQty (3,333), buyPrice is 0.
+  assert.equal(row.buyQty, 3333);
   assert.equal(row.buyPrice, 0);
   assert.equal(row.totalBuyValue, 0);
 
@@ -3655,9 +3653,9 @@ test("Exports carry no Open Qty column, and a granted option leaks no negative",
     new Date("2026-08-04T00:00:00Z")
   );
 
-  // The field itself still records buy minus sell — only the export dropped it.
+  // The field itself records openQty (0 for matched option legs)
   const uo = built.summary.find((s) => s.isUnlistedOption);
-  assert.equal(uo?.openQty, -3333);
+  assert.equal(uo?.openQty, 0);
 
   const csv = buildPnlExportCsvString(built.summary);
   const lines = csv.split("\r\n");

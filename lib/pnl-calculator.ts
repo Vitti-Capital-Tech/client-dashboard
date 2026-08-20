@@ -1056,18 +1056,24 @@ export function aggregateTradesToSummary(rawTrades: ParsedTradeRow[]): { summary
 
   // Calculate sum of buy price and sum of sell price per ticker
   const summary: PnlSummaryItem[] = Array.from(tickerMap.values()).map((item) => {
+    const isOption = item.instrument === "OPTION" || item.isOption;
+    const optQty = isOption ? (item.sellQty || item.buyQty) : 0;
+    const buyQty = isOption && item.buyQty === 0 && optQty > 0 ? optQty : item.buyQty;
+    const sellQty = isOption && item.sellQty === 0 && optQty > 0 ? optQty : item.sellQty;
+
     const buyPrice = Math.round(item.totalBuyValue * 100) / 100;
     const sellPrice = Math.round(item.totalSellValue * 100) / 100;
-    const isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
-    const isOption = item.instrument === "OPTION";
+    const isMatched = isOption ? (buyQty > 0 && buyQty === sellQty) : (buyQty === sellQty && buyQty > 0);
 
     // Calculate PnL for all positions regardless of qty match
     const pnlCalculated = Math.round((sellPrice - buyPrice) * 100) / 100;
-    const openQty = item.buyQty - item.sellQty;
+    const openQty = isOption ? 0 : buyQty - sellQty;
     const years = yearsByKey.get(item.ticker);
 
     return {
       ...item,
+      buyQty,
+      sellQty,
       buyPrice,
       sellPrice,
       totalBuyValue: buyPrice,
@@ -3595,7 +3601,7 @@ export function buildUnlistedOptionRows(
         company: `${equityRow.company} — Unlisted Option${label} ${addOn.ratioOptions}:${addOn.ratioPerShares} @$${addOn.strike} exp ${addOn.expiry}${
           addOn.expiryAssumed ? " (assumed)" : ""
         }`,
-        buyQty: 0,
+        buyQty: optionQty,
         sellQty: optionQty,
         buyPrice: 0,
         sellPrice: sellValue,
@@ -3603,12 +3609,12 @@ export function buildUnlistedOptionRows(
         totalSellValue: sellValue,
         // Free options, so the entire modelled value is the gain.
         pnlCalculated: sellValue,
-        isMatched: false,
+        isMatched: optionQty > 0,
         isOption: true,
         hasOptionCode: true,
         isUnlistedOption: true,
         comment: "Unlisted Options",
-        openQty: -optionQty,
+        openQty: 0,
         tradeCount: 0,
         unlistedOption: {
           addOn,

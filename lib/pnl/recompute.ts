@@ -355,37 +355,49 @@ async function persist(
   await upsertChunked(
     db,
     "pnl_summary",
-    args.summary.map((s) => ({
-      account_id: args.accountId,
-      client_id: args.clientId,
-      ticker: s.ticker,
-      run_id: runId,
-      parent_ticker: s.parentTicker ?? null,
-      company: s.company ?? "",
-      instrument: s.instrument ?? null,
-      buy_qty: s.buyQty,
-      sell_qty: s.sellQty,
-      open_qty: s.openQty,
-      buy_price: round2(s.buyPrice),
-      sell_price: round2(s.sellPrice),
-      pnl: round2(s.pnlCalculated),
-      trade_count: s.tradeCount,
-      is_matched: Boolean(s.isMatched),
-      is_option: Boolean(s.isOption),
-      is_enriched: Boolean(s.isEnriched),
-      is_db_market_valued: Boolean(s.isDbMarketValued),
-      is_db_open_valued: Boolean(s.isDbOpenValued),
-      is_db_only: Boolean(s.isDbOnly),
-      is_partial_exit: Boolean(s.isPartialExit),
-      is_partial_buy: Boolean(s.isPartialBuy),
-      is_unlisted_option: Boolean(s.isUnlistedOption),
-      placement_year_unresolved: Boolean(s.placementYearUnresolved),
-      placement_year_note: s.placementYearNote ?? null,
-      buy_side_unknown: isBuySideUnknown(s),
-      unlisted_option: s.unlistedOption ?? null,
-      comment: s.comment ?? null,
-      computed_at: computedAt,
-    })),
+    args.summary.map((s) => {
+      const isOpt = Boolean(
+        s.isOption ||
+        s.isUnlistedOption ||
+        s.ticker.endsWith("-UO") ||
+        (s.instrument && s.instrument.toLowerCase().includes("option"))
+      );
+      const optQty = isOpt ? (s.sellQty || s.buyQty || Math.abs(s.openQty)) : 0;
+      const bQty = isOpt && s.buyQty === 0 && optQty > 0 ? optQty : s.buyQty;
+      const sQty = isOpt && s.sellQty === 0 && optQty > 0 ? optQty : s.sellQty;
+
+      return {
+        account_id: args.accountId,
+        client_id: args.clientId,
+        ticker: s.ticker,
+        run_id: runId,
+        parent_ticker: s.parentTicker ?? null,
+        company: s.company ?? "",
+        instrument: s.instrument ?? null,
+        buy_qty: bQty,
+        sell_qty: sQty,
+        open_qty: isOpt ? 0 : s.openQty,
+        buy_price: round2(s.buyPrice),
+        sell_price: round2(s.sellPrice),
+        pnl: round2(s.pnlCalculated),
+        trade_count: s.tradeCount,
+        is_matched: Boolean(isOpt ? (bQty > 0 && bQty === sQty) : s.isMatched),
+        is_option: Boolean(s.isOption),
+        is_enriched: Boolean(s.isEnriched),
+        is_db_market_valued: Boolean(s.isDbMarketValued),
+        is_db_open_valued: Boolean(s.isDbOpenValued),
+        is_db_only: Boolean(s.isDbOnly),
+        is_partial_exit: Boolean(s.isPartialExit),
+        is_partial_buy: Boolean(s.isPartialBuy),
+        is_unlisted_option: Boolean(s.isUnlistedOption),
+        placement_year_unresolved: Boolean(s.placementYearUnresolved),
+        placement_year_note: s.placementYearNote ?? null,
+        buy_side_unknown: isBuySideUnknown(s),
+        unlisted_option: s.unlistedOption ?? null,
+        comment: s.comment ?? null,
+        computed_at: computedAt,
+      };
+    }),
     { onConflict: "account_id,ticker" },
   );
 

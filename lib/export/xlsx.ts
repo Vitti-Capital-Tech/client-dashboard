@@ -70,11 +70,20 @@ export async function buildPnlSummaryWorkbook(
     // a line can never read `Closed` on a green fill and `Open` on an amber one.
     const status = positionStatus(r);
 
+    const isOpt = Boolean(
+      r.isOption ||
+      r.isUnlistedOption ||
+      r.ticker.endsWith("-UO") ||
+      r.type.toLowerCase().includes("option")
+    );
+    const bQty = isOpt ? (r.buyQty || r.sellQty) : r.buyQty;
+    const sQty = isOpt ? (r.sellQty || r.buyQty) : r.sellQty;
+
     const row = ws.addRow({
       ticker: r.ticker,
       name: r.name,
-      buyQty: r.buyQty,
-      sellQty: r.sellQty,
+      buyQty: bQty,
+      sellQty: sQty,
       // Real numbers, never strings — otherwise the Grand Total and any pivot
       // the desk builds on top of this would silently not add up.
       buy: r.buyPrice,

@@ -373,3 +373,22 @@ test("stored: rows are ordered biggest result first", () => {
   ]);
   assert.deepEqual(rows.map((r) => r.ticker), ["BBB", "AAA", "CCC"]);
 });
+
+test("stored: options (listed and unlisted) have buyQty equal to sellQty and non-empty", () => {
+  const unlisted = storedToSummaryRows([
+    row({ ticker: "GRV-UO", isUnlistedOption: true, isOption: true, buyQty: 0, sellQty: 50_000 }),
+  ])[0];
+  assert.equal(unlisted.buyQty, 50_000);
+  assert.equal(unlisted.sellQty, 50_000);
+  assert.equal(unlisted.computed.buyQty, 50_000);
+  assert.equal(unlisted.computed.sellQty, 50_000);
+
+  const listed = storedToSummaryRows([
+    row({ ticker: "EOSO", isOption: true, buyQty: 0, sellQty: 25_000 }),
+  ])[0];
+  assert.equal(listed.buyQty, 25_000);
+  assert.equal(listed.sellQty, 25_000);
+  assert.equal(listed.computed.buyQty, 25_000);
+  assert.equal(listed.computed.sellQty, 25_000);
+});
+

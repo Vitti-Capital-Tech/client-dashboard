@@ -62,12 +62,33 @@ export function PnlRow({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isOption = Boolean(
+    row.isOption ||
+    row.isUnlistedOption ||
+    row.ticker.endsWith("-UO") ||
+    row.type.toLowerCase().includes("option")
+  );
+
+  const displayBuyQty = isOption
+    ? (row.buyQty || row.sellQty || (row.openQty ? Math.abs(row.openQty) : 0))
+    : row.buyQty;
+  const displaySellQty = isOption
+    ? (row.sellQty || row.buyQty || (row.openQty ? Math.abs(row.openQty) : 0))
+    : row.sellQty;
+
+  const effComputedBuyQty = isOption
+    ? (row.computed.buyQty || row.computed.sellQty || displayBuyQty)
+    : row.computed.buyQty;
+  const effComputedSellQty = isOption
+    ? (row.computed.sellQty || row.computed.buyQty || displaySellQty)
+    : row.computed.sellQty;
+
   // Every field starts filled with the value currently in force (0 when there
   // is nothing), so the desk edits real numbers rather than typing into empty
   // boxes. Untouched fields are then dropped on save — see `diff` below — so
   // pre-filling costs nothing: only what actually changed becomes an override.
-  const [buyQty, setBuyQty] = useState(String(row.buyQty));
-  const [sellQty, setSellQty] = useState(String(row.sellQty));
+  const [buyQty, setBuyQty] = useState(String(displayBuyQty));
+  const [sellQty, setSellQty] = useState(String(displaySellQty));
   const [buyPrice, setBuyPrice] = useState(row.buyPrice.toFixed(2));
   const [sellPrice, setSellPrice] = useState(row.sellOrCurrent.toFixed(2));
   const [note, setNote] = useState(row.note ?? "");
@@ -103,8 +124,8 @@ export function PnlRow({
     setSaving(true);
     setError(null);
     const res = await savePnlOverride(accountId, clientId, row.ticker, {
-      buyQty: diff(parsed[0], row.computed.buyQty),
-      sellQty: diff(parsed[1], row.computed.sellQty),
+      buyQty: diff(parsed[0], effComputedBuyQty),
+      sellQty: diff(parsed[1], effComputedSellQty),
       buyPrice: diff(parsed[2], row.computed.buyPrice),
       sellOrCurrent: diff(parsed[3], row.computed.sellOrCurrent),
       note,
@@ -164,13 +185,13 @@ export function PnlRow({
           {row.name}
         </td>
         <td className="px-4.5 py-3 text-right font-mono">
-          <span {...mark(row.overridden.buyQty, qty(row.computed.buyQty))}>
-            {row.buyQty === 0 ? "—" : qty(row.buyQty)}
+          <span {...mark(row.overridden.buyQty, qty(effComputedBuyQty))}>
+            {displayBuyQty === 0 && !isOption ? "—" : qty(displayBuyQty)}
           </span>
         </td>
         <td className="px-4.5 py-3 text-right font-mono">
-          <span {...mark(row.overridden.sellQty, qty(row.computed.sellQty))}>
-            {row.sellQty === 0 ? "—" : qty(row.sellQty)}
+          <span {...mark(row.overridden.sellQty, qty(effComputedSellQty))}>
+            {displaySellQty === 0 && !isOption ? "—" : qty(displaySellQty)}
           </span>
         </td>
         <td className="px-4.5 py-3 text-right font-mono">
@@ -232,7 +253,7 @@ export function PnlRow({
           onChange={(e) => setBuyQty(e.target.value)}
           onKeyDown={onKey}
           inputMode="decimal"
-          placeholder={qty(row.computed.buyQty)}
+          placeholder={qty(effComputedBuyQty)}
           className={CELL_INPUT}
         />
       </td>
@@ -242,7 +263,7 @@ export function PnlRow({
           onChange={(e) => setSellQty(e.target.value)}
           onKeyDown={onKey}
           inputMode="decimal"
-          placeholder={qty(row.computed.sellQty)}
+          placeholder={qty(effComputedSellQty)}
           className={CELL_INPUT}
         />
       </td>
