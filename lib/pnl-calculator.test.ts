@@ -3713,3 +3713,61 @@ test("Unlisted option rows reach the Comments column in both exports", async () 
   const xlsx = await buildPnlExportXlsxBuffer(built.summary);
   assert.ok(xlsx.length > 0);
 });
+
+test("Option listed status is verified from 2026 tracker even if placement was in 2025", async () => {
+  // 2025 placement originally marked unlisted: "1:2 @$0.10 Unlisted Exp 31/12/29"
+  const y2025 = placementFile("ABE", "Mr Akshit Verma", 10000, 1000, 2025);
+  y2025.map.get("ABE")!.addOns = parseAddOnSpecs(
+    "1:2 @$0.10 Unlisted Exp 31/12/29",
+    new Date(Date.UTC(2025, 5, 17))
+  );
+  assert.equal(y2025.map.get("ABE")!.addOns![0].listed, false);
+
+  // 2026 placement tracker verifies that this option is now Listed: "1:2 @$0.10 Listed Exp 31/12/29"
+  const y2026 = placementFile("ABE", "Mr Akshit Verma", 10000, 1000, 2026);
+  y2026.map.get("ABE")!.addOns = parseAddOnSpecs(
+    "1:2 @$0.10 Listed Exp 31/12/29",
+    new Date(Date.UTC(2026, 1, 10))
+  );
+  assert.equal(y2026.map.get("ABE")!.addOns![0].listed, true);
+
+  // When combined, the 2025 placement candidate adopts the 2026 verified listed status (listed = true)
+  const combined = combinePlacementMaps([y2025, y2026]);
+  const candidates = combined.get("ABE")?.candidates;
+  assert.ok(candidates && candidates.length === 2);
+  assert.equal(candidates[0].addOns![0].listed, true, "2025 placement grant updated to listed");
+  assert.equal(candidates[1].addOns![0].listed, true, "2026 placement grant is listed");
+
+  // Since it is verified as listed in 2026, buildUnlistedOptionRows does not create synthetic unlisted rows for it
+  const summary: PnlSummaryItem[] = [
+    {
+      ticker: "ABE",
+      parentTicker: "ABE",
+      instrument: "EQUITY",
+      company: "AUSTRALIAN BOULDER",
+      buyQty: 10000,
+      sellQty: 10000,
+      buyPrice: 1000,
+      sellPrice: 2000,
+      totalBuyValue: 1000,
+      totalSellValue: 2000,
+      pnlCalculated: 1000,
+      isMatched: true,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 0,
+      tradeCount: 2,
+    },
+  ];
+
+  const built = buildUnlistedOptionRows(
+    summary,
+    combined,
+    new Map([["ABE", { price: 0.5, source: "yahoo" as const }]]),
+    new Date("2026-08-04T00:00:00Z")
+  );
+
+  assert.equal(built.addedCount, 0, "No synthetic unlisted option rows created for 2026-verified listed options");
+  assert.equal(built.summary.some((s) => s.isUnlistedOption), false);
+});
+

@@ -1764,14 +1764,20 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow[]> {
     return found;
   }
 
-  // A workbook can hold more than one ("2025 Overview" beside "2026 Overview"), and
-  // reading only the first would drop a whole year of grants.
-  const overviewSheets = wb.SheetNames.filter((n) => normHeader(n).includes("overview"));
+  // A workbook can hold more than one ("2025 Overview" beside "2026 Overview", or "Options" sheet),
+  // and reading only the first would drop a whole year of grants.
+  const overviewSheets = wb.SheetNames.filter((n) => {
+    const norm = normHeader(n);
+    return norm.includes("overview") || norm.includes("option");
+  });
   // Tried only if the Overview sheets yielded nothing, so a renamed SHEET is no more
   // fatal than the renamed COLUMN was. Ticker tabs are excluded — their tables are
   // read by the caller, and scanning ~50 of them for nothing is wasted work.
   const fallbackSheets = wb.SheetNames.filter(
-    (n) => !normHeader(n).includes("overview") && !looksLikeTickerTab(n)
+    (n) =>
+      !normHeader(n).includes("overview") &&
+      !normHeader(n).includes("option") &&
+      !looksLikeTickerTab(n)
   );
 
   const readSheet = (sheetName: string) => {
@@ -1788,7 +1794,8 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow[]> {
     // "2025 Overview" dates every placement on the sheet, which is what identifies the
     // year when a row's own Date Issued is blank. Without a year the ticker cannot be
     // told apart from the same ticker in another tracker.
-    const sheetYear = yearFromText(sheetName);
+    const sheetYear =
+      yearFromText(sheetName) ?? (normHeader(sheetName).includes("option") ? 2026 : undefined);
 
     // EVERY row for a ticker, in sheet order — a stock placed twice in a year has two
     // Overview rows with their own dates and their own Options cells, and one of them
@@ -1806,6 +1813,31 @@ function parseOverviewAddOns(buffer: Buffer): Map<string, OverviewRow[]> {
     for (const sheetName of fallbackSheets) {
       readSheet(sheetName);
       if (found.size > 0) break;
+    }
+  }
+
+  // The 2026 Options / Overview sheet is the authoritative source for whether an
+  // option is listed or unlisted (companies frequently list older 2025 options later).
+  // Synchronise listed status from 2026 entries to 2025/older entries.
+  for (const [, rows] of found.entries()) {
+    const y2026Grants = rows.filter((r) => r.issueYear === 2026).flatMap((r) => r.addOns);
+    if (y2026Grants.length > 0) {
+      for (const r of rows) {
+        if (r.issueYear === 2026) continue;
+        for (const addOn of r.addOns) {
+          const match =
+            y2026Grants.find(
+              (g) => addOn.strike > 0 && Math.abs(g.strike - addOn.strike) < 0.0001
+            ) ??
+            y2026Grants.find(
+              (g) => g.ratioOptions === addOn.ratioOptions && g.ratioPerShares === addOn.ratioPerShares
+            ) ??
+            y2026Grants[0];
+          if (match) {
+            addOn.listed = match.listed;
+          }
+        }
+      }
     }
   }
 
@@ -2739,12 +2771,22 @@ export function combinePlacementMaps(
   const byTicker = new Map<string, PlacementYearCandidate[]>();
   const meta = new Map<string, { ticker: string; company?: string }>();
 
+  // Collect all 2026 option grants across all workbooks to verify listed/unlisted status
+  const global2026GrantsByTicker = new Map<string, PlacementAddOn[]>();
+
   files.forEach((f, fileIdx) => {
     for (const [ticker, info] of f.map.entries()) {
+      const parent = getParentTicker(ticker);
       const entries = byTicker.get(ticker) ?? [];
       if (!entries.length) byTicker.set(ticker, entries);
 
       for (const entry of placementEntries(info)) {
+        if (entry.issueYear === 2026 && entry.addOns?.length) {
+          const list = global2026GrantsByTicker.get(parent) ?? [];
+          list.push(...entry.addOns);
+          global2026GrantsByTicker.set(parent, list);
+        }
+
         // An undated workbook cannot be compared with any other, so its placements are
         // kept apart rather than assumed to repeat one already seen.
         const year = entry.issueYear ?? undefined;
@@ -2768,6 +2810,37 @@ export function combinePlacementMaps(
       else if (!m.company && info.company) m.company = info.company;
     }
   });
+
+  // Verify and synchronise listed/unlisted status of all options against the 2026 file
+  for (const [ticker, entries] of byTicker.entries()) {
+    const parent = getParentTicker(ticker);
+    const y2026Grants = [
+      ...entries.filter((e) => e.issueYear === 2026).flatMap((e) => e.addOns ?? []),
+      ...(global2026GrantsByTicker.get(parent) ?? []),
+    ];
+
+    if (y2026Grants.length > 0) {
+      for (const entry of entries) {
+        if (entry.issueYear === 2026) continue;
+        if (!entry.addOns || entry.addOns.length === 0) continue;
+
+        for (const addOn of entry.addOns) {
+          const match =
+            y2026Grants.find(
+              (g) => addOn.strike > 0 && Math.abs(g.strike - addOn.strike) < 0.0001
+            ) ??
+            y2026Grants.find(
+              (g) => g.ratioOptions === addOn.ratioOptions && g.ratioPerShares === addOn.ratioPerShares
+            ) ??
+            y2026Grants[0];
+
+          if (match) {
+            addOn.listed = match.listed;
+          }
+        }
+      }
+    }
+  }
 
   const combined = new Map<string, PlacementTickerInfo>();
 
@@ -3420,6 +3493,28 @@ function isoFromDayFirst(dd: string, mm: string, yy: string): string | null {
 function unlistedAddOnsFor(info: PlacementTickerInfo, equityRow: PnlSummaryItem): PlacementAddOn[] {
   const source = equityRow.placementAddOns ?? chooseYearCandidate(info, equityRow)?.addOns ?? [];
 
+  // The 2026 options tracker is the authoritative source for whether an option is
+  // listed on ASX or unlisted. If 2026 entries exist for this ticker, verify and update
+  // the listed status on the source grants.
+  const allEntries = placementEntries(info);
+  const y2026Grants = allEntries.filter((e) => e.issueYear === 2026).flatMap((e) => e.addOns ?? []);
+  if (y2026Grants.length > 0) {
+    for (const addOn of source) {
+      const match =
+        y2026Grants.find(
+          (g) => addOn.strike > 0 && Math.abs(g.strike - addOn.strike) < 0.0001
+        ) ??
+        y2026Grants.find(
+          (g) => g.ratioOptions === addOn.ratioOptions && g.ratioPerShares === addOn.ratioPerShares
+        ) ??
+        y2026Grants[0];
+
+      if (match) {
+        addOn.listed = match.listed;
+      }
+    }
+  }
+
   // `placementAddOns` was stamped on the row by the merge, which runs on the FULL
   // placement map — allocations must not be date-filtered, since a parcel bought in
   // 2025 and sold in a 2026 window still needs its 2025 cost base. `info` here is the
@@ -3427,7 +3522,7 @@ function unlistedAddOnsFor(info: PlacementTickerInfo, equityRow: PnlSummaryItem)
   // that period's placements. Intersecting the two is what stops a row-level stamp
   // from smuggling a grant past the window: SKK is in both trackers, only the 2026 one
   // grants options, and a period ending in Oct 2025 was still showing them.
-  const offered = placementEntries(info).flatMap((e) => e.addOns ?? []);
+  const offered = allEntries.flatMap((e) => e.addOns ?? []);
   const offeredKeys = new Set(offered.map(grantKey));
 
   return source.filter((a) => !a.listed && offeredKeys.has(grantKey(a)));
