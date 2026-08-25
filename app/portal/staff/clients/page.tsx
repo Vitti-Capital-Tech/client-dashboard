@@ -18,6 +18,35 @@ function s708Label(iso: string | null): string {
   });
 }
 
+/**
+ * Everything one row can be found by, flattened into a single lower-case
+ * haystack the island matches against.
+ *
+ * Built HERE rather than in the table because this is where the accounts are —
+ * and a desk looks a client up by their broker account number at least as often
+ * as by name. The table renders only the aggregate ("3 accounts"), so a search
+ * limited to what is on screen would answer "114716" with nothing, which is
+ * exactly the lookup the register exists to serve.
+ *
+ * One prepared string, not a per-keystroke walk over each client's accounts:
+ * the filter then costs one `includes` per row per term.
+ */
+function searchKeyFor(
+  client: { name: string; initials: string | null; email: string | null; ref: string | null },
+  accounts: AccountRow[],
+): string {
+  return [
+    client.name,
+    client.initials,
+    client.email,
+    client.ref,
+    ...accounts.flatMap((a) => [a.label, a.accountType, a.externalRef, a.ref, a.adviserName]),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 // Across a client's accounts: total cash, an account-type summary, and the
 // earliest s708 expiry (the binding compliance date).
 function summarise(accounts: AccountRow[]) {
@@ -56,6 +85,7 @@ export default async function StaffClientsPage() {
         p.bids.some((b) => b.clientId === c.id),
       ).length,
       s708,
+      searchKey: searchKeyFor(c, accountsByClient[idx]),
     };
   });
 
