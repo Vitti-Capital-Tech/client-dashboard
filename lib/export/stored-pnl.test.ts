@@ -35,6 +35,7 @@ function row(over: Partial<StoredPnlRow> = {}): StoredPnlRow {
     isDbOnly: false,
     isPartialExit: false,
     isPartialBuy: false,
+    notInHoldings: false,
     isUnlistedOption: false,
     placementYearUnresolved: false,
     placementYearNote: null,
@@ -212,7 +213,7 @@ test("stored: correcting the quantities leaves the row matched, not Unmatched", 
   assert.equal(r.computed.buyQty, 900, "what the sources said is still kept");
 });
 
-test("stored: a quantity correction that does NOT balance stays unmatched", () => {
+test("stored: a quantity correction that does NOT balance stays a mismatch", () => {
   const overrides = new Map<string, PnlOverride>([
     [
       "EOS",
@@ -234,7 +235,11 @@ test("stored: a quantity correction that does NOT balance stays unmatched", () =
     overrides,
   );
 
-  assert.equal(r.type, "Unmatched (edited)");
+  // 950 bought against 1,000 sold. The correction moved the row but did not
+  // close the gap, and the gap is on the BUY side — 50 units were sold that no
+  // contract note ever bought, which is what the status now says instead of the
+  // catch-all "Unmatched".
+  assert.equal(r.type, "Missing Buys (edited)");
   assert.equal(r.isMatched, false);
 });
 
@@ -322,6 +327,64 @@ test("stored: status precedence matches the calculator's", () => {
   assert.equal(status({ isMatched: false, isOption: true }), "Option");
   assert.equal(status({ isMatched: false, openQty: 500 }), "Open");
   assert.equal(status({ isMatched: false }), "Unmatched");
+});
+
+test("stored: a row the holdings snapshot does not carry is closed, not open", () => {
+  // The bug this exists for: 10,000 bought, 4,000 sold, and the client holds
+  // nothing. `openQty` said 6,000 and the profile read "Open" — a position the
+  // client had already exited, with the missing sell trades hidden behind it.
+  const unheld = {
+    buyQty: 10_000,
+    sellQty: 4_000,
+    openQty: 6_000,
+    isMatched: false,
+    notInHoldings: true,
+  };
+
+  const [r] = storedToSummaryRows([row(unheld)]);
+  assert.equal(r.type, "Missing Sells");
+  assert.equal(positionStatus(r), "Closed");
+  assert.equal(r.flagged, true, "the desk has to see this one");
+
+  // Same figures, snapshot silent — nothing was verified, so nothing changes.
+  const [unverified] = storedToSummaryRows([row({ ...unheld, notInHoldings: false })]);
+  assert.equal(unverified.type, "Open");
+  assert.equal(positionStatus(unverified), "Open");
+  assert.equal(unverified.flagged, false);
+});
+
+test("stored: a verified absence never overrides a better-sourced status", () => {
+  // Every flag below means the snapshot DID carry the row, so `notInHoldings`
+  // cannot be true beside them in real data — but precedence is what stops one
+  // stale flag from closing a position, so it is pinned.
+  const status = (over: Partial<StoredPnlRow>) =>
+    positionStatus(storedToSummaryRows([row({ notInHoldings: true, ...over })])[0]);
+
+  assert.equal(status({ isDbOnly: true }), "Open");
+  assert.equal(status({ isDbOpenValued: true }), "Open");
+  assert.equal(
+    status({ ticker: "GRV-UO", isUnlistedOption: true, isOption: true, buyQty: 0, sellQty: 50_000 }),
+    "Open",
+  );
+  assert.equal(status({ buySideUnknown: true, buyQty: 0, buyPrice: 0 }), "Unknown");
+});
+
+test("stored: selling more than was bought names the missing buy trades", () => {
+  const status = (over: Partial<StoredPnlRow>) => storedToSummaryRows([row(over)])[0].type;
+
+  // Judged on the ledger's own figures — no holding can explain a sale of units
+  // that were never bought — so the verification plays no part either way.
+  assert.equal(status({ buyQty: 4_000, sellQty: 10_000, openQty: 0, isMatched: false }), "Missing Buys");
+  assert.equal(
+    status({ buyQty: 4_000, sellQty: 10_000, openQty: 0, isMatched: false, notInHoldings: true }),
+    "Missing Buys",
+  );
+  // A blank buy side is a different statement — the tracker could not be
+  // resolved — and keeps its own wording.
+  assert.equal(
+    status({ buyQty: 0, buyPrice: 0, sellQty: 10_000, openQty: 0, isMatched: false, buySideUnknown: true }),
+    "Buy Side Unknown",
+  );
 });
 
 test("stored: the flags the Position column reads survive the mapping", () => {

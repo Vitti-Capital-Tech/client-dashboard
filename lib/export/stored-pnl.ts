@@ -32,8 +32,11 @@ import type { PnlOverride, OverriddenFields, PnlSummaryRow } from "./order-histo
 type EffectiveState = {
   /** Legs reconcile — the calculator's rule, restated on the values in force. */
   isMatched: boolean;
-  /** Units still held on the corrected figures. */
+  /** Units the LEDGER never saw sold, on the corrected figures. */
   openQty: number;
+  /** The two legs in force, so the status can name which one is short. */
+  buyQty: number;
+  sellQty: number;
   /** The desk supplied the buy quantity the sources could not. */
   buySideSupplied: boolean;
 };
@@ -64,7 +67,31 @@ function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
   if (r.isOption) return "Option";
   if (eff.isMatched) return "Matched";
   if (r.isPartialExit) return "Partial exit";
+
+  // ── The two "the ledger is incomplete" states ─────────────────────────────
+  //
+  // Both are quantity gaps, and neither is a position. Naming them is the whole
+  // point: `Open` and `Unmatched` between them absorbed every row whose legs do
+  // not balance, which left the desk no way to see that the reason is trades
+  // that never arrived.
+  //
+  // SELLS. `openQty > 0` means the ledger recorded units it never saw sold. It
+  // does NOT mean anybody holds them — only the holdings snapshot can say that,
+  // and where it was checked and came back empty, the units were disposed of and
+  // the sell contract notes are what is missing. Reporting those rows as `Open`
+  // showed the client a position they had already exited, with a market value
+  // marked against a parcel that is not there.
+  if (r.notInHoldings && eff.openQty > 0) return "Missing Sells";
+  // Snapshot silent (no positions loaded, or it backs the parcel) — the units
+  // are genuinely still open.
   if (eff.openQty > 0) return "Open";
+
+  // BUYS. Nothing can be sold that was not bought, so a sell side larger than
+  // the buy side is not an ambiguity to be judged against holdings — it is
+  // proof, on the ledger's own figures, that buy contract notes are missing.
+  // (A ledger that starts mid-history is the usual cause.)
+  if (eff.sellQty > eff.buyQty) return "Missing Buys";
+
   return "Unmatched";
 }
 
@@ -157,6 +184,8 @@ export function storedToSummaryRows(
         ? buyQty === sellQty && buyQty > 0
         : r.isMatched,
       openQty: qtyEdited ? Math.max(buyQty - sellQty, 0) : r.openQty,
+      buyQty,
+      sellQty,
       // Judged on the QUANTITY, which is the leg the label names — the
       // Mismatches page words the same row "0 Buys vs N Sold". A desk that
       // supplied only the cost has not answered that, so the flag stands.
@@ -177,7 +206,13 @@ export function storedToSummaryRows(
       pnl,
       openPosition: eff.openQty > 0,
       type: edited ? `${status} (edited)` : status,
-      flagged: r.buySideUnknown || r.placementYearUnresolved,
+      // "Needs a human before it is trusted" — and a verified missing sell side
+      // is exactly that. The row's own figures look complete; only the check
+      // against holdings shows that units the ledger still carries are gone.
+      flagged:
+        r.buySideUnknown ||
+        r.placementYearUnresolved ||
+        (r.notInHoldings && eff.openQty > 0),
       edited,
       overridden,
       note: o?.note ?? r.comment ?? null,
@@ -198,6 +233,9 @@ export function storedToSummaryRows(
       // still-held position from an exited one — these flags can.
       isPartialExit: r.isPartialExit,
       openQty: eff.openQty,
+      // The verified absence, carried through so `positionStatus` can close a
+      // row the quantities alone would have called open.
+      notInHoldings: r.notInHoldings,
       // Only a modelled option carries its own terms. Left undefined elsewhere
       // so the Options tab can tell "no strike on this row" from "strike of 0".
       strike: r.unlistedOption?.strike ?? null,

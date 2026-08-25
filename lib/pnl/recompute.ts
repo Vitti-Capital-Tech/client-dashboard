@@ -389,6 +389,10 @@ async function persist(
         is_db_only: Boolean(s.isDbOnly),
         is_partial_exit: Boolean(s.isPartialExit),
         is_partial_buy: Boolean(s.isPartialBuy),
+        // "Checked, and the client holds none of it" — see the migration. An
+        // account with no snapshot at all never reaches the merge, so every row
+        // stores `false` and keeps being judged on its quantities alone.
+        not_in_holdings: Boolean(s.notInHoldings),
         is_unlisted_option: Boolean(s.isUnlistedOption),
         placement_year_unresolved: Boolean(s.placementYearUnresolved),
         placement_year_note: s.placementYearNote ?? null,

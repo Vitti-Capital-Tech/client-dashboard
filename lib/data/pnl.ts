@@ -72,6 +72,18 @@ export type StoredPnlRow = {
   isDbOnly: boolean;
   isPartialExit: boolean;
   isPartialBuy: boolean;
+  /**
+   * The holdings snapshot was CHECKED and holds nothing for this row.
+   *
+   * The one flag that can close a position the quantities call open. `openQty`
+   * only ever said "the ledger has units it never saw sold"; whether anyone
+   * still holds them is a question only the snapshot can answer, and where the
+   * answer is no, the units were sold and the sell trades are missing.
+   *
+   * `false` also covers "no snapshot was consulted", so it can never be read as
+   * evidence of a disposal — see the 20260825 migration.
+   */
+  notInHoldings: boolean;
   isUnlistedOption: boolean;
   placementYearUnresolved: boolean;
   placementYearNote: string | null;
@@ -121,6 +133,7 @@ interface PnlSummaryDbRow {
   is_db_only?: boolean | null;
   is_partial_exit?: boolean | null;
   is_partial_buy?: boolean | null;
+  not_in_holdings?: boolean | null;
   is_unlisted_option?: boolean | null;
   placement_year_unresolved?: boolean | null;
   placement_year_note?: string | null;
@@ -199,6 +212,9 @@ function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
     isDbOnly: !!r.is_db_only,
     isPartialExit: !!r.is_partial_exit,
     isPartialBuy: !!r.is_partial_buy,
+    // Absent on a row stored before the column existed, which coerces to false
+    // — "not verified", the reading that leaves the old status alone.
+    notInHoldings: !!r.not_in_holdings,
     isUnlistedOption: !!r.is_unlisted_option,
     placementYearUnresolved: !!r.placement_year_unresolved,
     placementYearNote: r.placement_year_note ?? null,

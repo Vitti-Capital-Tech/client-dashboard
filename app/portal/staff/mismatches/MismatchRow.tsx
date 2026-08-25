@@ -116,7 +116,15 @@ export function MismatchRow({
   // Offering it there invited the desk to overwrite a figure read from the
   // snapshot with one typed at cost. Those rows still belong on the page if
   // their quantities disagree; there is simply nothing here to declare.
-  const canMarkOpen = !row.resolved && heldQty > 0 && !row.isDbOpenValued;
+  //
+  // Withdrawn again where the holdings snapshot was checked and holds NOTHING
+  // for this ticker. There the claim is not merely unsupported, it is contradicted:
+  // the units the ledger still carries were sold and their contract notes never
+  // arrived. Declaring them open would write an override that reconciles the row
+  // at cost and retire a real missing trade as "fixed" — the Manage Trades modal
+  // is the honest answer to that row.
+  const canMarkOpen =
+    !row.resolved && heldQty > 0 && !row.isDbOpenValued && !row.notInHoldings;
 
   const markOpen = async () => {
     setSaving(true);

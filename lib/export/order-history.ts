@@ -110,6 +110,14 @@ export type PnlSummaryRow = {
   /** A still-held parcel sits on top of a realised part-sale. */
   isPartialExit?: boolean;
   openQty?: number;
+  /**
+   * The holdings snapshot was CHECKED and holds nothing for this row.
+   *
+   * The only evidence that can close a position `openQty` calls open. Absent on
+   * the computed path (`buildPnlSummary` reads the snapshot directly, so it has
+   * never needed the flag); set on the stored path from `pnl_summary`.
+   */
+  notInHoldings?: boolean;
 
   /**
    * Option terms — what moneyness is judged on (`lib/options/moneyness.ts`).
@@ -305,6 +313,20 @@ export function positionStatus(r: PnlSummaryRow): PositionStatus {
   if (r.isDbOpenValued) return "Open";
 
   if (r.isPartialExit || r.type.toLowerCase().startsWith("partial")) return "Partly open";
+
+  // Ahead of the quantities, and the reason this function exists at all.
+  //
+  // `openQty` is `buyQty − sellQty` off the LEDGER. It says the ledger never
+  // saw those units sold — not that anybody still holds them. Where the client's
+  // holdings were checked and carry no parcel for this row, the units are gone:
+  // they were sold and the sell contract notes never reached the ledger. Calling
+  // that "Open" put a position on the client's P&L they had already disposed of,
+  // and buried the missing trades behind a plausible-looking amber pill.
+  //
+  // Only a POSITIVE check reaches here — the flag is false both when the
+  // snapshot backs the row and when no snapshot was consulted — so a row nobody
+  // verified is never reported as closed on the strength of silence.
+  if (r.notInHoldings) return "Closed";
 
   if ((r.openQty ?? 0) > 0) return "Open";
   // The computed path has no flags, only this — see `buildPnlSummary`.

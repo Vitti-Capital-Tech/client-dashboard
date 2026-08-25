@@ -211,6 +211,22 @@ export interface PnlSummaryItem {
   isDbOnly?: boolean; // true when the row exists ONLY because the DB holds it — no trade in the file
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
+  /**
+   * The holdings snapshot was CHECKED against this row and holds nothing for it.
+   *
+   * A verified absence, not "we did not look": only `mergeDbHoldingsIntoSummary`
+   * sets it, and that runs only when a snapshot exists, so `false`/absent on a
+   * row means either the snapshot backs it or no snapshot was consulted at all.
+   * That distinction is the whole point — an unverified row must never be
+   * reported as disposed of.
+   *
+   * Why it is worth recording: `openQty > 0` was being read as "still held",
+   * which is only true if somebody holds it. Where the ledger says 10,000
+   * bought / 4,000 sold and the client's holdings carry no parcel at all, the
+   * remaining 6,000 was not kept — its SELL contract notes never reached the
+   * ledger. The row is closed, and what is missing is transactions.
+   */
+  notInHoldings?: boolean;
   isUnlistedOption?: boolean; // true for a synthetic row valuing free UNLISTED placement options
   unlistedOption?: UnlistedOptionValuation; // The inputs behind that row's modelled price, and which rule set it
   comment?: string; // Derived from the flags above — surfaced in the table and both exports
@@ -2189,6 +2205,13 @@ function applyDerivedComment(item: PnlSummaryItem): void {
     notes.push(isOptionRow(item) ? "Listed Options" : "Open - no ledger history");
   }
   else if (item.isDbOpenValued) notes.push("Open");
+  // The snapshot was checked and holds nothing, yet the ledger has units it
+  // never saw disposed of. Those units are not an open parcel — they are
+  // contract notes that never arrived, and saying so is the difference between
+  // a position the desk thinks it still owns and a gap in the ledger.
+  if (item.notInHoldings && item.buyQty > item.sellQty) {
+    notes.push("Not in holdings — sell trades missing");
+  }
   if (notes.length > 0) item.comment = notes.join(" · ");
 }
 
@@ -3165,17 +3188,36 @@ export function mergeDbHoldingsIntoSummary(
   let createdCount = 0;
 
   for (const item of updatedSummary) {
+    const match = dbHoldings.find((h) => dbHoldingMatchesRow(h, item));
+
+    // Recorded on EVERY row, including the ones the merge below has nothing to
+    // do — that is what turns "the snapshot did not fill this row" into the
+    // stronger, usable statement "the client does not hold this".
+    //
+    // Only reachable with a snapshot in hand (the callers skip this function
+    // entirely when there are no holdings), so the flag never reports an
+    // absence nobody checked for. `dbHoldingMatchesRow` also treats a zero-unit
+    // position as no holding, which is exactly right: a snapshot row at qty 0
+    // is a parcel that has gone, not one that is held.
+    item.notInHoldings = !match;
+
     const isFullyOpen = item.sellQty === 0 || item.sellPrice === 0;
     // A part-sale still holding a remainder. Requires a real buy side to compare
     // against, so a sell-only row (buyQty 0) never qualifies.
     const isPartialExit =
       !isFullyOpen && item.buyQty > 0 && item.sellQty > 0 && item.sellQty < item.buyQty;
 
-    if (!isFullyOpen && !isPartialExit) continue;
+    if (!isFullyOpen && !isPartialExit) {
+      // Nothing to merge, but the verification above may have given the row a
+      // note it did not have — rebuild it so the comment matches the flags.
+      applyDerivedComment(item);
+      continue;
+    }
 
-    const match = dbHoldings.find((h) => dbHoldingMatchesRow(h, item));
-
-    if (!match) continue;
+    if (!match) {
+      applyDerivedComment(item);
+      continue;
+    }
 
     if (isPartialExit) {
       if (match.qty > 0) {
@@ -3266,6 +3308,9 @@ export function mergeDbHoldingsIntoSummary(
       // named for what it is (`Listed Options`, against the modelled unlisted
       // rows); an equity for why it has no trades.
       isDbOnly: true,
+      // The row exists BECAUSE the snapshot holds it, so the verification is
+      // settled here rather than left absent and read as "never checked".
+      notInHoldings: false,
       comment: isOption ? "Listed Options" : "Open - no ledger history",
       openQty: 0,
       tradeCount: 0,

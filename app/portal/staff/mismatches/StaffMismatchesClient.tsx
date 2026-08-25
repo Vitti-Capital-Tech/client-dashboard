@@ -200,15 +200,24 @@ export function StaffMismatchesClient({
         discrepancyLabel = `Short Buy (${(sellQty - buyQty).toLocaleString("en-AU")})`;
       } else if (sellQty < buyQty) {
         discrepancyType = "short_sell";
-        // "Excess Buy" is only true against something sold. With ZERO sells
-        // there is nothing for the buy side to be in excess of — the parcel was
-        // bought and never disposed of, which usually means it is still held and
-        // the holdings snapshot has not caught up. Say what the ledger says and
-        // let the desk decide; `Mark Open` is the one-click answer.
-        discrepancyLabel =
-          sellQty === 0
-            ? `${buyQty.toLocaleString("en-AU")} Bought, 0 Sold`
-            : `Excess Buy (${(buyQty - sellQty).toLocaleString("en-AU")})`;
+        // The holdings snapshot decides which of two very different things this
+        // row is, and until it was consulted the page could only guess.
+        //
+        //   NOT HELD — the client's holdings carry no parcel for this ticker, so
+        //     the units the ledger still shows outstanding were sold and their
+        //     contract notes never arrived. That is a missing trade, not an open
+        //     position, and `Mark Open` on it would write down a holding nobody
+        //     has (see `MismatchRow`, where the button is withdrawn).
+        //   HELD or UNVERIFIED — say what the ledger says and let the desk
+        //     decide; `Mark Open` is the one-click answer.
+        //
+        // "Excess Buy" is only ever true against something sold: with ZERO sells
+        // there is nothing for the buy side to be in excess of.
+        discrepancyLabel = r.notInHoldings
+          ? `Missing Sells (${(buyQty - sellQty).toLocaleString("en-AU")})`
+          : sellQty === 0
+          ? `${buyQty.toLocaleString("en-AU")} Bought, 0 Sold`
+          : `Excess Buy (${(buyQty - sellQty).toLocaleString("en-AU")})`;
       } else if (resolved) {
         discrepancyType = "unmatched";
         discrepancyLabel = "Fixed with Override";
@@ -240,6 +249,9 @@ export function StaffMismatchesClient({
         isDbOpenValued: r.isDbOpenValued,
         isDbOnly: r.isDbOnly,
         openQty: r.openQty,
+        // Checked against the client's holdings and absent — the fact that
+        // separates "still held" from "sold, contract note missing".
+        notInHoldings: r.notInHoldings,
 
         accountId: r.accountId,
         clientId: r.clientId,

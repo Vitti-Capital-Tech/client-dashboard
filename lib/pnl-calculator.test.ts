@@ -750,6 +750,87 @@ test("PNL Calculator - fully open rows still FILL rather than add, and matched r
   assert.equal(merged.mergedCount, 1);
 });
 
+test("PNL Calculator - the merge records which rows the snapshot does NOT carry", async () => {
+  const rows = [
+    // 10,000 bought, 4,000 sold — and the client holds nothing. The remaining
+    // 6,000 was not kept; its sell contract notes never reached the ledger.
+    {
+      ticker: "AAA",
+      parentTicker: "AAA",
+      instrument: "EQUITY" as const,
+      company: "AAA LTD",
+      buyQty: 10000,
+      sellQty: 4000,
+      buyPrice: 5000,
+      sellPrice: 2200,
+      totalBuyValue: 5000,
+      totalSellValue: 2200,
+      pnlCalculated: -2800,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 6000,
+      tradeCount: 2,
+    },
+    // Fully closed and equally absent from the snapshot — which is what a
+    // closed position looks like, so it earns no note.
+    {
+      ticker: "BBB",
+      parentTicker: "BBB",
+      instrument: "EQUITY" as const,
+      company: "BBB LTD",
+      buyQty: 400,
+      sellQty: 400,
+      buyPrice: 300,
+      sellPrice: 350,
+      totalBuyValue: 300,
+      totalSellValue: 350,
+      pnlCalculated: 50,
+      isMatched: true,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 0,
+      tradeCount: 2,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(rows, [
+    { ticker: "CCC", parentTicker: "CCC", qty: 500, marketValue: 900 },
+  ]);
+
+  const aaa = merged.summary.find((s) => s.ticker === "AAA");
+  assert.equal(aaa?.notInHoldings, true);
+  assert.equal(aaa?.comment, "Not in holdings — sell trades missing");
+  // Nothing was merged into it, so its own figures are untouched — the flag is
+  // a verification, not a correction.
+  assert.equal(aaa?.sellQty, 4000);
+  assert.equal(aaa?.openQty, 6000);
+
+  const bbb = merged.summary.find((s) => s.ticker === "BBB");
+  assert.equal(bbb?.notInHoldings, true);
+  assert.equal(bbb?.comment, undefined, "a closed row is absent for the ordinary reason");
+
+  // The snapshot's own holding invented a row, and that row is held by
+  // construction — never left to read as unverified.
+  const ccc = merged.summary.find((s) => s.ticker === "CCC");
+  assert.equal(ccc?.notInHoldings, false);
+  assert.equal(ccc?.isDbOnly, true);
+
+  assert.equal(merged.mergedCount, 0);
+});
+
+test("PNL Calculator - a row the snapshot DOES carry is never marked absent", async () => {
+  const merged = mergeDbHoldingsIntoSummary(partialExitRow(), [
+    { ticker: "GRV", parentTicker: "GRV", qty: 71213, marketValue: 2350.02 },
+  ]);
+
+  const grv = merged.summary.find((s) => s.ticker === "GRV");
+  assert.equal(grv?.notInHoldings, false);
+  // The absence note never competes with the merge's own — a held parcel reads
+  // as the partial exit it is.
+  assert.equal(grv?.comment, "Partial Exit");
+});
+
 test("PNL Calculator - a DB holding the trade file never mentioned gets its own row", async () => {
   // Real shape: the ordinary was traded, the free option GEDO never was (avg_cost 0,
   // so no contract note exists), and before this it was silently dropped entirely.

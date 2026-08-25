@@ -1080,6 +1080,7 @@ export type Database = {
           is_partial_buy: boolean
           is_partial_exit: boolean
           is_unlisted_option: boolean
+          not_in_holdings: boolean
           open_qty: number
           parent_ticker: string | null
           placement_year_note: string | null
@@ -1111,6 +1112,7 @@ export type Database = {
           is_partial_buy?: boolean
           is_partial_exit?: boolean
           is_unlisted_option?: boolean
+          not_in_holdings?: boolean
           open_qty?: number
           parent_ticker?: string | null
           placement_year_note?: string | null
@@ -1142,6 +1144,7 @@ export type Database = {
           is_partial_buy?: boolean
           is_partial_exit?: boolean
           is_unlisted_option?: boolean
+          not_in_holdings?: boolean
           open_qty?: number
           parent_ticker?: string | null
           placement_year_note?: string | null
