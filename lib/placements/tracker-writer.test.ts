@@ -115,6 +115,57 @@ function fontOver(address: string): Record<string, unknown> {
   };
 }
 
+/** Template's client table is boxed; nothing else on the sheet carries a line. */
+const TEMPLATE_BOXED = (row: number) => row >= 5 && row <= 22;
+
+const THIN = { style: "Continuous", color: "#000000", weight: "Thin" };
+const NO_EDGE = { style: "None", color: "#000000", weight: "Thin" };
+
+const BORDER_SIDES = [
+  "EdgeTop",
+  "EdgeBottom",
+  "EdgeLeft",
+  "EdgeRight",
+  "InsideHorizontal",
+  "InsideVertical",
+];
+
+/**
+ * Borders come back as the whole COLLECTION in one read — which is what makes
+ * them affordable — and each side nulls independently where the cells disagree.
+ *
+ * Note what a border read means: the four `Edge*` sides are the edges of the
+ * RECTANGLE asked about, and `Inside*` are the lines between its cells. That is
+ * why a range with no inside — a single row, a single column — reports its
+ * inside lines as `None` rather than as the line it does have somewhere else.
+ */
+function bordersOver(address: string): { value: Record<string, unknown>[] } {
+  const rect = rectOf(address);
+  if (!rect) return { value: [] };
+
+  const rows: boolean[] = [];
+  for (let row = rect.r1; row <= rect.r2; row++) rows.push(TEMPLATE_BOXED(row));
+
+  const all = rows.every(Boolean);
+  const none = rows.every((b) => !b);
+
+  return {
+    value: BORDER_SIDES.map((sideIndex) => {
+      // Boxed and unboxed rows in one rectangle: Graph cannot answer, so it nulls.
+      if (!all && !none) return { sideIndex, style: null, color: null, weight: null };
+
+      const hasInside =
+        sideIndex === "InsideHorizontal"
+          ? rect.r2 > rect.r1
+          : sideIndex === "InsideVertical"
+            ? rect.c2 > rect.c1
+            : true;
+
+      return { sideIndex, ...(all && hasInside ? THIN : NO_EDGE) };
+    }),
+  };
+}
+
 const addressIn = (path: string) => /range\(address='([^']+)'\)/.exec(path)?.[1] ?? "";
 
 /**
@@ -173,6 +224,11 @@ function fakeGraph(
     }
     if (method === "GET" && path.includes("/format/font")) {
       return { ok: true, status: 200, body: fontOver(addressIn(path)) };
+    }
+    // Before the bare `/format` arm below, which would otherwise answer a
+    // border read with a column width.
+    if (method === "GET" && path.includes("/format/borders")) {
+      return { ok: true, status: 200, body: bordersOver(addressIn(path)) };
     }
     if (method === "GET" && path.includes("/format")) {
       return { ok: true, status: 200, body: { columnWidth: TEMPLATE_COLUMN_WIDTH } };
@@ -449,6 +505,108 @@ test("tracker: the rebuilt tab is shaded like Template", async () => {
   assert.ok(reads.every((c) => c.path.includes("Template")), "Template is only ever read");
 });
 
+test("tracker: the rebuilt tab is BORDERED like Template", async () => {
+  // Template's client table is boxed. Without this the new tab computed and was
+  // shaded correctly and still did not look like the workbook it lives in.
+  const { graph, calls } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+  assert.equal(res.notes, undefined, "nothing degraded, so nothing to report");
+
+  const edges = calls.filter(
+    (c) => c.method === "PATCH" && c.path.includes("/format/borders/") && c.path.includes("PGF"),
+  );
+
+  assert.ok(edges.length > 0, "no borders were painted at all");
+
+  // Asserted as COVERAGE rather than against one address: the scan halves a
+  // rectangle at a time, so where its cuts fall is an implementation detail and
+  // rows 5-22 are reached as however many pieces the halving produced. What has
+  // to be true is that the pieces are exactly the boxed rows, no more and no less.
+  const painted = new Set<number>();
+  for (const c of edges) {
+    const rect = rectOf(addressIn(c.path))!;
+    for (let row = rect.r1; row <= rect.r2; row++) painted.add(row);
+
+    assert.equal(rect.c1, 1, "a border region should span the used range's columns");
+    assert.equal(rect.c2, 16);
+    assert.deepEqual(c.body, { style: "Continuous", color: "#000000", weight: "Thin" });
+  }
+
+  const table = Array.from({ length: 18 }, (_, i) => i + 5); // rows 5-22
+  assert.deepEqual(
+    [...painted].sort((a, b) => a - b),
+    table,
+    "the boxed table, and nothing outside it",
+  );
+
+  // A side with no line is not a write — a new tab has no borders to clear —
+  // so every region carries its four outer edges and nothing empty was sent.
+  const sidesOf = (address: string) =>
+    new Set(
+      edges
+        .filter((c) => addressIn(c.path) === address)
+        .map((c) => c.path.slice(c.path.lastIndexOf("/") + 1)),
+    );
+  for (const address of new Set(edges.map((c) => addressIn(c.path)))) {
+    const sides = sidesOf(address);
+    for (const side of ["EdgeTop", "EdgeBottom", "EdgeLeft", "EdgeRight"]) {
+      assert.ok(sides.has(side), `${address} is missing its ${side}`);
+    }
+  }
+
+  const reads = calls.filter((c) => c.method === "GET" && c.path.includes("/format/borders"));
+  assert.ok(reads.every((c) => c.path.includes("Template")), "Template is only ever read");
+});
+
+test("tracker: a boxed block is put back together, and stays a partition", async () => {
+  /**
+   * Two things at once, because they pull against each other.
+   *
+   * The scan halves rectangles, so Template's boxed table arrives as five or six
+   * pieces. Painting them piecemeal is correct but costs an edge write per piece
+   * per side, so `bordersMergeable` glues back the ones where gluing cannot lose
+   * the line at the join — a fully gridded table is exactly that case, and comes
+   * back as ONE region.
+   *
+   * What must survive the gluing is that the regions still partition: no region
+   * inside another, no two overlapping. A border write lands on the edges of
+   * whatever rectangle it names, so an overlap is a line drawn in the wrong place.
+   */
+  const { graph, calls } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const rects = [
+    ...new Set(
+      calls
+        .filter((c) => c.method === "PATCH" && c.path.includes("/format/borders/"))
+        .map((c) => addressIn(c.path)),
+    ),
+  ].map((a) => rectOf(a)!);
+
+  // Rows 5-21 come back as ONE region — the halving cut them into four or five
+  // pieces and every join was safe to undo.
+  //
+  // Row 22 stands alone, and that is correct rather than a missed merge: a
+  // single-row rectangle HAS no inside, so Graph reports its `InsideHorizontal`
+  // as `None` and its value is genuinely not the value the block above it has.
+  // Refusing a merge on that costs five edge writes; assuming one would be the
+  // class of guess this whole module exists to avoid.
+  assert.deepEqual(rects, [
+    { r1: 5, c1: 1, r2: 21, c2: 16 },
+    { r1: 22, c1: 1, r2: 22, c2: 16 },
+  ]);
+
+  const overlaps = (a: (typeof rects)[number], b: typeof a) =>
+    a.r1 <= b.r2 && b.r1 <= a.r2 && a.c1 <= b.c2 && b.c1 <= a.c2;
+
+  for (let i = 0; i < rects.length; i++) {
+    for (let j = i + 1; j < rects.length; j++) {
+      assert.equal(overlaps(rects[i], rects[j]), false, "two border regions overlap");
+    }
+  }
+});
+
 test("tracker: the shading scan splits rather than walking every cell", async () => {
   // A1:P30 is 480 cells. Asking about each one would be 480 reads inside a cron
   // that has 60 seconds for the whole ingest. Asking about rectangles and only
@@ -456,8 +614,10 @@ test("tracker: the shading scan splits rather than walking every cell", async ()
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
   await writeDealToTracker(DEAL, { graph, target });
 
-  const reads = calls.filter((c) => c.method === "GET" && /\/format\/(fill|font)/.test(c.path));
-  assert.ok(reads.length < 60, `expected a few dozen format reads, got ${reads.length}`);
+  const reads = calls.filter((c) =>
+    c.method === "GET" && /\/format\/(fill|font|borders)/.test(c.path),
+  );
+  assert.ok(reads.length < 90, `expected a few dozen format reads, got ${reads.length}`);
 
   // And they go out batched: twenty independent reads per HTTP request.
   const batches = calls.filter((c) => c.path === "/$batch");

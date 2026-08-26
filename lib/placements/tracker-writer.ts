@@ -50,10 +50,10 @@ import { dressSheetLikeTemplate } from "./tracker-style.ts";
  *   formulas      the whole point — the tab computes
  *   numberFormat  per cell, so dates read `17/08/2026` rather than `46251`, and
  *                 money reads as money instead of a bare number
- *   fills, fonts  the black header bands and the yellow input cells the desk's
- *   and widths    "ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW" convention is written
- *                 in — read off Template rather than guessed at, by
- *                 `tracker-style.ts`, which explains how
+ *   fills, fonts  the black header bands, the yellow input cells the desk's
+ *   borders       "ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW" convention is written
+ *   and widths    in, and the boxes around the tables — read off Template rather
+ *                 than guessed at, by `tracker-style.ts`, which explains how
  *
  * Still not carried: data validation and conditional formatting, which have no
  * range-level read to recover them from.
@@ -98,10 +98,11 @@ export type TrackerWriteResult = {
   overviewRow?: number;
   counter?: number;
   /**
-   * How the tab was made. `copy` is a true worksheet copy and carries the
-   * template's formatting; `replay` rebuilds it and cannot carry fills or
-   * borders. Reported so one glance at an ingest log answers which the workbook
-   * is getting, rather than someone inferring it from how a tab looks.
+   * How the tab was made. `copy` is a true worksheet copy and carries
+   * everything; `replay` rebuilds it and recovers all of it except data
+   * validation and conditional formatting. Reported so one glance at an ingest
+   * log answers which the workbook is getting, rather than someone inferring it
+   * from how a tab looks.
    */
   via?: "copy" | "replay";
   error?: string;

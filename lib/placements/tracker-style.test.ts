@@ -6,6 +6,7 @@ import {
   clearTemplatePlanCache,
   columnsOf,
   dressSheetLikeTemplate,
+  bordersMergeable,
   mergeRegions,
   planTtlMs,
   rectOf,
@@ -105,6 +106,66 @@ test("style: only touching rectangles of the same colour are glued", () => {
     { rect: { r1: 2, c1: 1, r2: 2, c2: 4 }, value: "#000000" },
   ]);
   assert.equal(different.length, 2);
+});
+
+test("style: two boxed blocks are glued only when the join keeps its line", () => {
+  const thin = { style: "Continuous", color: "#000000", weight: "Thin" };
+
+  // A fully gridded table: the line between the two halves is the same thin
+  // line as the edges it replaces, so putting them back together changes nothing.
+  const grid = {
+    EdgeTop: thin,
+    EdgeBottom: thin,
+    EdgeLeft: thin,
+    EdgeRight: thin,
+    InsideHorizontal: thin,
+    InsideVertical: thin,
+  };
+  assert.equal(bordersMergeable(grid, "stacked"), true);
+  assert.equal(bordersMergeable(grid, "beside"), true);
+
+  // A box with a HOLLOW inside. Stacked, the two edges that met would become an
+  // interior line — and the interior is blank, so the line would be erased.
+  const hollow = { EdgeTop: thin, EdgeBottom: thin, EdgeLeft: thin, EdgeRight: thin };
+  assert.equal(bordersMergeable(hollow, "stacked"), false, "the join would lose its line");
+  assert.equal(bordersMergeable(hollow, "beside"), false);
+
+  // The mirror error: an inside line where the edges are blank. Merging would
+  // DRAW a line at the join that Template does not have.
+  const ruledOnly = { InsideHorizontal: thin, InsideVertical: thin };
+  assert.equal(bordersMergeable(ruledOnly, "stacked"), false, "the join would gain a line");
+  assert.equal(bordersMergeable(ruledOnly, "beside"), false);
+
+  // Each axis is judged on its own: rows may merge while columns may not.
+  const ruledAcrossOnly = { EdgeTop: thin, EdgeBottom: thin, InsideHorizontal: thin };
+  assert.equal(bordersMergeable(ruledAcrossOnly, "stacked"), true);
+  assert.equal(bordersMergeable(ruledAcrossOnly, "beside"), true, "no vertical lines either way");
+
+  // A heavier outer edge than the grid inside it — the classic table. Merging
+  // would demote the inner blocks' outer edge to the thin interior rule.
+  const boxedHeavy = { ...grid, EdgeTop: { ...thin, weight: "Thick" } };
+  assert.equal(bordersMergeable(boxedHeavy, "stacked"), false);
+  assert.equal(bordersMergeable(boxedHeavy, "beside"), true, "the columns are unaffected");
+});
+
+test("style: mergeRegions honours a refusal instead of gluing anyway", () => {
+  const hollow = {
+    EdgeTop: { style: "Continuous", color: "#000000", weight: "Thin" },
+    EdgeBottom: { style: "Continuous", color: "#000000", weight: "Thin" },
+  };
+
+  const regions = [
+    { rect: { r1: 5, c1: 1, r2: 8, c2: 16 }, value: hollow },
+    { rect: { r1: 9, c1: 1, r2: 12, c2: 16 }, value: hollow },
+  ];
+
+  // Same value, touching, same columns — everything a fill would need.
+  assert.equal(mergeRegions(regions).length, 1, "without a predicate they glue");
+  assert.equal(
+    mergeRegions(regions, bordersMergeable).length,
+    2,
+    "as borders they must stay apart, or row 8's underline is lost",
+  );
 });
 
 /* ---------------------------------------------------------------- */

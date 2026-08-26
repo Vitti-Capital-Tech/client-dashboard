@@ -66,11 +66,22 @@ import type { GraphCall } from "./tracker-writer.ts";
  * because it stops finding the full-width bands whole. The heuristic is right.
  *
  * ── What is carried, and what is not ─────────────────────────────────────────
- * Fills, fonts (name, size, colour, bold, italic, underline) and column widths.
- * Not borders — they are eight separately addressed edges per range, which is
- * the cost of the fills and fonts again several times over for the part of the
- * look nobody navigates by. Not validation or conditional formatting, which
- * have no range-level read at all.
+ * Fills, fonts (name, size, colour, bold, italic, underline), borders and
+ * column widths. Not validation or conditional formatting, which have no
+ * range-level read to recover them from.
+ *
+ * Borders were left out at first on the grounds that they are eight separately
+ * addressed edges per range. That is true of WRITING them and not of reading:
+ * `format/borders` answers with the whole collection in one GET, so the scan
+ * costs exactly what a fill scan costs, and only the sides that actually carry
+ * a line are written back.
+ *
+ * They also need one rule the other properties do not. A border read describes
+ * the edges of a RECTANGLE rather than a value held by every cell in it, so two
+ * blocks side by side that each read "thin down both sides, nothing inside" are
+ * not one block that reads the same — glue them and the line where they met is
+ * never drawn. Neighbours are therefore merged only where the inside line
+ * already matches the edges being dissolved, which is `bordersMergeable`.
  */
 
 /** 1-based and inclusive, both ends — the way a spreadsheet counts. */
@@ -203,7 +214,18 @@ export type Region<T> = { rect: Rect; value: T };
  * pair merged here is one PATCH the paint does not send, and the cut points are
  * arbitrary, so there are always some.
  */
-export function mergeRegions<T>(regions: Region<T>[]): Region<T>[] {
+export function mergeRegions<T>(
+  regions: Region<T>[],
+  /**
+   * Whether two equal-valued neighbours may become one region along this axis.
+   *
+   * Always true for a value every CELL holds — a fill, a font — where one write
+   * over the pair says exactly what two writes over the halves said. Borders
+   * pass a real predicate, because for them it is sometimes false: see
+   * `bordersMergeable`.
+   */
+  canMerge: (value: T, axis: "stacked" | "beside") => boolean = () => true,
+): Region<T>[] {
   const out = regions.slice();
   const same = (a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -219,6 +241,7 @@ export function mergeRegions<T>(regions: Region<T>[]): Region<T>[] {
         const stacked = a.c1 === b.c1 && a.c2 === b.c2 && (a.r2 + 1 === b.r1 || b.r2 + 1 === a.r1);
         const beside = a.r1 === b.r1 && a.r2 === b.r2 && (a.c2 + 1 === b.c1 || b.c2 + 1 === a.c1);
         if (!stacked && !beside) continue;
+        if (!canMerge(out[i].value, stacked ? "stacked" : "beside")) continue;
 
         out[i] = {
           value: out[i].value,
@@ -329,6 +352,8 @@ async function scanUniform<T>(
   readValue: (body: unknown) => T | null,
   budget: { left: number },
   sessionId?: string | null,
+  /** Passed straight to `mergeRegions` — borders need a real one. */
+  canMerge?: (value: T, axis: "stacked" | "beside") => boolean,
 ): Promise<{ regions: Region<T>[]; truncated: boolean }> {
   const regions: Region<T>[] = [];
   let queue: Rect[] = [root];
@@ -362,7 +387,7 @@ async function scanUniform<T>(
     });
   }
 
-  return { regions: mergeRegions(regions), truncated };
+  return { regions: mergeRegions(regions, canMerge), truncated };
 }
 
 /* ------------------------------------------------------------------ */
@@ -378,8 +403,22 @@ export type TemplateFont = {
   underline: string;
 };
 
+/** One edge of a rectangle, as Graph describes it. */
+export type TemplateBorder = { style: string; color: string; weight: string };
+
+/**
+ * The edges of a rectangle, keyed by Graph's `sideIndex`.
+ *
+ * `EdgeTop` / `EdgeBottom` / `EdgeLeft` / `EdgeRight` are the rectangle's OUTER
+ * edges; `InsideHorizontal` / `InsideVertical` are the lines between its cells.
+ * Sides with no line are left out entirely rather than stored as `None` — a new
+ * tab starts with no borders, so there is nothing to clear and every absent key
+ * is a write not sent.
+ */
+export type TemplateBorders = Record<string, TemplateBorder>;
+
 /** The formatting properties recovered by their own scan. */
-export type ScannedProperty = "fills" | "fonts";
+export type ScannedProperty = "fills" | "fonts" | "borders";
 
 export type TemplatePlan = {
   /** Template's used range, as the local address the new tab shares. */
@@ -387,6 +426,8 @@ export type TemplatePlan = {
   widths: { column: string; columnWidth: number }[];
   fills: Region<string>[];
   fonts: Region<TemplateFont>[];
+  /** Merged only where that cannot lose a line — see `bordersMergeable`. */
+  borders: Region<TemplateBorders>[];
   /**
    * Which scans ran out of budget — empty when the plan is complete. What is
    * present is always right; this says what is MISSING, and naming the property
@@ -442,6 +483,80 @@ function readFont(body: unknown): TemplateFont | null {
   }
 
   return { name, size, color, bold, italic, underline };
+}
+
+/**
+ * The rectangle's edges, or null where the cells disagree about one of them.
+ *
+ * `format/borders` answers with the whole collection in ONE read, which is what
+ * makes borders affordable at all — the eight edges are eight separately
+ * addressed things to WRITE, but not to read.
+ *
+ * A side whose `style` is `None` is dropped without looking at its colour or
+ * weight. That is not a shortcut: Excel keeps a colour on an edge that is not
+ * drawn, two blank regions can hold different ones, and treating that as a
+ * disagreement would split the empty majority of the sheet down to single cells
+ * and spend the whole budget discovering that none of it has borders.
+ */
+function readBorders(body: unknown): TemplateBorders | null {
+  const items = (body as { value?: unknown[] } | null)?.value;
+  if (!Array.isArray(items)) return null;
+
+  const out: TemplateBorders = {};
+  for (const raw of items) {
+    const b = raw as Partial<TemplateBorder> & { sideIndex?: unknown };
+    if (typeof b.sideIndex !== "string") continue;
+
+    // Null is Graph saying the cells disagree — the signal the whole scan runs on.
+    if (b.style === null) return null;
+    if (typeof b.style !== "string" || b.style === "None") continue;
+    if (typeof b.color !== "string" || typeof b.weight !== "string") return null;
+
+    out[b.sideIndex] = { style: b.style, color: b.color, weight: b.weight };
+  }
+  return out;
+}
+
+/**
+ * Whether two equal-valued neighbouring border regions may become one.
+ *
+ * This is the rule that makes borders different from fills, and getting it
+ * wrong deletes lines rather than misplacing them.
+ *
+ * A fill is a value every cell holds, so two neighbours of the same colour ARE
+ * one region. A border read describes the EDGES of the rectangle asked about —
+ * so when two blocks are glued, the edges where they MET stop being edges and
+ * become interior, and what gets painted there is the merged region's
+ * `Inside*` line instead. The merge is therefore lossless in exactly one case:
+ * when the inside line along the axis of the join already equals both outer
+ * edges along that axis, so whatever replaces them is what was there.
+ *
+ * Two blocks that read "a line down both sides, nothing inside" are the case
+ * this refuses. Merged, the line where they met would simply not be drawn.
+ *
+ * Worth the care rather than refusing every merge: Template's client table is
+ * one boxed block that the halving cuts into five or six pieces, and putting it
+ * back together is the difference between ~310 edge writes per deal and ~170.
+ *
+ * One merge this cannot make, and should not: a SINGLE-ROW region has no inside,
+ * so Graph reports its `InsideHorizontal` as `None` and its value differs from
+ * the multi-row block above it even where the sheet is formatted identically.
+ * The last row of a table therefore stays its own region. That costs a handful
+ * of writes; treating a missing inside line as "whatever the neighbour says"
+ * would be the kind of guess this module exists to avoid.
+ */
+export function bordersMergeable(
+  value: TemplateBorders,
+  axis: "stacked" | "beside",
+): boolean {
+  const same = (a?: TemplateBorder, b?: TemplateBorder) =>
+    JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+  return axis === "stacked"
+    ? same(value.InsideHorizontal, value.EdgeTop) &&
+        same(value.InsideHorizontal, value.EdgeBottom)
+    : same(value.InsideVertical, value.EdgeLeft) &&
+        same(value.InsideVertical, value.EdgeRight);
 }
 
 const sheetPath = (item: string, name: string) =>
@@ -529,14 +644,29 @@ export async function readTemplatePlan(
     sessionId,
   );
 
+  const border = await scanUniform(
+    graph,
+    root,
+    (address) => `${rangePath(item, templateSheet, address)}/format/borders`,
+    readBorders,
+    { left: perProperty },
+    sessionId,
+    // Merged only where putting two blocks back together cannot lose the line
+    // where they met — see `bordersMergeable`.
+    bordersMergeable,
+  );
+
   const plan: TemplatePlan = {
     shape,
     widths,
     fills: fill.regions.filter((r) => !isDefaultFill(r.value)),
     fonts: font.regions,
+    // A region with no edges at all is most of a sheet, and carries no write.
+    borders: border.regions.filter((r) => Object.keys(r.value).length > 0),
     incomplete: [
       ...(fill.truncated ? (["fills"] as const) : []),
       ...(font.truncated ? (["fonts"] as const) : []),
+      ...(border.truncated ? (["borders"] as const) : []),
     ],
   };
 
@@ -581,12 +711,28 @@ export async function paintSheetLikeTemplate(
       url: `${rangePath(item, sheet, addressOf(f.rect))}/format/font`,
       body: f.value,
     })),
+    // The one property that costs more to write than to read: the collection
+    // comes back in a single GET, but each edge is its own PATCH. Only the
+    // sides that carry a line are sent — a new tab has no borders to clear.
+    ...plan.borders.flatMap((b, i) =>
+      Object.entries(b.value).map(([side, spec]) => ({
+        id: `border:${i}:${side}`,
+        method: "PATCH",
+        url: `${rangePath(item, sheet, addressOf(b.rect))}/format/borders/${side}`,
+        body: spec,
+      })),
+    ),
   ];
 
   const answers = await runBatch(graph, requests, sessionId);
 
-  const failed = { width: 0, fill: 0, font: 0 };
-  const total = { width: plan.widths.length, fill: plan.fills.length, font: plan.fonts.length };
+  const failed = { width: 0, fill: 0, font: 0, border: 0 };
+  const total = {
+    width: plan.widths.length,
+    fill: plan.fills.length,
+    font: plan.fonts.length,
+    border: plan.borders.reduce((n, b) => n + Object.keys(b.value).length, 0),
+  };
   for (const r of requests) {
     if (ok(answers.get(r.id))) continue;
     failed[r.id.split(":")[0] as keyof typeof failed]++;
@@ -597,9 +743,10 @@ export async function paintSheetLikeTemplate(
       `${failed.width} of ${total.width} column widths on "${sheet}" did not copy across; the tab computes but is narrower than Template.`,
     );
   }
-  if (failed.fill > 0 || failed.font > 0) {
+  if (failed.fill > 0 || failed.font > 0 || failed.border > 0) {
     notes.push(
-      `${failed.fill + failed.font} of ${total.fill + total.font} formatting writes on "${sheet}" ` +
+      `${failed.fill + failed.font + failed.border} of ` +
+        `${total.fill + total.font + total.border} formatting writes on "${sheet}" ` +
         `were refused, so parts of it are not shaded like Template.`,
     );
   }
