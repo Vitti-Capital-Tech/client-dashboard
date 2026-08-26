@@ -57,6 +57,15 @@ export type StoredPnlRow = {
 
   buyQty: number;
   sellQty: number;
+  /**
+   * Units the holdings snapshot says are STILL HELD.
+   *
+   * Its own leg, and not folded into `sellQty`, because a parcel that is held
+   * was not sold — see the 20260826 migration for what that fold reported. The
+   * two derived facts it used to carry are unchanged: a row reconciles when
+   * `buyQty === sellQty + heldQty`, and `openQty` is what neither accounts for.
+   */
+  heldQty: number;
   openQty: number;
   /** Value sums, not per-unit prices — the calculator's naming, kept. */
   buyPrice: number;
@@ -120,6 +129,7 @@ interface PnlSummaryDbRow {
   instrument?: string | null;
   buy_qty?: number | string | null;
   sell_qty?: number | string | null;
+  held_qty?: number | string | null;
   open_qty?: number | string | null;
   buy_price?: number | string | null;
   sell_price?: number | string | null;
@@ -198,6 +208,7 @@ function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
 
     buyQty: num(r.buy_qty),
     sellQty: num(r.sell_qty),
+    heldQty: num(r.held_qty),
     openQty: num(r.open_qty),
     buyPrice: num(r.buy_price),
     sellPrice: num(r.sell_price),

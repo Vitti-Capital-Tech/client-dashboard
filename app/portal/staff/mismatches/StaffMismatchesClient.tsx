@@ -136,14 +136,29 @@ export function StaffMismatchesClient({
         sellOrCurrent: o?.sellOrCurrent != null,
       };
 
+      // Held has no cell of its own here either, but `Mark Open` writes it and
+      // a row it has touched is no longer a pure derivation.
       const edited =
         overridden.buyQty ||
         overridden.sellQty ||
         overridden.buyPrice ||
-        overridden.sellOrCurrent;
+        overridden.sellOrCurrent ||
+        o?.heldQty != null;
 
       const buyQty = o?.buyQty ?? computed.buyQty;
       const sellQty = o?.sellQty ?? computed.sellQty;
+      const heldQty = o?.heldQty ?? r.heldQty;
+      /**
+       * Every unit the row can account for: sold, or still held.
+       *
+       * This is what reconciliation has always been asked of — the held parcel
+       * used to be folded into `sellQty` and the question was simply
+       * `buyQty !== sellQty`. Splitting the two legs apart (a parcel that is
+       * HELD was not sold) means the sum has to be written out, but nothing
+       * about which rows land on this page changes.
+       */
+      const accountedFor = sellQty + heldQty;
+      const computedAccountedFor = computed.sellQty + r.heldQty;
       const buyPrice = o?.buyPrice ?? computed.buyPrice;
       const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
       const pnl = sellOrCurrent - buyPrice;
@@ -160,9 +175,9 @@ export function StaffMismatchesClient({
        * caught, because that is what `buySideUnknown` already means.
        */
       const hadDiscrepancy =
-        computed.buyQty !== computed.sellQty ||
+        computed.buyQty !== computedAccountedFor ||
         Boolean(r.buySideUnknown) ||
-        (computed.buyQty === 0 && computed.sellQty > 0);
+        (computed.buyQty === 0 && computedAccountedFor > 0);
 
       /**
        * What is TRUE NOW, with the desk's overrides applied.
@@ -173,8 +188,8 @@ export function StaffMismatchesClient({
        * force everywhere else in the platform, and the one page whose job is to
        * track fixes was the last to notice.
        */
-      const stillNoBuySide = buyQty === 0 && sellQty > 0;
-      const stillOff = buyQty !== sellQty || stillNoBuySide;
+      const stillNoBuySide = buyQty === 0 && accountedFor > 0;
+      const stillOff = buyQty !== accountedFor || stillNoBuySide;
 
       // Fixed: it WAS a discrepancy and the values in force reconcile. Only an
       // override can do that, so this is the audit view's population.
@@ -190,15 +205,15 @@ export function StaffMismatchesClient({
       // never keeps describing the problem it no longer has.
       let discrepancyType: MismatchItem["discrepancyType"] = "unmatched";
       let discrepancyLabel = "Unmatched Qty";
-      const discrepancyDiff = Math.abs(sellQty - buyQty);
+      const discrepancyDiff = Math.abs(accountedFor - buyQty);
 
       if (stillNoBuySide) {
         discrepancyType = "buy_unknown";
-        discrepancyLabel = `0 Buys vs ${sellQty.toLocaleString("en-AU")} Sold`;
-      } else if (buyQty < sellQty) {
+        discrepancyLabel = `0 Buys vs ${accountedFor.toLocaleString("en-AU")} Sold`;
+      } else if (buyQty < accountedFor) {
         discrepancyType = "short_buy";
-        discrepancyLabel = `Short Buy (${(sellQty - buyQty).toLocaleString("en-AU")})`;
-      } else if (sellQty < buyQty) {
+        discrepancyLabel = `Short Buy (${(accountedFor - buyQty).toLocaleString("en-AU")})`;
+      } else if (accountedFor < buyQty) {
         discrepancyType = "short_sell";
         // The holdings snapshot decides which of two very different things this
         // row is, and until it was consulted the page could only guess.
@@ -231,6 +246,7 @@ export function StaffMismatchesClient({
         buyPrice,
         sellOrCurrent,
         pnl,
+        heldQty,
         openPosition: r.openQty > 0,
         type: resolved ? "Matched (edited)" : edited ? "Unmatched (edited)" : "Unmatched",
         // Red means "the quantities do not add up", so a corrected row stops

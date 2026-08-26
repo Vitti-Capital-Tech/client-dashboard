@@ -22,6 +22,7 @@ function row(over: Partial<StoredPnlRow> = {}): StoredPnlRow {
     instrument: "FPO",
     buyQty: 1000,
     sellQty: 1000,
+    heldQty: 0,
     openQty: 0,
     buyPrice: 5000,
     sellPrice: 8000,
@@ -367,6 +368,105 @@ test("stored: a verified absence never overrides a better-sourced status", () =>
     "Open",
   );
   assert.equal(status({ buySideUnknown: true, buyQty: 0, buyPrice: 0 }), "Unknown");
+});
+
+test("stored: a held parcel reads as Open, never as a completed round trip", () => {
+  // 2,500 bought across two contract notes, nothing sold, 2,500 still held.
+  const open = row({
+    buyQty: 2500,
+    sellQty: 0,
+    heldQty: 2500,
+    openQty: 0,
+    isMatched: true,
+    isDbOpenValued: true,
+    buyPrice: 2900,
+    sellPrice: 3250,
+    pnl: 350,
+    comment: "Open · 2,500 held",
+  });
+
+  const [r] = storedToSummaryRows([open]);
+  assert.equal(r.sellQty, 0, "the table's Sell Qty must not claim a disposal");
+  assert.equal(r.heldQty, 2500);
+  // `isMatched` is TRUE here — every unit is accounted for — and the status
+  // still must not say "Matched", which reads as bought-and-sold.
+  assert.equal(r.isMatched, true);
+  assert.equal(r.type, "Open");
+  assert.equal(positionStatus(r), "Open");
+  assert.equal(r.note, "Open · 2,500 held", "the count the sell side used to carry");
+  assert.equal(r.pnl, 350, "no money moves");
+});
+
+test("stored: Mark Open's override reconciles without inventing a sale", () => {
+  /**
+   * The desk's sequence, and the half of it that used to be impossible.
+   *
+   * A row arrives with no buy side — 2,500 "sold" that no contract note bought.
+   * The desk corrects the buy side, then declares the parcel open. Before the
+   * held leg existed, `Mark Open` could only say so by setting both quantities
+   * equal, which balanced the row by reporting the very sale that never
+   * happened.
+   */
+  const overrides = new Map<string, PnlOverride>([
+    [
+      "EOS",
+      {
+        parent: "EOS",
+        buyQty: 2500,
+        sellQty: 0,
+        heldQty: 2500,
+        buyPrice: 2900,
+        sellOrCurrent: 2900,
+        note: "Open position — 2,500 units still held, carried at cost by the desk.",
+        updatedBy: "desk",
+        updatedAt: "2026-08-26T00:00:00Z",
+      },
+    ],
+  ]);
+
+  const [r] = storedToSummaryRows(
+    [row({ buyQty: 0, sellQty: 2500, heldQty: 0, openQty: 0, isMatched: false })],
+    overrides,
+  );
+
+  assert.equal(r.edited, true);
+  assert.equal(r.buyQty, 2500);
+  assert.equal(r.sellQty, 0, "declaring a parcel open must not report a sale");
+  assert.equal(r.isMatched, true, "2,500 bought = 0 sold + 2,500 held — it reconciles");
+  assert.equal(r.openQty, 0, "so nothing is left unaccounted for");
+  assert.equal(r.pnl, 0, "carried at cost — no gain or loss is invented");
+});
+
+test("stored: correcting held units alone counts as an edit", () => {
+  // Held has no cell of its own in the table, so it is not in `OverriddenFields`
+  // — but a row whose held count was typed by hand is no longer a pure
+  // derivation, and the reader is entitled to know that.
+  const overrides = new Map<string, PnlOverride>([
+    [
+      "EOS",
+      {
+        parent: "EOS",
+        buyQty: null,
+        sellQty: null,
+        heldQty: 1000,
+        buyPrice: null,
+        sellOrCurrent: null,
+        note: null,
+        updatedBy: "desk",
+        updatedAt: "2026-08-26T00:00:00Z",
+      },
+    ],
+  ]);
+
+  const [r] = storedToSummaryRows(
+    [row({ buyQty: 1000, sellQty: 0, heldQty: 0, openQty: 1000, isMatched: false })],
+    overrides,
+  );
+
+  assert.equal(r.edited, true);
+  assert.match(r.type, /\(edited\)$/);
+  assert.equal(r.isMatched, true, "1,000 bought = 0 sold + 1,000 held");
+  assert.equal(r.openQty, 0);
 });
 
 test("stored: selling more than was bought names the missing buy trades", () => {

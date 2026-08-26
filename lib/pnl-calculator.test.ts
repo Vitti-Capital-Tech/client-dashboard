@@ -656,16 +656,22 @@ test("PNL Calculator - partial exit ADDS the still-held parcel on top of the rea
 
   const grv = merged.summary.find((s) => s.ticker === "GRV");
   assert.ok(grv);
-  // Added, not replaced: 50,000 realised + 71,213 still held.
-  assert.equal(grv.sellQty, 121213);
-  // Value sums add too: $1,650.00 proceeds + $2,350.02 market value.
+  // The units go on the HELD leg, never the sold one: 50,000 really was sold
+  // and 71,213 really is still held, and folding the two together reported a
+  // disposal of 121,213 that never happened.
+  assert.equal(grv.sellQty, 50000, "only what was actually sold");
+  assert.equal(grv.heldQty, 71213, "the parcel still held");
+  // The VALUE still adds — that column is `Sell Price / Current Price` and is
+  // meant to carry both: $1,650.00 proceeds + $2,350.02 market value.
   assert.equal(grv.sellPrice, 4000.02);
   assert.equal(grv.totalSellValue, 4000.02);
   assert.equal(grv.pnlCalculated, -0.01);
+  // Everything is accounted for — 121,213 bought = 50,000 sold + 71,213 held —
+  // so both derived facts read exactly as they did when the legs were folded.
   assert.equal(grv.openQty, 0);
   assert.equal(grv.isMatched, true);
   assert.equal(grv.isPartialExit, true);
-  assert.equal(grv.comment, "Partial Exit");
+  assert.equal(grv.comment, "Partial Exit · 71,213 held");
   assert.equal(merged.partialExitCount, 1);
   assert.equal(merged.mergedCount, 1);
 });
@@ -679,10 +685,53 @@ test("PNL Calculator - partial exit keeps a DB/file discrepancy visible instead 
   const grv = merged.summary.find((s) => s.ticker === "GRV");
   assert.ok(grv);
   // The held qty is taken verbatim — never back-solved from buyQty - sellQty.
-  assert.equal(grv.sellQty, 110000);
+  assert.equal(grv.sellQty, 50000, "the sale is the sale");
+  assert.equal(grv.heldQty, 60000, "and the snapshot's count is taken as given");
+  // 121,213 bought, 50,000 sold, 60,000 held — 11,213 that NEITHER accounts
+  // for. That leftover is the ledger/snapshot disagreement, and keeping it
+  // visible is the whole reason the held count is not back-solved.
   assert.equal(grv.openQty, 11213);
   assert.equal(grv.isMatched, false);
-  assert.equal(grv.comment, "Partial Exit");
+  assert.equal(grv.comment, "Partial Exit · 60,000 held");
+});
+
+test("PNL Calculator - buying twice and selling nothing is not a sale", async () => {
+  /**
+   * Reported off a live client profile, in these words: "X bought 500, then
+   * bought 2,000 more — so the holding is 2,500, and it put 2,500 in sell. When
+   * it is all still held. Nothing was sold. It was ADDED by buying."
+   *
+   * Exactly right. The snapshot's units were folded into `sellQty` so the row
+   * would balance, and the row balanced by reporting a disposal of the whole
+   * parcel — then called itself `Matched`, which reads as a completed round
+   * trip on a position the client still owns.
+   */
+  const { summary } = aggregateTradesToSummary([
+    { type: "BUY", ticker: "XXX", company: "X LTD", contractDate: "2026-03-02", units: 500, avgPrice: 1, value: 500 },
+    { type: "BUY", ticker: "XXX", company: "X LTD", contractDate: "2026-05-11", units: 2000, avgPrice: 1.2, value: 2400 },
+  ]);
+  assert.equal(summary[0].buyQty, 2500, "the ledger itself was never wrong");
+  assert.equal(summary[0].sellQty, 0);
+
+  const merged = mergeDbHoldingsIntoSummary(summary, [
+    { ticker: "XXX", parentTicker: "XXX", qty: 2500, marketValue: 3250, costBase: 2900 },
+  ]);
+  const row = merged.summary[0];
+
+  assert.equal(row.sellQty, 0, "nothing was sold, so the sold leg stays empty");
+  assert.equal(row.heldQty, 2500, "the parcel is on the leg that means held");
+  assert.equal(exportStatus(row), "Open", "not `Matched` — this is not a round trip");
+  assert.equal(row.comment, "Open · 2,500 held");
+
+  // Nothing about the money moves. `Sell Price / Current Price` is named for
+  // both meanings and still carries the mark to market.
+  assert.equal(row.sellPrice, 3250);
+  assert.equal(row.pnlCalculated, 350);
+
+  // And the two facts the fold used to provide are unchanged: every unit is
+  // accounted for, and none of them is unaccounted for.
+  assert.equal(row.isMatched, true);
+  assert.equal(row.openQty, 0);
 });
 
 test("PNL Calculator - fully open rows still FILL rather than add, and matched rows are untouched", async () => {
@@ -733,15 +782,20 @@ test("PNL Calculator - fully open rows still FILL rather than add, and matched r
   ]);
 
   const abc = merged.summary.find((s) => s.ticker === "ABC");
-  assert.equal(abc?.sellQty, 1000); // filled, not 0 + 1000 counted twice
-  assert.equal(abc?.sellPrice, 700);
+  // Nothing was sold, so nothing goes on the sold leg. The snapshot's units are
+  // HELD, and the row says so on the leg that means held.
+  assert.equal(abc?.sellQty, 0, "1,000 bought and 1,000 still held is not a sale");
+  assert.equal(abc?.heldQty, 1000);
+  assert.equal(abc?.sellPrice, 700, "the VALUE column still carries the mark");
   assert.equal(abc?.isPartialExit, undefined);
-  // Nothing was sold, so the row is flagged and noted as an open position.
   assert.equal(abc?.isDbOpenValued, true);
-  assert.equal(abc?.comment, "Open");
+  assert.equal(abc?.isMatched, true, "1,000 bought = 0 sold + 1,000 held");
+  assert.equal(abc?.openQty, 0, "nothing is unaccounted for");
+  assert.equal(abc?.comment, "Open · 1,000 held");
 
   const xyz = merged.summary.find((s) => s.ticker === "XYZ");
   assert.equal(xyz?.sellQty, 400); // untouched
+  assert.equal(xyz?.heldQty, undefined, "a closed row folds in nothing");
   assert.equal(xyz?.sellPrice, 350);
   assert.equal(xyz?.comment, undefined); // never touched, so never annotated
   assert.equal(xyz?.isDbOpenValued, undefined);
@@ -827,8 +881,8 @@ test("PNL Calculator - a row the snapshot DOES carry is never marked absent", as
   const grv = merged.summary.find((s) => s.ticker === "GRV");
   assert.equal(grv?.notInHoldings, false);
   // The absence note never competes with the merge's own — a held parcel reads
-  // as the partial exit it is.
-  assert.equal(grv?.comment, "Partial Exit");
+  // as the partial exit it is, and says how much of it is still held.
+  assert.equal(grv?.comment, "Partial Exit · 71,213 held");
 });
 
 test("PNL Calculator - a DB holding the trade file never mentioned gets its own row", async () => {
@@ -868,7 +922,10 @@ test("PNL Calculator - a DB holding the trade file never mentioned gets its own 
   assert.equal(gedo.instrument, "OPTION");
   assert.equal(gedo.parentTicker, "GED");
   assert.equal(gedo.buyQty, 62500);
-  assert.equal(gedo.sellQty, 62500);
+  // Held, not sold — a free grant nobody has disposed of. The two legs used to
+  // be set from the same count purely so the row would balance.
+  assert.equal(gedo.sellQty, 0);
+  assert.equal(gedo.heldQty, 62500);
   // Free: cost really is zero, so the whole market value is gain.
   assert.equal(gedo.buyPrice, 0);
   assert.equal(gedo.sellPrice, 562.5);
@@ -888,7 +945,10 @@ test("PNL Calculator - a DB holding the trade file never mentioned gets its own 
 
   // GED was already in the file, so it is FILLED, not duplicated.
   assert.equal(merged.summary.filter((s) => s.ticker === "GED").length, 1);
-  assert.equal(merged.summary.find((s) => s.ticker === "GED")?.comment, "Open");
+  assert.equal(
+    merged.summary.find((s) => s.ticker === "GED")?.comment,
+    "Open · 100,000 held",
+  );
 
   // The dropped value now reaches the total: -4300 + 4300 (GED) + 562.50 + 200.
   assert.equal(merged.totalPnl, 762.5);
@@ -1027,7 +1087,12 @@ test("PNL Calculator - Comments column reaches both exports", async () => {
   const csv = buildPnlExportCsvString(merged.summary);
   const [header, firstRow] = csv.split("\r\n");
   assert.ok(header.endsWith("Comments"), `header should end with Comments: ${header}`);
-  assert.ok(firstRow.endsWith("Partial Exit"), `row should carry the note: ${firstRow}`);
+  // Quoted, because the held count carries a thousands separator — which is
+  // exactly the kind of thing an unquoted CSV field silently splits in two.
+  assert.ok(
+    firstRow.endsWith('"Partial Exit · 71,213 held"'),
+    `row should carry the note: ${firstRow}`,
+  );
 
   // Grand Total keeps the column count aligned with the header.
   const lines = csv.split("\r\n");
@@ -3011,7 +3076,7 @@ test("PNL Calculator - a row short on both sides reads both notes, whichever mer
   const row = then.summary.find((s) => s.ticker === "ABE");
   assert.equal(row?.isPartialBuy, true);
   assert.equal(row?.isPartialExit, true);
-  assert.equal(row?.comment, "Partial Buy · Partial Exit");
+  assert.equal(row?.comment, "Partial Buy · Partial Exit · 20,000 held");
 });
 
 // ---------------------------------------------------------------------------

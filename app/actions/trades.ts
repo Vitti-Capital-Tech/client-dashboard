@@ -744,7 +744,12 @@ export async function markPositionOpenAction(
   const parent = ticker.replace(/-UO\d*$/i, "").trim().toUpperCase();
   return savePnlOverride(accountId, clientId, parent, {
     buyQty: heldQty,
-    sellQty: heldQty,
+    // Bought and HELD — not sold. Setting both quantities equal is how this
+    // used to balance the row, and it balanced it by reporting a disposal that
+    // never happened: the position then read `Matched`, a completed round trip
+    // on the very parcel the desk had just declared open.
+    sellQty: 0,
+    heldQty,
     buyPrice: costBase,
     sellOrCurrent: costBase,
     note:

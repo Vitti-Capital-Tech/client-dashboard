@@ -914,6 +914,7 @@ export type Database = {
           buy_qty: number | null
           client_id: string
           created_at: string
+          held_qty: number | null
           note: string | null
           parent_code: string
           sell_price: number | null
@@ -927,6 +928,7 @@ export type Database = {
           buy_qty?: number | null
           client_id: string
           created_at?: string
+          held_qty?: number | null
           note?: string | null
           parent_code: string
           sell_price?: number | null
@@ -940,6 +942,7 @@ export type Database = {
           buy_qty?: number | null
           client_id?: string
           created_at?: string
+          held_qty?: number | null
           note?: string | null
           parent_code?: string
           sell_price?: number | null
@@ -1070,6 +1073,7 @@ export type Database = {
           comment: string | null
           company: string
           computed_at: string
+          held_qty: number
           instrument: string | null
           is_db_market_valued: boolean
           is_db_only: boolean
@@ -1102,6 +1106,7 @@ export type Database = {
           comment?: string | null
           company?: string
           computed_at?: string
+          held_qty?: number
           instrument?: string | null
           is_db_market_valued?: boolean
           is_db_only?: boolean
@@ -1134,6 +1139,7 @@ export type Database = {
           comment?: string | null
           company?: string
           computed_at?: string
+          held_qty?: number
           instrument?: string | null
           is_db_market_valued?: boolean
           is_db_only?: boolean

@@ -212,6 +212,25 @@ export interface PnlSummaryItem {
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
   /**
+   * Units the holdings snapshot says are STILL HELD on this row.
+   *
+   * Its own field, and not folded into `sellQty`, because those are two
+   * different events and the desk reads them as two different events. A client
+   * who bought 500 and then another 2,000 holds 2,500 and has sold NOTHING;
+   * writing 2,500 into the sell side reported a disposal that never happened,
+   * balanced the row, and had the P&L call it `Matched` — a completed round
+   * trip, on a parcel the client still owns.
+   *
+   * What the fold was FOR is kept, and is why this is stored rather than simply
+   * dropped: a row reconciles when `buyQty === sellQty + heldQty`, and `openQty`
+   * stays "units the ledger claims that nothing accounts for". Both now say so
+   * out loud instead of relying on a sell quantity that had two meanings.
+   *
+   * `sellPrice` is a different matter and still carries market value — that
+   * column is named `Sell Price / Current Price` and means both by design.
+   */
+  heldQty?: number;
+  /**
    * The holdings snapshot was CHECKED against this row and holds nothing for it.
    *
    * A verified absence, not "we did not look": only `mergeDbHoldingsIntoSummary`
@@ -378,6 +397,13 @@ export function exportStatus(item: PnlSummaryItem): string {
   // Ahead of everything else: the row's figures are blank, so no status describing
   // them can be true. `isMatched` is especially wrong here — 0 buys against 0 buys.
   if (isBuySideUnknown(item)) return "Buy Side Unknown";
+  // Both BEFORE `isMatched`, and this is the point of the ordering rather than a
+  // preference. A row whose held parcel accounts for its buy side reconciles —
+  // `isMatched` is true — and reporting that as "Matched" describes a completed
+  // round trip on a position the client has not sold. What is true of it is that
+  // it is open, or part-sold; that is the more specific fact and it wins.
+  if (item.isDbOpenValued) return "Open";
+  if (item.isPartialExit) return "Partial Exit";
   if (item.isMatched) return "Matched";
   if (item.isUnlistedOption) return "Unlisted Option";
   if (isOptionRow(item)) return "Option";
@@ -2205,6 +2231,12 @@ function applyDerivedComment(item: PnlSummaryItem): void {
     notes.push(isOptionRow(item) ? "Listed Options" : "Open - no ledger history");
   }
   else if (item.isDbOpenValued) notes.push("Open");
+  // The count the sell side used to carry. It is the answer to the question a
+  // reader asks the moment Sell Qty reads 0 against a real Current Price —
+  // "then what is this row worth a value for?" — so it travels with the row.
+  if (item.heldQty && item.heldQty > 0) {
+    notes.push(`${item.heldQty.toLocaleString("en-AU")} held`);
+  }
   // The snapshot was checked and holds nothing, yet the ledger has units it
   // never saw disposed of. Those units are not an open parcel — they are
   // contract notes that never arrived, and saying so is the difference between
@@ -3219,9 +3251,13 @@ export function mergeDbHoldingsIntoSummary(
       continue;
     }
 
+    // The units are recorded as HELD, never as sold. Only the VALUE joins the
+    // sell side, because that column is `Sell Price / Current Price` and means
+    // both; `Sell Qty` has no second meaning and adding to it reported a
+    // disposal that never happened. See `PnlSummaryItem.heldQty`.
     if (isPartialExit) {
       if (match.qty > 0) {
-        item.sellQty += match.qty;
+        item.heldQty = match.qty;
       }
       if (match.marketValue > 0) {
         item.sellPrice = Math.round((item.sellPrice + match.marketValue) * 100) / 100;
@@ -3231,7 +3267,7 @@ export function mergeDbHoldingsIntoSummary(
       partialExitCount++;
     } else {
       if (item.sellQty === 0 && match.qty > 0) {
-        item.sellQty = match.qty;
+        item.heldQty = match.qty;
       }
       if (item.sellPrice === 0 && match.marketValue > 0) {
         item.sellPrice = Math.round(match.marketValue * 100) / 100;
@@ -3245,8 +3281,12 @@ export function mergeDbHoldingsIntoSummary(
     applyDerivedComment(item);
 
     item.pnlCalculated = Math.round((item.sellPrice - item.buyPrice) * 100) / 100;
-    item.openQty = item.buyQty - item.sellQty;
-    item.isMatched = item.buyQty === item.sellQty && item.buyQty > 0;
+    // Both keep exactly the meanings they had when the held units were folded
+    // into `sellQty` — "what nothing accounts for", and "everything is
+    // accounted for" — now stated in terms that do not require the sell side to
+    // mean two things at once.
+    item.openQty = item.buyQty - item.sellQty - (item.heldQty ?? 0);
+    item.isMatched = item.buyQty === item.sellQty + (item.heldQty ?? 0) && item.buyQty > 0;
     item.isDbMarketValued = true;
     mergedCount++;
   }
@@ -3289,10 +3329,12 @@ export function mergeDbHoldingsIntoSummary(
       parentTicker: parent,
       instrument: isOption ? "OPTION" : "EQUITY",
       company: h.companyName || code,
-      // Units held stand in for both legs: bought at the snapshot's cost base,
-      // marked to its market value, so the row reads as the open position it is.
+      // Bought at the snapshot's cost base and marked to its market value —
+      // but NOT sold. The units are held, and the row says so on the leg that
+      // means held rather than by claiming a disposal to make the legs balance.
       buyQty: h.qty,
-      sellQty: h.qty,
+      sellQty: 0,
+      heldQty: h.qty,
       buyPrice: costBase,
       sellPrice: marketValue,
       totalBuyValue: costBase,

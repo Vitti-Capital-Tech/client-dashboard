@@ -23,7 +23,21 @@ import { getActor } from "@/lib/session";
 
 export type OverrideInput = {
   buyQty: number | null;
+  /** Units SOLD. A parcel still held belongs in `heldQty`, not here. */
   sellQty: number | null;
+  /**
+   * Units still HELD.
+   *
+   * The leg `Mark Open` needs, and the reason it exists: the desk declaring a
+   * parcel open is asserting something the sources do not yet say, and before
+   * this the only way to write that down was to set both quantities equal —
+   * which balanced the row by reporting a sale that never happened. A row
+   * reconciles when `buyQty === sellQty + heldQty`.
+   *
+   * Optional as well as nullable — absent and `null` both mean "keep the
+   * computed value", the rule every other column here already follows.
+   */
+  heldQty?: number | null;
   buyPrice: number | null;
   sellOrCurrent: number | null;
   note: string | null;
@@ -36,6 +50,7 @@ function validate(v: OverrideInput): string | null {
   const fields: [string, number | null][] = [
     ["Buy Qty", v.buyQty],
     ["Sell Qty", v.sellQty],
+    ["Held Qty", v.heldQty ?? null],
     ["Buy Price", v.buyPrice],
     ["Sell Price / Current Price", v.sellOrCurrent],
   ];
@@ -64,6 +79,7 @@ export async function savePnlOverride(
   const empty =
     input.buyQty === null &&
     input.sellQty === null &&
+    (input.heldQty ?? null) === null &&
     input.buyPrice === null &&
     input.sellOrCurrent === null;
 
@@ -92,6 +108,7 @@ export async function savePnlOverride(
         parent_code: parentCode,
         buy_qty: input.buyQty,
         sell_qty: input.sellQty,
+        held_qty: input.heldQty ?? null,
         buy_price: input.buyPrice,
         sell_price: input.sellOrCurrent,
         note: input.note?.trim() || null,
@@ -104,6 +121,7 @@ export async function savePnlOverride(
     const changed = [
       input.buyQty !== null && `Buy Qty ${input.buyQty}`,
       input.sellQty !== null && `Sell Qty ${input.sellQty}`,
+      input.heldQty != null && `Held Qty ${input.heldQty}`,
       input.buyPrice !== null && `Buy Price ${input.buyPrice.toFixed(2)}`,
       input.sellOrCurrent !== null &&
         `Sell/Current ${input.sellOrCurrent.toFixed(2)}`,

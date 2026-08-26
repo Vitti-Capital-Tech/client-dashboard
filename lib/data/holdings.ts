@@ -26,6 +26,8 @@ export type PnlOverrideRow = {
   parent: string;
   buyQty: number | null;
   sellQty: number | null;
+  /** Desk correction to HELD units — see `pnl_summary.held_qty`. */
+  heldQty: number | null;
   buyPrice: number | null;
   sellOrCurrent: number | null;
   note: string | null;
@@ -51,6 +53,7 @@ export const getClientPnlOverrides = cache(
       parent: r.parent_code,
       buyQty: r.buy_qty,
       sellQty: r.sell_qty,
+      heldQty: r.held_qty,
       buyPrice: r.buy_price,
       sellOrCurrent: r.sell_price,
       note: r.note,
@@ -65,6 +68,7 @@ interface PnlOverrideDbRow {
   parent_code: string;
   buy_qty: number | null;
   sell_qty: number | null;
+  held_qty: number | null;
   buy_price: number | null;
   sell_price: number | null;
   note: string | null;
@@ -111,6 +115,7 @@ export const getAllPnlOverrides = cache(
       parent: r.parent_code,
       buyQty: r.buy_qty,
       sellQty: r.sell_qty,
+      heldQty: r.held_qty,
       buyPrice: r.buy_price,
       sellOrCurrent: r.sell_price,
       note: r.note,

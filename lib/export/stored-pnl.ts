@@ -37,6 +37,8 @@ type EffectiveState = {
   /** The two legs in force, so the status can name which one is short. */
   buyQty: number;
   sellQty: number;
+  /** Units still held. Reconciliation is `buyQty === sellQty + heldQty`. */
+  heldQty: number;
   /** The desk supplied the buy quantity the sources could not. */
   buySideSupplied: boolean;
 };
@@ -65,8 +67,14 @@ function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
   if (r.isDbOnly) return r.isOption ? "Listed Options" : "Open - no ledger history";
   if (r.isUnlistedOption) return "Unlisted Option";
   if (r.isOption) return "Option";
-  if (eff.isMatched) return "Matched";
+  // Both BEFORE `isMatched`, and the ordering is the point rather than a
+  // preference. A row whose held parcel accounts for its buy side DOES
+  // reconcile — `isMatched` is true — and calling that "Matched" describes a
+  // completed round trip on a position the client has not sold. What is true of
+  // it is that it is open, or part-sold; the more specific fact wins.
+  if (r.isDbOpenValued) return "Open";
   if (r.isPartialExit) return "Partial exit";
+  if (eff.isMatched) return "Matched";
 
   // ── The two "the ledger is incomplete" states ─────────────────────────────
   //
@@ -144,14 +152,21 @@ export function storedToSummaryRows(
       buyPrice: o?.buyPrice != null,
       sellOrCurrent: o?.sellOrCurrent != null,
     };
+    // Held has no cell of its own in the table — it is stated in the row's note
+    // — so it is not in `OverriddenFields`, but correcting it IS an edit and it
+    // IS a quantity, and both of those have to be true downstream.
+    const heldOverridden = o?.heldQty != null;
     const edited =
       overridden.buyQty ||
       overridden.sellQty ||
       overridden.buyPrice ||
-      overridden.sellOrCurrent;
+      overridden.sellOrCurrent ||
+      heldOverridden;
 
     let buyQty = o?.buyQty ?? computed.buyQty;
     let sellQty = o?.sellQty ?? computed.sellQty;
+    // An option's two legs are set from one count and it holds nothing separate.
+    const heldQty = isOption ? 0 : (o?.heldQty ?? r.heldQty);
     const buyPrice = o?.buyPrice ?? computed.buyPrice;
     const sellOrCurrent = o?.sellOrCurrent ?? computed.sellOrCurrent;
 
@@ -176,16 +191,21 @@ export function storedToSummaryRows(
     // re-judged on the corrected pair — same rule the calculator applies to the
     // sources (`buyQty === sellQty && buyQty > 0`). Without a quantity edit the
     // stored answers stand, untouched.
-    const qtyEdited = overridden.buyQty || overridden.sellQty;
+    const qtyEdited = overridden.buyQty || overridden.sellQty || heldOverridden;
     const eff: EffectiveState = {
+      // `buyQty === sellQty + heldQty` — every unit accounted for, by a sale or
+      // by a parcel still held. The rule the merge applies to the sources,
+      // restated on the values in force.
       isMatched: isOption
         ? (buyQty > 0 && buyQty === sellQty)
         : qtyEdited
-        ? buyQty === sellQty && buyQty > 0
+        ? buyQty === sellQty + heldQty && buyQty > 0
         : r.isMatched,
-      openQty: qtyEdited ? Math.max(buyQty - sellQty, 0) : r.openQty,
+      // What NEITHER a sale nor a holding accounts for — not "not sold".
+      openQty: qtyEdited ? Math.max(buyQty - sellQty - heldQty, 0) : r.openQty,
       buyQty,
       sellQty,
+      heldQty,
       // Judged on the QUANTITY, which is the leg the label names — the
       // Mismatches page words the same row "0 Buys vs N Sold". A desk that
       // supplied only the cost has not answered that, so the flag stands.
@@ -233,6 +253,7 @@ export function storedToSummaryRows(
       // still-held position from an exited one — these flags can.
       isPartialExit: r.isPartialExit,
       openQty: eff.openQty,
+      heldQty,
       // The verified absence, carried through so `positionStatus` can close a
       // row the quantities alone would have called open.
       notInHoldings: r.notInHoldings,

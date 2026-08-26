@@ -104,27 +104,35 @@ export function MismatchRow({
   /**
    * "This is not a mismatch, it is a parcel we still hold."
    *
-   * Offered only where the claim can be true — units bought, fewer sold. The
-   * override it writes sets both legs to the held quantity and carries the row
-   * at COST, so it reconciles without inventing a gain or a loss. See
-   * `markPositionOpenAction`.
+   * The override it writes carries the row at COST and records the parcel on
+   * the HELD leg, so it reconciles without inventing a gain or a loss and
+   * without reporting a sale. See `markPositionOpenAction`.
+   *
+   * ── Offered on units the row does not already call held ─────────────────
+   * The old test was `buyQty - sellQty > 0` — a GAP — plus `!resolved`, and
+   * between them they took the button away exactly when it was needed. The desk's
+   * own sequence is: correct the buy side, then declare the parcel open. Typing
+   * the buy side made the row reconcile, `resolved` went true, and the button
+   * vanished before the second half of the job — leaving rows stuck on this page
+   * with no way to finish them.
+   *
+   * A gap is the wrong test anyway. A row reading 2,500 bought against 2,500
+   * sold has no gap and may still be a parcel nobody sold; what can be declared
+   * is whatever the row does not already account for as held.
    */
-  const heldQty = row.buyQty - row.sellQty;
-  // Not offered where the ENGINE has already said the position is open —
+  const declarable = row.buyQty - (row.heldQty ?? 0);
+  // Still not offered where the ENGINE has already said the position is open —
   // `isDbOpenValued` means the holdings snapshot matched the parcel and valued
   // it, which is the same statement this button makes and a better-sourced one.
   // Offering it there invited the desk to overwrite a figure read from the
-  // snapshot with one typed at cost. Those rows still belong on the page if
-  // their quantities disagree; there is simply nothing here to declare.
-  //
-  // Withdrawn again where the holdings snapshot was checked and holds NOTHING
-  // for this ticker. There the claim is not merely unsupported, it is contradicted:
-  // the units the ledger still carries were sold and their contract notes never
-  // arrived. Declaring them open would write an override that reconciles the row
-  // at cost and retire a real missing trade as "fixed" — the Manage Trades modal
-  // is the honest answer to that row.
-  const canMarkOpen =
-    !row.resolved && heldQty > 0 && !row.isDbOpenValued && !row.notInHoldings;
+  // snapshot with one typed at cost.
+  const canMarkOpen = declarable > 0 && !row.isDbOpenValued;
+  // The snapshot was checked and holds nothing for this ticker, so declaring the
+  // parcel open contradicts it rather than merely going beyond it. Still allowed
+  // — a snapshot can be a day behind a settlement, and overriding it is what an
+  // override is FOR — but it should be a deliberate act, so the button says so
+  // instead of looking like the routine answer.
+  const contradictsSnapshot = canMarkOpen && Boolean(row.notInHoldings);
 
   const markOpen = async () => {
     setSaving(true);
@@ -290,19 +298,28 @@ export function MismatchRow({
         {/* Actions */}
         <td className="px-4.5 py-3 text-right whitespace-nowrap select-none">
           <div className="flex items-center justify-end gap-1.5">
-            {/* Only where the claim can be true: units bought, fewer sold.
-                Nothing was sold for a buy side to be in excess OF, so "this is
-                still held" is the likeliest reading — and until now the only way
-                to say it was to type the sell leg in by hand. */}
+            {/* Stays offered after a Fix Qty, which is the whole point: the
+                desk's sequence is correct the buy side, THEN declare the parcel
+                open, and the button used to disappear between the two. */}
             {canMarkOpen && (
               <button
                 type="button"
                 onClick={markOpen}
                 disabled={saving}
-                title={`Record ${qty(heldQty)} units as still held, carried at cost — no unrealised gain or loss is invented`}
-                className="btn ghost sm text-[11px] font-semibold px-2.5 py-1 rounded-[6px] border border-amber-300 text-amber-800 hover:bg-amber-50 transition-colors cursor-pointer disabled:opacity-50"
+                title={
+                  contradictsSnapshot
+                    ? `The holdings snapshot carries nothing for ${row.ticker}, so this overrides it: ` +
+                      `${qty(declarable)} units recorded as still held, carried at cost. Use it when the ` +
+                      `snapshot is behind a settlement — not to retire a missing sell trade.`
+                    : `Record ${qty(declarable)} units as still held, carried at cost — no unrealised gain or loss is invented`
+                }
+                className={`btn ghost sm text-[11px] font-semibold px-2.5 py-1 rounded-[6px] border transition-colors cursor-pointer disabled:opacity-50 ${
+                  contradictsSnapshot
+                    ? "border-loss/40 text-loss-d hover:bg-loss-bg/40"
+                    : "border-amber-300 text-amber-800 hover:bg-amber-50"
+                }`}
               >
-                Mark Open
+                {contradictsSnapshot ? "Mark Open ⚠" : "Mark Open"}
               </button>
             )}
             <button

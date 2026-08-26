@@ -376,6 +376,10 @@ async function persist(
         instrument: s.instrument ?? null,
         buy_qty: bQty,
         sell_qty: sQty,
+        // Units the snapshot says are HELD, never folded into the sell side.
+        // An option keeps the convention its two legs already follow (both set
+        // from the same count), so it has nothing separate to hold.
+        held_qty: isOpt ? 0 : (s.heldQty ?? 0),
         open_qty: isOpt ? 0 : s.openQty,
         buy_price: round2(s.buyPrice),
         sell_price: round2(s.sellPrice),

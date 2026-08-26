@@ -49,6 +49,14 @@ export type PnlOverride = {
   parent: string;
   buyQty: number | null;
   sellQty: number | null;
+  /**
+   * Desk correction to HELD units, which is how `Mark Open` states its case.
+   *
+   * Optional as well as nullable: absent and `null` both mean "keep the
+   * computed value", so the callers that predate this leg keep working and
+   * cannot accidentally assert that nothing is held.
+   */
+  heldQty?: number | null;
   buyPrice: number | null;
   sellOrCurrent: number | null;
   note: string | null;
@@ -70,7 +78,18 @@ export type PnlSummaryRow = {
   /** Units the LEDGER saw bought/sold, unless overridden. Zero on a holding
    *  that predates the export window — `type` is what explains that. */
   buyQty: number;
+  /** Units actually SOLD. Never the held parcel — see `heldQty`. */
   sellQty: number;
+  /**
+   * Units still held, per the holdings snapshot.
+   *
+   * Split out from `sellQty`, which used to carry both: a client who bought 500
+   * and then 2,000 more holds 2,500 and has sold nothing, and the row reported
+   * 2,500 sold and called itself Matched. The reconciliation it was doing is
+   * kept — `buyQty === sellQty + heldQty` — it just no longer needs the sell
+   * side to mean two things.
+   */
+  heldQty?: number;
   buyPrice: number;
   sellOrCurrent: number;
   pnl: number;
