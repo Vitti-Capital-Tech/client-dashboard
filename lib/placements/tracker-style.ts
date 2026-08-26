@@ -40,6 +40,31 @@ import type { GraphCall } from "./tracker-writer.ts";
  * finely that the splitting never resolved, the scan stops at the budget and
  * says so rather than spending the ingest's whole allowance on shading.
  *
+ * ── The budget is PER PROPERTY, and that is the point ────────────────────────
+ * It used to be one allowance shared by both scans, spent in order. Fills run
+ * first and, on a real template, want ~210-290 reads against a ceiling of 240 —
+ * so fonts were routinely handed a budget of ZERO. The tab came out with its
+ * broad bands painted (they resolve early and cheaply) and no font colours at
+ * all, which is not a subtle defect: Template's header band is black, its type
+ * on that band is white, and a tab that got the fill without the colour renders
+ * the row as a solid black stripe with the headings invisible inside it.
+ *
+ * Two things follow, and both are deliberate:
+ *
+ *   • Each property gets its OWN allowance, so no scan can starve another. The
+ *     ceiling still bounds the pathological case — two bounded scans are bounded
+ *     — it simply stops one of them bounding the other to nothing.
+ *   • The allowance is big enough for a real template rather than exactly its
+ *     size. Measured against this workbook's Template the fill scan costs
+ *     ~210-290 reads depending on how wide the used range is, which is to say
+ *     the old ceiling sat *on* the answer: a column added to the template was
+ *     enough to lose the shading. Headroom is the fix, not precision.
+ *
+ * Splitting rows-first is NOT the problem and was measured before the budget was
+ * touched: cutting the longer side instead — which looks better for the tall
+ * F:G block the client table carries — costs 30-40% MORE on this template,
+ * because it stops finding the full-width bands whole. The heuristic is right.
+ *
  * ── What is carried, and what is not ─────────────────────────────────────────
  * Fills, fonts (name, size, colour, bold, italic, underline) and column widths.
  * Not borders — they are eight separately addressed edges per range, which is
@@ -55,17 +80,40 @@ export type Rect = { r1: number; c1: number; r2: number; c2: number };
 const BATCH_LIMIT = 20;
 
 /**
- * How many format reads one scan may spend.
+ * How many format reads ONE property's scan may spend — fills and fonts each
+ * get this, rather than sharing it.
  *
- * ~240 is twelve batched round trips — a couple of seconds, against a 60s cron
- * that also has candidates to pull and rows to write. Template resolves in far
- * fewer; this is the ceiling for a template that never stops splitting, not the
- * expected cost.
+ * 400 is twenty batched round trips, so a template that never stops splitting
+ * costs at most forty across both scans — a handful of seconds against a 60s
+ * cron, and only for the first deal of a run since the plan is then cached.
+ *
+ * Sized off measurement, not taste. The fill scan on this workbook's Template
+ * costs ~210 reads at `A1:T31` and ~290 at `A1:X31`; the font scan, which has
+ * far less to distinguish, costs ~15. The previous ceiling of 240 for BOTH sat
+ * inside that range, which is why the shading arrived half-done.
  */
-const DEFAULT_READ_BUDGET = 240;
+const DEFAULT_READ_BUDGET = 400;
 
 /** Template's formatting is the same for every deal in a run, and most days. */
 const PLAN_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * An INCOMPLETE plan is cached briefly, not for the day.
+ *
+ * The scan is deterministic, so re-running it against an unchanged Template
+ * produces the same truncation — discarding the plan outright would re-spend the
+ * whole budget for the same half-answer on every deal in the run. What must not
+ * happen is the other case: a truncation caused by a passing failure (an
+ * unanswered read counts as non-uniform, so a flaky batch inflates the count)
+ * being held as the truth for six hours. Long enough to serve the run, short
+ * enough that a transient does not outlive it.
+ */
+const TRUNCATED_PLAN_TTL_MS = 10 * 60 * 1000;
+
+/** How long a plan may be reused, which depends on whether it is complete. */
+export function planTtlMs(plan: Pick<TemplatePlan, "incomplete">): number {
+  return plan.incomplete.length > 0 ? TRUNCATED_PLAN_TTL_MS : PLAN_TTL_MS;
+}
 
 /* ------------------------------------------------------------------ */
 /* Addresses                                                           */
@@ -330,14 +378,23 @@ export type TemplateFont = {
   underline: string;
 };
 
+/** The formatting properties recovered by their own scan. */
+export type ScannedProperty = "fills" | "fonts";
+
 export type TemplatePlan = {
   /** Template's used range, as the local address the new tab shares. */
   shape: string;
   widths: { column: string; columnWidth: number }[];
   fills: Region<string>[];
   fonts: Region<TemplateFont>[];
-  /** The scan ran out of budget: what is here is right, but incomplete. */
-  truncated: boolean;
+  /**
+   * Which scans ran out of budget — empty when the plan is complete. What is
+   * present is always right; this says what is MISSING, and naming the property
+   * matters because the two fail in very different ways. A short fill list
+   * leaves a few cells unshaded. A short font list leaves Template's white type
+   * unpainted on its black header band, so the headings vanish into it.
+   */
+  incomplete: ScannedProperty[];
 };
 
 /** `#FFFF00`, or null where the cells disagree — which is the whole signal. */
@@ -419,10 +476,20 @@ export async function readTemplatePlan(
 
   const key = `${item}|${templateSheet}|${shape}`;
   const hit = planCache.get(key);
-  if (hit && Date.now() - hit.at < PLAN_TTL_MS) return hit.plan;
+  // An incomplete plan is held only long enough to serve the rest of the run;
+  // a complete one stands for the day. See `TRUNCATED_PLAN_TTL_MS`.
+  if (hit && Date.now() - hit.at < planTtlMs(hit.plan)) return hit.plan;
 
   const sessionId = opts.sessionId ?? null;
-  const budget = { left: opts.budget ?? DEFAULT_READ_BUDGET };
+  /**
+   * One allowance EACH, never a shared one spent in order.
+   *
+   * Fills are scanned first and, on a real template, cost most of a budget this
+   * size. Sharing the object handed the font scan whatever was left, which was
+   * routinely nothing — and a tab with fills but no fonts is Template's black
+   * header band with its white headings rendered black-on-black inside it.
+   */
+  const perProperty = opts.budget ?? DEFAULT_READ_BUDGET;
 
   // Widths are a per-column property and cannot be read from a rectangle, so
   // they are their own pass — but one batch of them, not one call each.
@@ -449,7 +516,7 @@ export async function readTemplatePlan(
     root,
     (address) => `${rangePath(item, templateSheet, address)}/format/fill?$select=color`,
     readFill,
-    budget,
+    { left: perProperty },
     sessionId,
   );
 
@@ -458,7 +525,7 @@ export async function readTemplatePlan(
     root,
     (address) => `${rangePath(item, templateSheet, address)}/format/font`,
     readFont,
-    budget,
+    { left: perProperty },
     sessionId,
   );
 
@@ -467,7 +534,10 @@ export async function readTemplatePlan(
     widths,
     fills: fill.regions.filter((r) => !isDefaultFill(r.value)),
     fonts: font.regions,
-    truncated: fill.truncated || font.truncated,
+    incomplete: [
+      ...(fill.truncated ? (["fills"] as const) : []),
+      ...(font.truncated ? (["fonts"] as const) : []),
+    ],
   };
 
   planCache.set(key, { at: Date.now(), plan });
@@ -533,10 +603,17 @@ export async function paintSheetLikeTemplate(
         `were refused, so parts of it are not shaded like Template.`,
     );
   }
-  if (plan.truncated) {
+  // Named rather than lumped together: "some cells are not yellow" and "the
+  // header row's white type was never painted, so the headings are invisible on
+  // the black band" are the same sentence today and very different problems.
+  if (plan.incomplete.length > 0) {
+    const what = plan.incomplete.join(" and ");
     notes.push(
-      `Template's formatting was only partly readable within the scan budget, so "${sheet}" ` +
-        `carries most of its shading rather than all of it.`,
+      `Template's ${what} were only partly readable within the scan budget, so "${sheet}" ` +
+        `carries most of its formatting rather than all of it` +
+        (plan.incomplete.includes("fonts")
+          ? ` — check the header bands, whose white type may not have been applied.`
+          : `.`),
     );
   }
 

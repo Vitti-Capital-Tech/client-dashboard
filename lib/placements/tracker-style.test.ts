@@ -7,6 +7,7 @@ import {
   columnsOf,
   dressSheetLikeTemplate,
   mergeRegions,
+  planTtlMs,
   rectOf,
   splitRect,
 } from "./tracker-style.ts";
@@ -161,9 +162,65 @@ test("style: a template that never resolves stops at the budget and says so", as
   const { graph, calls } = fakeGraph();
   const notes = await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30");
 
-  const reads = calls.filter((c) => c.method === "GET" && /\/format\/(fill|font)/.test(c.path));
-  assert.ok(reads.length <= 240, `the budget is a ceiling, not a suggestion (${reads.length})`);
+  const reads = (kind: string) =>
+    calls.filter((c) => c.method === "GET" && c.path.includes(`/format/${kind}`)).length;
+
+  // The ceiling is per property now, and it is still a ceiling.
+  assert.ok(reads("fill") <= 400, `fills overran their budget (${reads("fill")})`);
+  assert.ok(reads("font") <= 400, `fonts overran their budget (${reads("font")})`);
   assert.match(notes.join(" "), /only partly readable/);
+});
+
+test("style: an expensive fill scan cannot spend the font scan's budget", async () => {
+  /**
+   * The bug this pins, which reached the desk as a real tab.
+   *
+   * Both scans used to share ONE allowance, spent in order. Fills go first and
+   * on a real template cost most of a budget that size, so fonts were handed
+   * nothing — and Template's header band is black with WHITE type on it, so the
+   * tab arrived with the band painted and its headings invisible inside it.
+   *
+   * This Graph is the extreme of that: a fill scan that never resolves, so it
+   * consumes its whole budget. The font scan must still run.
+   */
+  const { graph, calls } = fakeGraph();
+  await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30");
+
+  const fontReads = calls.filter((c) => c.method === "GET" && c.path.includes("/format/font"));
+  assert.ok(
+    fontReads.length > 0,
+    "the fill scan exhausted the budget and the fonts were never read at all",
+  );
+});
+
+test("style: a truncated plan is not held for the day", () => {
+  // A complete plan is cached for hours — Template does not change between two
+  // deals in a run. A TRUNCATED one may only be truncated because a read failed
+  // in passing (an unanswered read counts as non-uniform, so a flaky batch
+  // inflates the count), and holding that as the truth for six hours would
+  // leave every deal of the morning half painted.
+  const complete = planTtlMs({ incomplete: [] });
+  const partial = planTtlMs({ incomplete: ["fonts"] });
+
+  assert.ok(partial < complete, "a half-read Template outlives a fully-read one");
+  // Long enough to serve the rest of an ingest run — re-scanning is deterministic
+  // and would buy the same half-answer — and short enough that a transient does
+  // not outlive it.
+  assert.ok(partial <= 15 * 60 * 1000, `a truncated plan is held too long (${partial}ms)`);
+  assert.ok(partial >= 60 * 1000, `a truncated plan is dropped too eagerly (${partial}ms)`);
+});
+
+test("style: a plan is reused within a run rather than re-scanned per deal", async () => {
+  const { graph, calls } = fakeGraph();
+  const reads = () => calls.filter((c) => c.method === "GET" && c.path.includes("/format/")).length;
+
+  await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30");
+  const afterFirst = reads();
+  assert.ok(afterFirst > 0);
+
+  // The second placement of a morning pays for the paint alone.
+  await dressSheetLikeTemplate(graph, ITEM, "Template", "PGG", "A1:P30");
+  assert.equal(reads(), afterFirst, "a second deal in the same run re-scanned Template");
 });
 
 test("style: a tenant without $batch still gets its tab painted", async () => {
