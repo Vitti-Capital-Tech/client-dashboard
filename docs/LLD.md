@@ -1175,3 +1175,30 @@ Five decisions worth naming:
 **`unlisted_option` was write-only until now.** `pnl_summary.unlisted_option` has stored every input behind a modelled price since the table was created, but neither DAL read mapped the column — so `StaffOptionsClient` reached for it through a cast, got `undefined`, and every strike and spot on the register was blank. Both reads now share ONE `toStoredPnlRow` mapping (thirty field names maintained twice is how a column ends up dropped on one path and not the other), and the jsonb is hand-narrowed rather than cast, because rows written by an older engine version legitimately lack fields a newer one has.
 
 **A strike comes from the row that has one.** A modelled unlisted grant carries its own terms — they were the inputs to its price — and that is the only source consulted. A listed series carries none on the stored P&L row, and is not joined against the option register to manufacture some: see the first decision above.
+
+### 8.30 Option Quantities Synchronization & 2026 Listed Status Verification
+
+Option quantities and classification consistency across the platform:
+
+1. **Option Quantities Synchronization (`buyQty === sellQty`):**
+   - In all Historical P&L views, Client Detail tables, Options Registers, in-memory PNL calculator, background recompute engine (`recomputeAccountPnl`), and XLSX/CSV export pipelines (`stored-pnl.ts`, `xlsx.ts`, `order-history.ts`), option rows (both Listed and Unlisted) strictly present `buyQty` equal to `sellQty`.
+   - Option rows never render as an empty em dash or zero buy quantity when sell quantity is present, ensuring consistent quantity parity across contract notes, granted add-on options, and historical holding views.
+
+2. **2026 Tracker Authority for Listed vs Unlisted Options Verification:**
+   - Over time, unlisted attaching options granted in historical placements (e.g. 2025 placements) frequently undergo official ASX listing and trade under dedicated option tickers.
+   - When verifying whether an attaching option is listed or unlisted (`parseOverviewAddOns`, `combinePlacementMaps`, and `unlistedAddOnsFor` in `lib/pnl-calculator.ts`), the system prioritizes the most up-to-date **2026 Placement Tracker / Options** workbook. If a ticker/series is listed in the 2026 workbook, its status is synchronized across all candidate placements (even for historical 2025 deals), preventing duplicate unlisted Black-Scholes valuations for options that have since been listed.
+
+### 8.31 Placement Tracker Tab Formatting & Template Replay Robustness (`tracker-style.ts`, `tracker-format.ts`, `tracker-sync.ts`)
+
+Automated placement tab generation in `2026 Placements.xlsx` must strictly mirror the official `Template` sheet design:
+
+1. **Guaranteed Visual Styling & Highlighting (`ensurePlacementStyleCompleteness`):**
+   - **Increased Scan Headroom:** `DEFAULT_READ_BUDGET` expanded to `1500` format reads to ensure complete discovery across wide placement workbooks without premature truncation.
+   - **Yellow Input Zone (`F7:G21` & `F5:G6`):** Guarantees that all 15 client data rows for `Round Shares` (Col F) and `ACTUAL $` (Col G) are 100% highlighted in Bright Yellow (`#FFFF00`) with clean thin grid borders, aligning with the banner directive: `"ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW"`.
+   - **Header Bands & Totals:** Top Banner (`A1:Q1`) in Bright Yellow (`#FFFF00`); Header row (`A2:Q2`) and Total row (`A6:B6`) in Solid Black (`#000000`) with Bold White text (`#FFFFFF`); Total Confirmation (`Row 22`) in Light Gray (`#D9D9D9`).
+   - **Fee Breakdown Table (`L23:R30`):** Headers `Lead | Payable | Fees` (`L23:N23`) and `Final | T1 | T2` (`P24:R24`) guaranteed in Bright Yellow (`#FFFF00`) with Bold Black text and continuous thin black grid borders across `L23:N24` and `M24:R30`.
+
+2. **1-Tranche vs 2-Tranche Placement Support:**
+   - Detects multi-tranche announcements from candidate summaries via `parseSummaryTerms` and sets `twoTranche: true/false`.
+   - Normal placements (1-tranche) automatically write `no` to cell **B4** (`2 Tranche`), while multi-tranche placements write `yes`, maintaining formula consistency and preventing column shifts.
+
