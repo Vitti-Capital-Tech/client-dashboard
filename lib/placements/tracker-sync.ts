@@ -45,6 +45,9 @@ export type TrackerSyncDeps = {
 /** The mail item, read into the shape a tracker tab wants. */
 export function dealFromCandidate(item: CandidateFeedItem): TrackerDeal {
   const read = parseSummaryTerms(item.summary ?? "");
+  const isTwoTranche = /\b(?:2\s*tranche|two\s*tranche|tranche\s*2|tranche\s*ii|second\s*tranche)\b/i.test(
+    item.summary ?? "",
+  );
   return {
     ticker: item.ticker.trim().toUpperCase(),
     // `Date Issued` is the day the deal was announced. The summary header has no
@@ -54,6 +57,7 @@ export function dealFromCandidate(item: CandidateFeedItem): TrackerDeal {
     price: read.price ?? null,
     settleDate: read.settleDate ?? null,
     addOns: read.opts ?? null,
+    twoTranche: isTwoTranche ? true : false,
   };
 }
 

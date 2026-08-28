@@ -221,7 +221,7 @@ function fakeGraph(opts: { canBatch?: boolean } = {}) {
 
 test("style: a template that never resolves stops at the budget and says so", async () => {
   const { graph, calls } = fakeGraph();
-  const notes = await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30");
+  const notes = await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30", { budget: 400 });
 
   const reads = (kind: string) =>
     calls.filter((c) => c.method === "GET" && c.path.includes(`/format/${kind}`)).length;

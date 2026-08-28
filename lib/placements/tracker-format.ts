@@ -35,6 +35,8 @@ export type TrackerDeal = {
   settleDate?: string | null;
   /** Attaching options, as written in the mail → B2. */
   addOns?: string | null;
+  /** Whether the deal has 2 tranches. Sets B4 to 'yes' if true, 'no' for normal 1-tranche placement. */
+  twoTranche?: boolean | null;
 };
 
 /** The Overview's data rows start here; rows 1-3 are the header block. */
@@ -210,6 +212,11 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
   // B2 sits under the "Options" label and holds the attaching-options text, or
   // the word the desk uses when there are none.
   if (deal.addOns?.trim()) writes.push({ address: "B2", value: deal.addOns.trim() });
+
+  // B4 sits beside "2 Tranche" label. Set "yes" if twoTranche is true, else "no" for normal 1-tranche placement.
+  if (deal.twoTranche !== undefined && deal.twoTranche !== null) {
+    writes.push({ address: "B4", value: deal.twoTranche ? "yes" : "no" });
+  }
 
   return writes;
 }

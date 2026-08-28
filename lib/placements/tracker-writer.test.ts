@@ -1024,6 +1024,7 @@ test("tracker sync: a mail becomes a deal without anyone typing anything", () =>
     price: 3.07,
     settleDate: "2026-08-19",
     addOns: null,
+    twoTranche: false,
   });
 });
 

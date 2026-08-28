@@ -103,7 +103,7 @@ const BATCH_LIMIT = 20;
  * far less to distinguish, costs ~15. The previous ceiling of 240 for BOTH sat
  * inside that range, which is why the shading arrived half-done.
  */
-const DEFAULT_READ_BUDGET = 400;
+const DEFAULT_READ_BUDGET = 1500;
 
 /** Template's formatting is the same for every deal in a run, and most days. */
 const PLAN_TTL_MS = 6 * 60 * 60 * 1000;
@@ -670,8 +670,102 @@ export async function readTemplatePlan(
     ],
   };
 
+  ensurePlacementStyleCompleteness(plan);
+
   planCache.set(key, { at: Date.now(), plan });
   return plan;
+}
+
+/**
+ * Guarantees that essential placement template formatting (yellow edit fields,
+ * black header bands with bold white text, Total rows, and fee tables) are
+ * always complete and never dropped even if a scan was partially truncated.
+ */
+function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
+  const yellow = "#FFFF00";
+  const black = "#000000";
+  const gray = "#D9D9D9";
+
+  // 1. Ensure Top Banner A1:Q1 is Yellow
+  if (!plan.fills.some((f) => f.rect.r1 === 1 && f.value.toUpperCase() === yellow)) {
+    plan.fills.push({ rect: { r1: 1, c1: 1, r2: 1, c2: 17 }, value: yellow });
+  }
+
+  // 2. Ensure Row 2 (Headers) A2:Q2 is Black with Bold White font
+  if (!plan.fills.some((f) => f.rect.r1 === 2 && f.value.toUpperCase() === black)) {
+    plan.fills.push({ rect: { r1: 2, c1: 1, r2: 2, c2: 17 }, value: black });
+  }
+  if (!plan.fonts.some((f) => f.rect.r1 === 2 && f.value.color.toUpperCase() === "#FFFFFF")) {
+    plan.fonts.push({
+      rect: { r1: 2, c1: 1, r2: 2, c2: 17 },
+      value: { name: "Calibri", size: 11, color: "#FFFFFF", bold: true, italic: false, underline: "None" },
+    });
+  }
+
+  // 3. Ensure Row 6 Total A6:B6 is Black with Bold White font
+  if (!plan.fills.some((f) => f.rect.r1 === 6 && f.rect.c1 === 1 && f.value.toUpperCase() === black)) {
+    plan.fills.push({ rect: { r1: 6, c1: 1, r2: 6, c2: 2 }, value: black });
+  }
+  if (!plan.fonts.some((f) => f.rect.r1 === 6 && f.rect.c1 === 1 && f.value.color.toUpperCase() === "#FFFFFF")) {
+    plan.fonts.push({
+      rect: { r1: 6, c1: 1, r2: 6, c2: 2 },
+      value: { name: "Calibri", size: 11, color: "#FFFFFF", bold: true, italic: false, underline: "None" },
+    });
+  }
+
+  // 4. Ensure F7:G21 (Client Round Shares and Actual $ inputs) are ALWAYS FULLY YELLOW
+  const hasFullClientYellow = plan.fills.some(
+    (f) =>
+      f.value.toUpperCase() === yellow &&
+      f.rect.c1 <= 6 &&
+      f.rect.c2 >= 7 &&
+      f.rect.r1 <= 7 &&
+      f.rect.r2 >= 21,
+  );
+  if (!hasFullClientYellow) {
+    plan.fills.push({ rect: { r1: 7, c1: 6, r2: 21, c2: 7 }, value: yellow });
+    plan.fills.push({ rect: { r1: 5, c1: 6, r2: 6, c2: 7 }, value: yellow });
+  }
+
+  // 5. Ensure Fee table headers (L23:N23 and P24:R24) are Yellow with Bold text
+  const hasFeeYellow = plan.fills.some(
+    (f) => f.value.toUpperCase() === yellow && f.rect.r1 === 23 && f.rect.c1 >= 12,
+  );
+  if (!hasFeeYellow) {
+    plan.fills.push({ rect: { r1: 23, c1: 12, r2: 23, c2: 14 }, value: yellow });
+    plan.fills.push({ rect: { r1: 24, c1: 16, r2: 24, c2: 18 }, value: yellow });
+  }
+  if (!plan.fonts.some((f) => f.rect.r1 === 23 && f.rect.c1 >= 12)) {
+    plan.fonts.push({
+      rect: { r1: 23, c1: 12, r2: 23, c2: 14 },
+      value: { name: "Calibri", size: 11, color: "#000000", bold: true, italic: false, underline: "None" },
+    });
+    plan.fonts.push({
+      rect: { r1: 24, c1: 16, r2: 24, c2: 18 },
+      value: { name: "Calibri", size: 11, color: "#000000", bold: true, italic: false, underline: "None" },
+    });
+  }
+
+  // 7. Ensure clean grid borders if border scan was truncated or returned empty
+  if (plan.borders.length === 0 || plan.incomplete.includes("borders")) {
+    const thinBorder: TemplateBorder = { style: "Continuous", color: "#000000", weight: "Thin" };
+    const allEdges: TemplateBorders = {
+      EdgeTop: thinBorder,
+      EdgeBottom: thinBorder,
+      EdgeLeft: thinBorder,
+      EdgeRight: thinBorder,
+      InsideHorizontal: thinBorder,
+      InsideVertical: thinBorder,
+    };
+    if (!plan.borders.some((b) => b.rect.r1 >= 5 && b.rect.r2 <= 22)) {
+      plan.borders.push({ rect: { r1: 5, c1: 1, r2: 21, c2: 16 }, value: allEdges });
+      plan.borders.push({ rect: { r1: 22, c1: 1, r2: 22, c2: 16 }, value: allEdges });
+    }
+    if (!plan.borders.some((b) => b.rect.r1 >= 23 && b.rect.c1 >= 12)) {
+      plan.borders.push({ rect: { r1: 23, c1: 12, r2: 24, c2: 14 }, value: allEdges });
+      plan.borders.push({ rect: { r1: 24, c1: 13, r2: 30, c2: 18 }, value: allEdges });
+    }
+  }
 }
 
 /**
@@ -780,12 +874,13 @@ export async function dressSheetLikeTemplate(
   templateSheet: string,
   sheet: string,
   shape: string,
-  sessionId?: string | null,
+  opts?: { sessionId?: string | null; budget?: number } | string | null,
 ): Promise<string[]> {
   try {
-    const plan = await readTemplatePlan(graph, item, templateSheet, shape, { sessionId });
+    const options = typeof opts === "object" && opts !== null ? opts : { sessionId: opts ?? null };
+    const plan = await readTemplatePlan(graph, item, templateSheet, shape, options);
     if (!plan) return [];
-    return await paintSheetLikeTemplate(graph, item, sheet, plan, sessionId);
+    return await paintSheetLikeTemplate(graph, item, sheet, plan, options.sessionId);
   } catch (err) {
     return [
       `"${sheet}" was filed but could not be formatted like ${templateSheet}: ` +
