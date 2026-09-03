@@ -179,6 +179,97 @@ export function nextSheetName(ticker: string, existing: Iterable<string>): strin
   return null;
 }
 
+/**
+ * The tab an Overview row points at, read back out of its own formula.
+ *
+ * Column D is `='FBR'!B3`, and that is the only place the workbook records which
+ * SHEET a row belongs to — column C's value is the friendly ticker (`FBR`), which
+ * is not the sheet name for a repeat issuer filed as `FBR (b)`. So a row's tab
+ * can only be recovered from a formula.
+ *
+ * Both quoting styles are accepted because Excel normalises: the write sends
+ * `='FBR'!B3` and reads back `=FBR!B3`, since quotes it does not need are dropped.
+ * A doubled apostrophe inside a quoted name is Excel's own escape and is undone.
+ */
+export function referencedSheetName(formula: unknown): string | null {
+  const text = typeof formula === "string" ? formula.trim() : "";
+  if (!text.startsWith("=")) return null;
+
+  const quoted = /^='((?:[^']|'')+)'!/.exec(text);
+  if (quoted) return quoted[1].replace(/''/g, "'");
+
+  const bare = /^=([^'!\s]+)!/.exec(text);
+  return bare ? bare[1] : null;
+}
+
+/**
+ * A tab for this ticker that no Overview row points at.
+ *
+ * ── Why this has to exist ────────────────────────────────────────────────────
+ * Every failure after `worksheets/add` leaves the tab behind: a seed that was
+ * refused, a cell write that was, an Overview row that was — and, the case that
+ * actually happened on 3 September 2026, an invocation killed outright. The tab
+ * is created first precisely so that this is the wreckage rather than a row of
+ * `#REF!`, and it was survivable while nothing retried automatically.
+ *
+ * Now something does. Without this, the retry would find `FBR` taken, file the
+ * deal as `FBR (b)` — which claims a repeat placement that never happened — and
+ * leave the unformatted `FBR` sitting at the end of the workbook forever. So a
+ * retry has to recognise its own wreckage and finish it.
+ *
+ * Matches `FBR` and the `FBR (b)` form, because a previous attempt on a genuine
+ * repeat issuer would have left one of those.
+ */
+export function unreferencedTabFor(
+  ticker: string,
+  sheets: string[],
+  referenced: Set<string>,
+): string | null {
+  const base = ticker.trim().toUpperCase();
+  if (!base) return null;
+
+  const claimed = new Set([...referenced].map((s) => s.trim().toLowerCase()));
+  const mine = new RegExp(`^${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: \\([a-z]\\))?$`, "i");
+
+  return (
+    sheets.find((name) => {
+      const n = name.trim();
+      return isDealSheet(n) && mine.test(n) && !claimed.has(n.toLowerCase());
+    }) ?? null
+  );
+}
+
+/**
+ * The rows-2-to-4 block a deal's own terms live in.
+ *
+ * Read as one range on the adoption path to answer two questions at once: is
+ * this tab bare (nothing at all, so `worksheets/add` was the last thing that
+ * happened to it) and has anyone claimed it (`D3`, the ASX code). Every address
+ * `tabCellWrites` produces falls inside it.
+ */
+export const TERMS_RANGE = "A2:L4";
+
+/** A cell inside `TERMS_RANGE`, as an index into the values Graph returns. */
+export function termsCell(values: unknown[][], address: string): unknown {
+  const m = /^([A-Z]+)(\d+)$/.exec(address.trim().toUpperCase());
+  if (!m) return "";
+
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+  // `TERMS_RANGE` starts at A2: column A is index 0, row 2 is index 0.
+  const row = Number(m[2]) - 2;
+  if (row < 0 || col < 1) return "";
+
+  return values?.[row]?.[col - 1] ?? "";
+}
+
+/** Is every cell of the terms block empty? Then nothing was ever written here. */
+export function isBareTab(values: unknown[][]): boolean {
+  return (values ?? []).every((row) =>
+    (row ?? []).every((cell) => String(cell ?? "").trim() === ""),
+  );
+}
+
 /** One cell to write on the newly created tab. */
 export type CellWrite = {
   address: string;

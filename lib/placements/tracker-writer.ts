@@ -2,14 +2,19 @@ import {
   NON_DEAL_SHEETS,
   OVERVIEW_FIRST_DATA_ROW,
   TEMPLATE_SHEET,
+  TERMS_RANGE,
   alreadyInOverview,
   dealSheetPlacement,
+  isBareTab,
   isDealSheet,
   nextOverviewSlot,
   nextSheetName,
   overviewRowAddress,
   overviewRowFormulas,
+  referencedSheetName,
   tabCellWrites,
+  termsCell,
+  unreferencedTabFor,
   type SheetSlot,
   type TrackerDeal,
 } from "./tracker-format.ts";
@@ -103,8 +108,13 @@ export type TrackerWriteResult = {
    * validation and conditional formatting. Reported so one glance at an ingest
    * log answers which the workbook is getting, rather than someone inferring it
    * from how a tab looks.
+   *
+   * `adopted` is a tab an earlier attempt created and did not finish — the deal
+   * is filed into it rather than beside it. Worth its own value because a run
+   * reporting `adopted` is a run cleaning up after a previous failure, which is
+   * a different thing to know about than a normal write.
    */
-  via?: "copy" | "replay";
+  via?: "copy" | "replay" | "adopted";
   error?: string;
   /** What a person has to do about it — a missing permission, a half-write. */
   hint?: string;
@@ -268,21 +278,43 @@ async function overviewIndex(
   graph: GraphCall,
   t: TrackerTarget,
   lastRow: number,
-): Promise<{ counter: unknown; ticker: unknown; issued: unknown }[] | null> {
+): Promise<OverviewRow[] | null> {
   const address = `B${OVERVIEW_FIRST_DATA_ROW}:D${lastRow}`;
   const res = await graph(
     `/drives/${t.driveId}/items/${t.itemId}/workbook/worksheets('${encodeURIComponent(
       t.overviewSheet,
-    )}')/range(address='${address}')?$select=values`,
+    )}')/range(address='${address}')?$select=values,formulas`,
   );
   if (!res.ok) return null;
 
-  const values = (res.body as { values?: unknown[][] } | null)?.values ?? [];
-  return values.map((row) => ({
+  const body = res.body as { values?: unknown[][]; formulas?: unknown[][] } | null;
+  const values = body?.values ?? [];
+  const formulas = body?.formulas ?? [];
+
+  return values.map((row, i) => ({
     counter: row?.[0] ?? "",
     ticker: row?.[1] ?? "",
     issued: row?.[2] ?? "",
+    // `formulas` costs nothing here — it is the same range read — and it is the
+    // only way to learn which SHEET a row belongs to. Column C's value is the
+    // friendly ticker, which for a repeat issuer filed as `FBR (b)` is `FBR`.
+    refSheet: referencedSheetName(formulas[i]?.[2]),
   }));
+}
+
+type OverviewRow = {
+  counter: unknown;
+  ticker: unknown;
+  issued: unknown;
+  /** The tab this row's Date Issued formula points at, or null. */
+  refSheet: string | null;
+};
+
+/** Every tab the Overview accounts for, so an unaccounted one can be spotted. */
+function overviewSheetRefs(rows: OverviewRow[]): Set<string> {
+  const named = new Set<string>();
+  for (const r of rows) if (r.refSheet) named.add(r.refSheet);
+  return named;
 }
 
 /* ------------------------------------------------------------------ */
@@ -293,7 +325,7 @@ type SheetPlacement = { position: number; before: string | null };
 
 type MadeSheet = {
   ok: boolean;
-  via?: "copy" | "replay";
+  via?: "copy" | "replay" | "adopted";
   sheet?: string;
   /**
    * Template's used range, when the tab was rebuilt from it. The shading pass
@@ -444,6 +476,108 @@ async function replayTemplate(
   return { ok: true, via: "replay", sheet, shape, notes };
 }
 
+/**
+ * Finish the tab a previous attempt left behind, instead of filing beside it.
+ *
+ * Every failure after `worksheets/add` leaves the tab: a refused seed, a refused
+ * cell write, a refused Overview row, or — the 3 September 2026 case — the whole
+ * invocation being killed. The tab-before-row order makes that the wreckage on
+ * purpose, and it was harmless while nothing retried on its own.
+ *
+ * It is not harmless now. A retry that ignored the leftover would find `FBR`
+ * taken, file the deal as `FBR (b)` — asserting a repeat placement that never
+ * happened — and leave an unformatted `FBR` at the end of the workbook for good.
+ *
+ * ── Only a tab nobody has claimed ────────────────────────────────────────────
+ * The caller has already established that no Overview row points here. This adds
+ * the second condition: `D3`, the ASX code, must be EMPTY. That is the tightest
+ * available signal that the tab is ours and unfinished — Template ships `D3`
+ * blank, it is the first cell `tabCellWrites` fills, and it is the first thing a
+ * person building a tab by hand types. A tab with an ASX code in it may be
+ * somebody's work in progress, and adopting it would overwrite the terms they
+ * typed, including a date they had corrected.
+ *
+ * ── Bare versus seeded ───────────────────────────────────────────────────────
+ * If the kill landed between `add` and the seed there are no formulas at all, and
+ * the tab has to be seeded before it is worth anything. If the seed had already
+ * run — the common case, and today's — the formulas are there and are left
+ * exactly alone. One range read answers both, since a seeded tab carries
+ * Template's own row labels in `A2:A4`.
+ */
+async function adoptOrphanSheet(
+  graph: GraphCall,
+  item: string,
+  sheet: string,
+  ticker: string,
+): Promise<MadeSheet & { adoptable?: boolean }> {
+  const terms = await graph(
+    `${sheetPath(item, sheet)}/range(address='${TERMS_RANGE}')?$select=values`,
+  );
+  if (!terms.ok) {
+    // Cannot tell whether it is claimed, so it is not adopted — the caller falls
+    // back to a suffixed name, which is wasteful but never destructive.
+    return { ok: false, adoptable: false, error: `Could not read "${sheet}": ${graphError(terms.body)}` };
+  }
+
+  const values = (terms.body as { values?: unknown[][] } | null)?.values ?? [];
+  const claimedBy = String(termsCell(values, "D3") ?? "").trim();
+  if (claimedBy !== "") {
+    return {
+      ok: false,
+      adoptable: false,
+      notes: [
+        `"${sheet}" exists, no Overview row points at it, and its ASX code already reads ` +
+          `"${claimedBy}" — so it was left by a previous attempt or is somebody's work in ` +
+          `progress. It was NOT reused, and ${ticker.toUpperCase()} was filed beside it. Check ` +
+          `whether "${sheet}" should be deleted.`,
+      ],
+    };
+  }
+
+  const template = await graph(
+    `${sheetPath(item, TEMPLATE_SHEET)}/usedRange?$select=address,formulas,numberFormat`,
+  );
+  if (!template.ok) {
+    return { ok: false, adoptable: true, error: `Could not read ${TEMPLATE_SHEET}: ${graphError(template.body)}` };
+  }
+
+  const blueprint = template.body as {
+    address?: string;
+    formulas?: unknown[][];
+    numberFormat?: unknown[][];
+  };
+  const shape = localAddress(blueprint.address);
+  if (!shape || !blueprint.formulas?.length) {
+    return { ok: false, adoptable: true, error: `${TEMPLATE_SHEET} appears to be empty.` };
+  }
+
+  const notes = [
+    `"${sheet}" was left behind by an earlier attempt and has been finished rather than ` +
+      `filed beside — no Overview row pointed at it and its terms were blank.`,
+  ];
+
+  if (isBareTab(values)) {
+    const seeded = await graph(`${sheetPath(item, sheet)}/range(address='${shape}')`, {
+      method: "PATCH",
+      body: {
+        formulas: blueprint.formulas,
+        ...(blueprint.numberFormat?.length ? { numberFormat: blueprint.numberFormat } : {}),
+      },
+    });
+    if (!seeded.ok) {
+      return {
+        ok: false,
+        adoptable: true,
+        error: `"${sheet}" was adopted but ${TEMPLATE_SHEET} could not be written into it: ${graphError(seeded.body)}`,
+        hint: permissionHint(seeded.status),
+      };
+    }
+    notes.push(`"${sheet}" was empty, so ${TEMPLATE_SHEET} was replayed into it.`);
+  }
+
+  return { ok: true, via: "adopted", sheet, shape, notes, adoptable: true };
+}
+
 /* ------------------------------------------------------------------ */
 /* The write                                                           */
 /* ------------------------------------------------------------------ */
@@ -532,20 +666,84 @@ export async function writeDealToTracker(
     }
 
     const deals = names.filter(isDealSheet);
-    const sheet = nextSheetName(deal.ticker, [...deals, ...NON_DEAL_SHEETS]);
-    if (!sheet) {
+    const placement = dealSheetPlacement(slots);
+
+    // ── Finish a leftover tab before making another one ─────────────────────
+    // A tab this ticker owns that no Overview row points at is the wreckage of an
+    // earlier attempt, and adopting it is what stops an automatic retry from
+    // filing `FBR (b)` next to an unformatted `FBR` forever. `adoptOrphanSheet`
+    // refuses anything that looks claimed, and `adoptable: false` means exactly
+    // that — fall through and name a new tab, carrying its note.
+    const leftover = unreferencedTabFor(deal.ticker, deals, overviewSheetRefs(rows));
+    const adoption = leftover
+      ? await adoptOrphanSheet(graph, item, leftover, deal.ticker)
+      : null;
+
+    if (adoption && !adoption.ok && adoption.adoptable) {
+      // It IS ours and unfinished, and finishing it failed. Reported rather than
+      // worked around: a second tab would be the thing this branch exists to
+      // prevent, and the queue will offer the deal again.
       return {
         ok: false,
-        error: `${deal.ticker.toUpperCase()} already has 26 tabs in this workbook.`,
+        sheet: leftover ?? undefined,
+        error: adoption.error,
+        hint: adoption.hint,
+        notes: adoption.notes,
       };
     }
 
-    // ── The tab, before the row that points at it ───────────────────────────
-    const placement = dealSheetPlacement(slots);
-    const made = await createDealSheet(graph, item, sheet, placement);
-    if (!made.ok) return { ...made, ok: false };
+    // Whatever the adoption declined to do has to travel with the deal that gets
+    // written instead. Both shapes are carried: the "somebody has claimed it"
+    // note, and — the case easy to drop — an error from not being able to READ
+    // the leftover at all, which otherwise disappears entirely and leaves a
+    // second tab with no explanation for why it exists.
+    const carried =
+      adoption && !adoption.ok
+        ? (adoption.notes ?? []).concat(
+            adoption.error
+              ? [`The leftover "${leftover}" could not be inspected: ${adoption.error}`]
+              : [],
+          )
+        : [];
 
-    const notes = made.notes ?? [];
+    let sheet: string;
+    let made: MadeSheet;
+
+    if (adoption?.ok) {
+      sheet = leftover as string;
+      made = adoption;
+      // The leftover sat wherever `worksheets/add` put it, which is the far end
+      // of ~200 tabs — the position the desk stopped finding. Moved now for the
+      // same reason a new tab is, and a failure to move stays a note.
+      if (placement.before && placement.before !== sheet) {
+        const moved = await graph(sheetPath(item, sheet), {
+          method: "PATCH",
+          body: { position: placement.position },
+        });
+        if (!moved.ok) {
+          made.notes = [
+            ...(made.notes ?? []),
+            `"${sheet}" was finished where it stood — moving it to the front of the deal tabs failed: ${graphError(moved.body)}`,
+          ];
+        }
+      }
+    } else {
+      const named = nextSheetName(deal.ticker, [...deals, ...NON_DEAL_SHEETS]);
+      if (!named) {
+        return {
+          ok: false,
+          error: `${deal.ticker.toUpperCase()} already has 26 tabs in this workbook.`,
+          notes: carried.length > 0 ? carried : undefined,
+        };
+      }
+      sheet = named;
+
+      // ── The tab, before the row that points at it ─────────────────────────
+      made = await createDealSheet(graph, item, sheet, placement);
+      if (!made.ok) return { ...made, ok: false, notes: [...carried, ...(made.notes ?? [])] };
+    }
+
+    const notes = [...carried, ...(made.notes ?? [])];
 
     // ── The deal's own terms ────────────────────────────────────────────────
     for (const cell of tabCellWrites(deal)) {
@@ -595,7 +793,12 @@ export async function writeDealToTracker(
     // The deal is filed as of the line above. Everything from here is shading,
     // which is why it runs after the row rather than with the rest of the tab —
     // see the header. A copied tab already carries it and skips this entirely.
-    if (made.via === "replay" && made.shape) {
+    //
+    // An adopted tab needs this as much as a replayed one, and for the same
+    // reason it was adopted: the run that created it was killed before the
+    // shading, which is exactly why the leftover reads as a plain grid of
+    // `#DIV/0!` with no bands, no yellow input cells and default column widths.
+    if ((made.via === "replay" || made.via === "adopted") && made.shape) {
       notes.push(
         ...(await dressSheetLikeTemplate(
           graph,

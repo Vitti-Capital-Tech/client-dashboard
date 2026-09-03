@@ -59,12 +59,14 @@ ALTER TABLE placement_candidates
 -- ----------------------------------------------------------------------------
 -- Backfill: everything that already exists is settled
 -- ----------------------------------------------------------------------------
--- Without this the first run after deploy would decide that every candidate
--- ever stored — around two hundred of them, back to the start of the year — is
--- owed a tab, and would start appending duplicates to the desk's live workbook.
--- The duplicate guard reads the Overview by ticker AND issue date and would stop
--- most of them, but "most" is not a thing to rely on with a 13 MB book people
--- work in daily, and each check is two Graph calls besides.
+-- Without this the first run after deploy would decide that every candidate ever
+-- stored is owed a tab — 26 rows as this is written, back to 31 July 2026, when
+-- the table started — and would start appending duplicates to the desk's live
+-- workbook. (The workbook's other ~170 deal tabs predate the candidates table and
+-- have no row here at all, so they are never in question.) The duplicate guard
+-- reads the Overview by ticker AND issue date and would stop most of them, but
+-- "most" is not a thing to rely on with a 13 MB book people work in daily, and
+-- each check is two Graph calls besides.
 --
 -- `first_seen_at` rather than `now()` so the column reads as history rather than
 -- as though every old deal was filed the moment this migration ran.

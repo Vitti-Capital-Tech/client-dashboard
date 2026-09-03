@@ -6,12 +6,16 @@ import {
   dealSheetPlacement,
   excelSerialDate,
   formulaSheetRef,
+  isBareTab,
   isDealSheet,
   nextOverviewSlot,
   nextSheetName,
   overviewRowFormulas,
+  referencedSheetName,
   sheetLinkFormula,
   tabCellWrites,
+  termsCell,
+  unreferencedTabFor,
 } from "./tracker-format.ts";
 import { writeDealToTracker, type GraphCall } from "./tracker-writer.ts";
 import { clearTemplatePlanCache, columnsOf, rectOf } from "./tracker-style.ts";
@@ -168,6 +172,31 @@ function bordersOver(address: string): { value: Record<string, unknown>[] } {
 
 const addressIn = (path: string) => /range\(address='([^']+)'\)/.exec(path)?.[1] ?? "";
 
+/** `…/worksheets('2026%20Overview')/range(…)` → `2026 Overview`. */
+const sheetIn = (path: string) => {
+  const m = /worksheets\('([^']+)'\)/.exec(path);
+  return m ? decodeURIComponent(m[1]) : "";
+};
+
+/**
+ * The Overview's D column, as the real sheet carries it.
+ *
+ * Every row's Date Issued is `='PGF'!B3`, and that formula is the ONLY record of
+ * which sheet a row belongs to — column C's value is the friendly ticker, which
+ * for a repeat issuer filed as `PGF (b)` is still `PGF`. The writer reads it to
+ * tell a tab the Overview accounts for from one it does not, so the fake has to
+ * answer with it or every existing tab would look like abandoned wreckage.
+ *
+ * A fixture row may name its sheet as a fourth element; otherwise the sheet is
+ * the ticker, which is the normal case.
+ */
+function overviewFormulas(rows: (string | number)[][]): (string | number)[][] {
+  return rows.map((r) => {
+    const sheet = String(r[3] ?? r[1] ?? "").trim();
+    return sheet === "" ? ["", "", ""] : ["", "", `='${sheet}'!B3`];
+  });
+}
+
 /**
  * A Graph that records calls and answers from a literal workbook.
  *
@@ -177,7 +206,18 @@ const addressIn = (path: string) => /range\(address='([^']+)'\)/.exec(path)?.[1]
  * are exercised below.
  */
 function fakeGraph(
-  workbook: { sheets: string[]; overview: (string | number)[][] },
+  workbook: {
+    sheets: string[];
+    overview: (string | number)[][];
+    /**
+     * What individual deal tabs already hold, by sheet then address.
+     *
+     * Only the adoption path needs this: whether a leftover tab is bare, and
+     * whether its `D3` shows somebody has claimed it, is the difference between
+     * finishing that tab and filing a second one beside it.
+     */
+    cells?: Record<string, Record<string, string | number>>;
+  },
   fail?: { path: RegExp; status: number; message?: string },
   opts: { canCopy?: boolean } = {},
 ) {
@@ -234,7 +274,30 @@ function fakeGraph(
       return { ok: true, status: 200, body: { columnWidth: TEMPLATE_COLUMN_WIDTH } };
     }
     if (method === "GET" && path.includes("range(address=")) {
-      return { ok: true, status: 200, body: { values: workbook.overview } };
+      const sheet = sheetIn(path);
+      if (sheet === "" || /overview$/i.test(sheet)) {
+        return {
+          ok: true,
+          status: 200,
+          body: { values: workbook.overview, formulas: overviewFormulas(workbook.overview) },
+        };
+      }
+
+      // A read of a deal tab's own cells — the terms block on the adoption path.
+      // Answered as the rectangle Graph would return, so an absent fixture reads
+      // as a bare tab rather than as an error.
+      const held = workbook.cells?.[sheet] ?? {};
+      const rect = rectOf(addressIn(path));
+      if (!rect) return { ok: true, status: 200, body: { values: [[""]] } };
+
+      // `rectOf` is 1-based on both axes, matching how a spreadsheet address reads.
+      const values = Array.from({ length: rect.r2 - rect.r1 + 1 }, (_, r) =>
+        Array.from({ length: rect.c2 - rect.c1 + 1 }, (_, c) => {
+          const col = String.fromCharCode(64 + rect.c1 + c);
+          return held[`${col}${rect.r1 + r}`] ?? "";
+        }),
+      );
+      return { ok: true, status: 200, body: { values } };
     }
     // `$batch` carries twenty of the format reads per round trip. Replaying each
     // inner request through this same fake is what the real endpoint does, and it
@@ -1094,7 +1157,13 @@ test("tracker sync: each deal is reported the moment it settles, not at the end"
 });
 
 test("tracker sync: the outcome carries the tab's name, so the queue can record it", async () => {
-  const { graph } = fakeGraph({ sheets: ["Template", "PGF"], overview: OVERVIEW });
+  // A repeat issuer: `PGF` is already filed under an earlier date, so this deal
+  // becomes `PGF (b)` — and that, not the ticker, is what the row must remember,
+  // because it is the only way back to the tab afterwards.
+  const { graph } = fakeGraph({
+    sheets: ["Template", "PGF"],
+    overview: [[57, "PGF", serial("2026-07-02")]],
+  });
 
   const seen: unknown[] = [];
   await syncTrackerRows([CANDIDATE], {
@@ -1103,8 +1172,6 @@ test("tracker sync: the outcome carries the tab's name, so the queue can record 
     onSettled: async (_item, outcome) => void seen.push(outcome),
   });
 
-  // `PGF` is taken, so the repeat issuer's tab is `PGF (b)` — and that, not the
-  // ticker, is what the row has to remember.
   assert.deepEqual(seen, [{ state: "written", sheet: "PGF (b)" }]);
 });
 
@@ -1184,3 +1251,254 @@ function serial(iso: string): number {
   assert.ok(n !== null, `${iso} should be a date`);
   return n;
 }
+
+/* ---------------------------------------------------------------- */
+/* Finishing a tab an earlier attempt left behind                    */
+/* ---------------------------------------------------------------- */
+
+/**
+ * These cover the regression the retry queue introduced.
+ *
+ * Every failure after `worksheets/add` leaves the tab — that order is chosen so
+ * the wreckage is an unreferenced tab rather than a row of `#REF!`. It was
+ * harmless while nothing retried on its own. Now the queue retries hourly, and
+ * without adoption the second attempt would find `PGF` taken, file the deal as
+ * `PGF (b)` — asserting a repeat placement that never happened — and leave the
+ * unformatted `PGF` at the end of the workbook for good.
+ */
+
+/** An Overview that accounts for LGF and nothing else. */
+const ONLY_LGF = [[57, "LGF", serial("2026-08-01")]];
+
+test("tracker: a leftover tab is FINISHED, not filed beside", async () => {
+  // `PGF` exists, no Overview row points at it, and its ASX code is blank —
+  // the signature of a run that was killed after creating the tab.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A2: "Options", A3: "Date", A4: "2 Tranche" } },
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.sheet, "PGF", "the deal goes INTO the leftover, not next to it");
+  assert.equal(res.via, "adopted");
+  assert.equal(
+    calls.some((c) => c.path.includes("/worksheets/add")),
+    false,
+    "no second tab is created",
+  );
+  assert.ok(res.notes?.some((n) => /left behind by an earlier attempt/.test(n)));
+});
+
+test("tracker: a leftover tab is dragged back to the front of the deal tabs", async () => {
+  // It sat wherever `worksheets/add` put it — the far end of ~200 tabs, which is
+  // the position the desk stopped finding. That was half of the original report.
+  const workbook = {
+    sheets: ["Template", "LGF", "TAM", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A3: "Date" } },
+  };
+  const { graph } = fakeGraph(workbook);
+
+  await writeDealToTracker(DEAL, { graph, target });
+  assert.deepEqual(workbook.sheets, ["Template", "PGF", "LGF", "TAM"]);
+});
+
+test("tracker: a leftover tab is SHADED, which is what it was missing", async () => {
+  // The killed run never reached the shading — it runs last, after the Overview
+  // row — so the leftover reads as a plain grid of #DIV/0! with no bands and no
+  // yellow input cells. Finishing it has to include painting it.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A3: "Date" } },
+  });
+
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const fills = calls.filter(
+    (c) => c.method === "PATCH" && c.path.includes("/format/fill") && c.path.includes("PGF"),
+  );
+  assert.ok(fills.length > 0, "the adopted tab is painted like a new one");
+});
+
+test("tracker: a leftover tab with nothing in it at all is seeded from Template", async () => {
+  // The narrow window: killed between `worksheets/add` and the seed, so there
+  // are no formulas either. An adopted tab that computes nothing is no use.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    // no `cells` entry — the tab is bare
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.ok, true);
+
+  const seed = calls.find(
+    (c) =>
+      c.method === "PATCH" && c.path.includes("PGF") && /range\(address='A1:P30'\)/.test(c.path),
+  );
+  assert.ok(seed, "Template is replayed into it");
+  assert.deepEqual((seed!.body as { formulas: unknown }).formulas, TEMPLATE_FORMULAS);
+  assert.ok(res.notes?.some((n) => /was empty, so Template was replayed/.test(n)));
+});
+
+test("tracker: a leftover tab that already has its formulas is NOT re-seeded", async () => {
+  // The common case, and the 3 September one: the seed landed, the run died
+  // after it. Rewriting Template over the top would be pointless work against a
+  // 13 MB book, and would undo anything already correct on the tab.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A2: "Options", A3: "Date", A4: "2 Tranche" } },
+  });
+
+  await writeDealToTracker(DEAL, { graph, target });
+
+  const seed = calls.find(
+    (c) =>
+      c.method === "PATCH" && c.path.includes("PGF") && /range\(address='A1:P30'\)/.test(c.path),
+  );
+  assert.equal(seed, undefined);
+});
+
+test("tracker: a tab somebody has claimed is left alone, and SAID so", async () => {
+  // An ASX code in D3 means either a previous attempt got that far or a person
+  // is part way through building the tab by hand. Adopting it would overwrite
+  // the terms they typed — including a date they had corrected. So the deal is
+  // filed beside it, and the run names the tab rather than leaving it to be
+  // discovered.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A3: "Date", D3: "PGF", B3: 46251 } },
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.sheet, "PGF (b)", "filed beside it");
+  assert.ok(calls.some((c) => c.path.includes("/worksheets/add")));
+  assert.ok(
+    res.notes?.some((n) => /its ASX code already reads "PGF"/.test(n)),
+    "and the leftover is reported",
+  );
+  assert.ok(res.notes?.some((n) => /whether "PGF" should be deleted/.test(n)));
+});
+
+test("tracker: a tab the Overview DOES account for is never adopted", async () => {
+  // A genuine repeat issuer. `PGF` is filed under an earlier date, so this deal
+  // is a second placement and belongs in its own tab — adopting the first one
+  // would overwrite a deal the desk has already worked.
+  const { graph } = fakeGraph({
+    sheets: ["Template", "PGF"],
+    overview: [[57, "PGF", serial("2026-07-02")]],
+    cells: { PGF: { A3: "Date", D3: "PGF" } },
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  assert.equal(res.sheet, "PGF (b)");
+  assert.notEqual(res.via, "adopted");
+});
+
+test("tracker: an Overview row is matched to its tab by FORMULA, not by ticker", async () => {
+  // Column C's value is the friendly ticker, so a row for `PGF (b)` still reads
+  // `PGF`. Only the Date Issued formula (`='PGF (b)'!B3`) says which tab a row
+  // belongs to — without reading it, the real `PGF` would look unaccounted for.
+  const { graph } = fakeGraph({
+    sheets: ["Template", "PGF", "PGF (b)"],
+    // One row, showing PGF, pointing at `PGF (b)`.
+    overview: [[57, "PGF", serial("2026-07-02"), "PGF (b)"]],
+    cells: { PGF: { A3: "Date" }, "PGF (b)": { A3: "Date", D3: "PGF" } },
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+  // `PGF` is the unaccounted tab and its terms are blank, so it is the leftover.
+  assert.equal(res.sheet, "PGF");
+  assert.equal(res.via, "adopted");
+});
+
+test("tracker: an Overview formula names its sheet whether Excel quoted it or not", () => {
+  // The write sends `='PGF'!B3`; Excel reads it back as `=PGF!B3`, dropping
+  // quotes it does not need. Both have to resolve to the same tab.
+  assert.equal(referencedSheetName("='PGF'!B3"), "PGF");
+  assert.equal(referencedSheetName("=PGF!B3"), "PGF");
+  assert.equal(referencedSheetName("='CBE (a)'!B3"), "CBE (a)");
+  assert.equal(referencedSheetName("=M199*(1.1)"), null, "a self-reference names no sheet");
+  assert.equal(referencedSheetName(46251), null);
+  assert.equal(referencedSheetName(""), null);
+});
+
+test("tracker: the leftover search matches the ticker and its suffixed forms", () => {
+  const referenced = new Set(["LGF"]);
+  assert.equal(unreferencedTabFor("PGF", ["LGF", "PGF"], referenced), "PGF");
+  assert.equal(unreferencedTabFor("PGF", ["LGF", "PGF (b)"], referenced), "PGF (b)");
+  // Accounted for, so not wreckage.
+  assert.equal(unreferencedTabFor("LGF", ["LGF"], referenced), null);
+  // A different stock is not this deal's leftover.
+  assert.equal(unreferencedTabFor("PGF", ["LGF", "PGX"], referenced), null);
+  // Scaffolding is never a deal tab, whatever it is called.
+  assert.equal(unreferencedTabFor("Index", ["Index"], new Set()), null);
+});
+
+test("tracker: the terms block is read as a rectangle, and an empty one is bare", () => {
+  const seeded = [
+    ["Options", "1:2 free", "Industry", "ASX CODE"],
+    ["Date", 46251, "", ""],
+    ["2 Tranche", "yes", "", ""],
+  ];
+  assert.equal(termsCell(seeded, "A2"), "Options");
+  assert.equal(termsCell(seeded, "B3"), 46251);
+  assert.equal(termsCell(seeded, "D2"), "ASX CODE");
+  assert.equal(termsCell(seeded, "D3"), "", "blank ASX code — nobody has claimed it");
+  assert.equal(termsCell(seeded, "Z9"), "", "outside the block reads as empty, not as a throw");
+
+  assert.equal(isBareTab(seeded), false);
+  assert.equal(
+    isBareTab([
+      ["", ""],
+      ["", ""],
+    ]),
+    true,
+  );
+  assert.equal(isBareTab([]), true);
+});
+
+/* ---------------------------------------------------------------- */
+/* Date Issued is a SYDNEY date                                      */
+/* ---------------------------------------------------------------- */
+
+const dated = (received_at: string) => dealFromCandidate({ ...CANDIDATE, received_at }).issueDate;
+
+test("tracker sync: a pre-open announcement is dated the Sydney day, not the UTC one", () => {
+  // NGY, 3 September 2026. The mail went out at 23:25:13Z, which is 09:25 the
+  // next morning in Sydney — before the open, which is when a raise with a
+  // trading halt is normally announced. Taking the UTC prefix filed it as the
+  // 2nd, the upstream filed it under the 3rd, and the desk typed the 3rd.
+  assert.equal(dated("2026-09-02T23:25:13+00:00"), "2026-09-03");
+});
+
+test("tracker sync: an intraday announcement is unchanged", () => {
+  // FBR, the same morning: 00:06:40Z is 10:06 in Sydney, so UTC and Sydney agree
+  // and always will for anything announced after the open.
+  assert.equal(dated("2026-09-03T00:06:40+00:00"), "2026-09-03");
+  assert.equal(dated("2026-08-11T02:31:38+00:00"), "2026-08-11");
+});
+
+test("tracker sync: the offset follows daylight saving, rather than being assumed", () => {
+  // 13:30Z is the hour that tells AEDT from AEST: +11 makes it 00:30 the next
+  // day, +10 makes it 23:30 the same day. A fixed offset gets one of these wrong,
+  // and the changeover falls mid-year here.
+  assert.equal(dated("2026-01-15T13:30:00Z"), "2026-01-16", "AEDT, +11");
+  assert.equal(dated("2026-06-15T13:30:00Z"), "2026-06-15", "AEST, +10");
+});
+
+test("tracker sync: an unreadable timestamp keeps its literal day rather than none", () => {
+  // No date at all is a reported failure, because there is no year to choose a
+  // workbook by. The literal prefix is worse than a real conversion and much
+  // better than that.
+  assert.equal(dated("2026-08-11 not a timestamp"), "2026-08-11");
+  assert.equal(dated(""), null);
+});

@@ -83,12 +83,62 @@ export function dealFromCandidate(item: CandidateFeedItem): TrackerDeal {
     // `Date Issued` is the day the deal was announced. The summary header has no
     // such field — it carries Bids Close and Settlement — so the mail's own
     // timestamp is the honest answer, and it is the one the desk types today.
-    issueDate: isoDay(item.received_at),
+    issueDate: sydneyDay(item.received_at),
     price: read.price ?? null,
     settleDate: read.settleDate ?? null,
     addOns: read.opts ?? null,
     twoTranche: isTwoTranche ? true : false,
   };
+}
+
+/** The market this desk trades. Every date on a tab is a date in this zone. */
+const DEAL_TIME_ZONE = "Australia/Sydney";
+
+const SYDNEY_YMD = new Intl.DateTimeFormat("en-AU", {
+  timeZone: DEAL_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/**
+ * The announcement's date **in Sydney**, which is the date the desk types.
+ *
+ * ── Why not the UTC prefix of the timestamp ──────────────────────────────────
+ * This used to take the first ten characters of `received_at`, which is the UTC
+ * day, and that is wrong for every deal announced before 10am in Sydney — the
+ * whole pre-open window, which is when a raise with a trading halt is normally
+ * announced. `23:25:13Z` is `09:25` the NEXT morning there.
+ *
+ * It reached the workbook on 3 September 2026: NGY's mail went out at
+ * `2026-09-02T23:25:13Z` and belonged to the 3rd, which is also the date the
+ * upstream filed it under and the date the desk wrote in by hand. One deal in
+ * nine of that fortnight's mail fell in the window.
+ *
+ * A wrong `Date Issued` is not cosmetic. It is what the Overview's *Settling
+ * today / Settled yesterday / Settling tomorrow* banner counts from, and it is
+ * half of `alreadyInOverview`'s duplicate key — so a date somebody corrects by
+ * hand is a date a later write no longer recognises.
+ *
+ * `Intl` rather than a fixed offset, because the answer differs by ten or eleven
+ * hours depending on daylight saving and the changeover is mid-year here.
+ * `formatToParts` rather than a formatted string, so the assembly does not
+ * depend on what order a locale happens to print in.
+ */
+function sydneyDay(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+
+  const at = Date.parse(raw);
+  // An unparseable timestamp still has its literal day, and using it is better
+  // than filing the deal with no date at all — which `syncTrackerRows` counts as
+  // a failure because there is no year to choose a workbook by.
+  if (!Number.isFinite(at)) return isoDay(raw);
+
+  const parts = SYDNEY_YMD.formatToParts(new Date(at));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value;
+  const [y, m, d] = [get("year"), get("month"), get("day")];
+  return y && m && d ? `${y}-${m}-${d}` : isoDay(raw);
 }
 
 /** `2026-08-12T02:31:46Z` → `2026-08-12`, without going through a Date. */
