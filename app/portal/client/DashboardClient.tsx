@@ -10,12 +10,12 @@ import type {
   AlertRow,
   SignalRow,
 } from "@/lib/data/queries";
+import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
 import {
   posValue,
   posCost,
   posPL,
   portfolioValue,
-  dailyPL,
   isITM,
 } from "@/lib/data/compute";
 import { ackAlert } from "@/app/actions/alerts";
@@ -31,6 +31,7 @@ export function DashboardClient({
   alerts,
   signals,
   noteTime,
+  portfolio,
 }: {
   clientId: string;
   clientName: string;
@@ -42,14 +43,31 @@ export function DashboardClient({
   alerts: AlertRow[];
   signals: Record<string, SignalRow>;
   noteTime: string;
+  /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
+  portfolio: ClientPortfolio;
 }) {
   const router = useRouter();
   const [countdown, setCountdown] = useState("closes 4:00:00");
 
   const pv = portfolioValue(positions, cash);
-  const dpl = dailyPL(positions);
-  const mtd = pv * 0.018;
-  const ytd = pv * 0.064;
+
+  // `dailyPL`, and the month- and year-to-date figures that sat beside it, are
+  // gone from this page.
+  //
+  // They were demo scaffolding: `dailyPL` models a day move from fixed
+  // per-security factors because the app has no intraday price history, and MTD
+  // and YTD were literally `pv * 0.018` and `pv * 0.064` — two hardcoded
+  // percentages rendered in green as a client's own return. Harmless while only
+  // the desk opened this screen; not harmless at all once a client could sign in
+  // and read them as fact.
+  //
+  // What replaces them is the figure that is real and reproducible: the stored
+  // P&L, the same one the adviser sees. A true month- or year-to-date needs the
+  // per-sale dates the staff chart replays, which is a feature rather than a
+  // subtitle.
+  const deskCost = portfolio.total.buyPrice;
+  const deskPnl = portfolio.total.pnl;
+  const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
 
   const liveDeal = placements.find(p => p.stage === "open");
   const myBid = liveDeal ? liveDeal.bids.find(b => b.clientId === clientId) : null;
@@ -223,13 +241,27 @@ export function DashboardClient({
           <b className="text-white text-sm font-semibold">Your morning briefing</b>
           <span className="text-mut-d font-medium">{noteTime} &middot; auto-generated</span>
         </div>
+        {/* Only figures that exist.
+            This paragraph used to read "…up $X (+1.2%) today. Materials led —
+            PLS +2.1%, BHP +0.8% — while energy lagged. China stimulus and a
+            cooler US CPI are supportive for your resources and financials
+            exposure." Every specific in it was hardcoded, under a heading that
+            says "auto-generated" — so it read as commentary written from this
+            client's own book. It was not. The day move came from
+            `dailyPL`'s fixed factors and the market colour from nowhere at all.
+
+            What is left is what the app can stand behind. Real market commentary
+            belongs here eventually; inventing it in the meantime is worse than
+            leaving the space plain. */}
         <p className="text-sm leading-relaxed text-slate-300">
-          Your book is <b className="text-white font-bold">${pv.toLocaleString("en-AU")}</b>,{" "}
-          {dpl >= 0 ? "up" : "down"}{" "}
-          <b className={`font-bold ${dpl >= 0 ? "text-[#5cc79a]" : "text-[#e0795b]"}`}>
-            ${Math.abs(Math.round(dpl)).toLocaleString("en-AU")}
+          Your book is <b className="text-white font-bold">${pv.toLocaleString("en-AU")}</b> across{" "}
+          {positions.length} holding{positions.length === 1 ? "" : "s"} and cash, with a lifetime
+          profit and loss of{" "}
+          <b className={`font-bold ${deskPnl >= 0 ? "text-[#5cc79a]" : "text-[#e0795b]"}`}>
+            {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
           </b>{" "}
-          ({dpl >= 0 ? "+" : ""}{(dpl / pv * 100).toFixed(1)}%) today. Materials led — PLS +2.1%, BHP +0.8% — while energy lagged. China stimulus and a cooler US CPI are supportive for your resources and financials exposure.
+          on ${Math.round(deskCost).toLocaleString("en-AU")} invested. Figures come from Vitti&apos;s
+          own reconciliation of your contract notes and holdings.
         </p>
       </div>
 
@@ -265,26 +297,28 @@ export function DashboardClient({
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Total portfolio</div>
           <div className="font-disp font-medium text-2xl mt-1 text-ink">${pv.toLocaleString("en-AU")}</div>
-          <div className={`text-xs mt-1 font-mono ${dpl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {dpl >= 0 ? "+" : ""}{(dpl / pv * 100).toFixed(1)}% &middot; ${Math.abs(Math.round(dpl)).toLocaleString("en-AU")} today
+          <div className="text-xs text-mut mt-1">holdings + cash, at last price</div>
+        </div>
+        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(deskCost).toLocaleString("en-AU")}</div>
+          <div className="text-xs text-mut mt-1">invested, all accounts</div>
+        </div>
+        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
+          <div className={`font-disp font-medium text-2xl mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
+          </div>
+          <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {deskPnl >= 0 ? "+" : ""}{deskPnlPct.toFixed(1)}% &middot; realised + open
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Daily P&amp;L</div>
-          <div className={`font-disp font-medium text-2xl mt-1 ${dpl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {dpl >= 0 ? "+" : "-"}${Math.abs(Math.round(dpl)).toLocaleString("en-AU")}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Holdings</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">{positions.length}</div>
+          <div className="text-xs text-mut mt-1">
+            {portfolio.rows.length} line{portfolio.rows.length === 1 ? "" : "s"} of P&amp;L history
           </div>
-          <div className="text-xs text-mut mt-1">unrealised</div>
-        </div>
-        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Month to date</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-gain">+${Math.round(mtd).toLocaleString("en-AU")}</div>
-          <div className="text-xs text-gain mt-1 font-mono">+1.8%</div>
-        </div>
-        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Year to date</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-gain">+${Math.round(ytd).toLocaleString("en-AU")}</div>
-          <div className="text-xs text-gain mt-1 font-mono">+6.4%</div>
         </div>
       </div>
 
@@ -412,8 +446,13 @@ export function DashboardClient({
               <b className="text-ink text-sm font-semibold">Ask Vitti</b>
               <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>
             </div>
+            {/* Was: "You're up $X today; the MRD book closes at 4:00pm and one
+                option needs attention." — a fabricated day move, a hardcoded
+                ticker and an invented alert, in quotes, under an AI badge. A
+                prompt is honest; a fake answer is not. */}
             <p className="text-[13px] text-mut italic leading-normal">
-              &ldquo;You&rsquo;re up ${Math.round(dpl).toLocaleString("en-AU")} today; the MRD book closes at 4:00pm and one option needs attention.&rdquo;
+              Ask about your holdings, your options and their exercise windows, or
+              anything in your book.
             </p>
             <button
               onClick={() => router.push("/portal/client/askvitti")}

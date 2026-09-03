@@ -1,4 +1,7 @@
 import { getActiveClientId, getActiveAccountId } from "@/lib/session";
+import { getClientStoredPnl } from "@/lib/data/pnl";
+import { getClientPnlOverrides } from "@/lib/data/holdings";
+import { clientPortfolio } from "@/lib/pnl/client-portfolio";
 import {
   getClient,
   getAccount,
@@ -42,6 +45,14 @@ export default async function ClientDashboardPage() {
     getSignals(),
   ]);
 
+  // The desk's own stored figures, so the headline numbers here, on the
+  // portfolio page and on the adviser's screen are one number rather than three
+  // computed three ways. See lib/pnl/client-portfolio.ts.
+  const [storedPnl, overrides] = await Promise.all([
+    clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
+    clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
+  ]);
+
   const cash = account?.cash ?? 0;
 
   const signalMap: Record<string, SignalRow> = Object.fromEntries(
@@ -76,6 +87,7 @@ export default async function ClientDashboardPage() {
       alerts={alerts}
       signals={signalMap}
       noteTime={noteTime}
+      portfolio={clientPortfolio(storedPnl, overrides)}
     />
   );
 }

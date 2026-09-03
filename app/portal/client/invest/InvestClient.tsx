@@ -183,7 +183,15 @@ export function InvestClient({
     return "bg-green-bg text-green-d";
   };
 
-  const ideaOfWeek = ideas.find(i => i.code === "MRD") || ideas[0];
+  /**
+   * Undefined when the adviser has published no ideas — which is the live state,
+   * not a hypothetical: `investment_ideas` was demo-seed data and nothing in the
+   * broker/tracker pipeline writes it. Every read of this below is guarded, and
+   * the block it feeds is skipped entirely. Before that guard existed, the first
+   * real client login took a TypeError on `ideaOfWeek.code` and the whole Invest
+   * tab rendered as "this page could not load".
+   */
+  const ideaOfWeek = ideas.find(i => i.code === "MRD") ?? ideas[0] ?? null;
 
   return (
     <div className="space-y-4">
@@ -332,7 +340,10 @@ export function InvestClient({
         </div>
       )}
 
-      {/* Idea of the Week */}
+      {/* Idea of the Week — only when there is one. An empty card headed "Idea
+          of the week" reads as something that failed to load rather than as a
+          week with no idea published. */}
+      {ideaOfWeek && (
       <div className="space-y-2">
         <div className="font-mono text-[11px] tracking-wider uppercase text-mut">Idea of the week</div>
         <div className="card bg-white border border-green/30 rounded-[14px] p-5 shadow-shadow hover:border-green transition-colors">
@@ -381,6 +392,7 @@ export function InvestClient({
           </div>
         </div>
       </div>
+      )}
 
       {/* Theme chips filters */}
       <div className="space-y-3 pt-2">

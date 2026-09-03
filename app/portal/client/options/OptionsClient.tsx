@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useState } from "react";
-import type { OptionRow } from "@/lib/data/queries";
-import { isITM, intrinsic } from "@/lib/data/compute";
+import type { ClientOptionView } from "@/lib/options/from-stored-pnl";
+
+/** `—` rather than `$0.00`: an unreadable strike is not a free option. */
+const price = (n: number | null) => (n === null ? "—" : `$${n.toFixed(2)}`);
 
 // Expiry Rail Component
 const ExpiryRail = ({ dte }: { dte: number }) => {
@@ -39,9 +41,10 @@ const ExpiryRail = ({ dte }: { dte: number }) => {
 };
 
 // Moneyness Bar Component
-const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; type: "Call" | "Put" }) => {
-  let m = under - strike;
-  if (type === "Put") m = -m;
+// Only rendered for rows that carry terms, which are the placement grants —
+// calls by construction, so there is no put branch to take.
+const MoneynessBar = ({ strike, under }: { strike: number; under: number }) => {
+  const m = under - strike;
   const span = strike * 0.5 || 0.5;
   const frac = Math.max(-1, Math.min(1, m / span));
   const w = Math.abs(frac) * 27;
@@ -62,19 +65,20 @@ const MoneynessBar = ({ strike, under, type }: { strike: number; under: number; 
   );
 };
 
-export function OptionsClient({ options: allOptions }: { options: OptionRow[] }) {
+export function OptionsClient({ options: allOptions }: { options: ClientOptionView[] }) {
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
 
   const options = allOptions.filter(o => o.status !== "expired");
   const listed = options.filter(o => o.listed);
   const unlisted = options.filter(o => !o.listed);
 
-  const itmCount = options.filter(isITM).length;
-  const soonCount = options.filter(o => o.dte <= 7 && o.dte >= 0).length;
+  const itmCount = options.filter(o => o.itm).length;
+  // An option with no readable expiry is not "expiring soon" — it is undated,
+  // and counting it as urgent would put a red number in front of a client for
+  // a window nobody can see.
+  const soonCount = options.filter(o => o.dte !== null && o.dte <= 7 && o.dte >= 0).length;
 
-  const listedIntrinsicSum = listed
-    .filter(isITM)
-    .reduce((sum, o) => sum + intrinsic(o), 0);
+  const listedIntrinsicSum = listed.reduce((sum, o) => sum + o.intrinsicValue, 0);
 
   const handleActionClick = (code: string) => {
     alert(`Instruction for ${code} would be routed directly to the Vitti options desk.`);
@@ -110,8 +114,9 @@ export function OptionsClient({ options: allOptions }: { options: OptionRow[] })
               </tr>
             ) : (
               rows.map(o => {
-                const isItmVal = isITM(o);
-                const hasAction = !o.listed && isItmVal && o.dte <= 14 && o.dte >= 0;
+                const isItmVal = o.itm;
+                const hasAction =
+                  !o.listed && isItmVal && o.dte !== null && o.dte <= 14 && o.dte >= 0;
                 return (
                   <tr key={o.id} className="hover:bg-[#faf9f5]">
                     <td className="px-4.5 py-3.5">
@@ -122,21 +127,25 @@ export function OptionsClient({ options: allOptions }: { options: OptionRow[] })
                       </div>
                     </td>
                     <td className="px-4.5 py-3.5 text-right font-mono">{o.qty ? o.qty.toLocaleString("en-AU") : "—"}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono">${o.strike.toFixed(2)}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">${o.under.toFixed(2)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono">{price(o.strike)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">{price(o.under)}</td>
                     <td className="px-4.5 py-3.5 text-center">
                       <div className="inline-flex items-center gap-1.5">
-                        <MoneynessBar strike={o.strike} under={o.under} type={o.type} />
+                        {o.strike !== null && o.under !== null && (
+                          <MoneynessBar strike={o.strike} under={o.under} />
+                        )}
                         <span className={`pill text-[10.5px] font-bold rounded-full px-1.5 py-0.5 ${isItmVal ? "bg-green-bg text-green-d" : "bg-paper-2 text-mut"}`}>
                           {isItmVal ? "ITM" : "OTM"}
                         </span>
                       </div>
                     </td>
                     <td className="px-4.5 py-3.5 hidden sm:table-cell font-mono text-[11px] text-mut">
-                      {new Date(o.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
+                      {o.expiryDate
+                        ? new Date(o.expiryDate).toLocaleDateString("en-AU", { day: "numeric", month: "short" })
+                        : "—"}
                     </td>
                     <td className="px-4.5 py-3.5">
-                      <ExpiryRail dte={o.dte} />
+                      {o.dte !== null ? <ExpiryRail dte={o.dte} /> : <span className="text-mut text-[11px]">no expiry on file</span>}
                     </td>
                     <td className="px-4.5 py-3.5 text-right">
                       {o.listed ? (
@@ -234,8 +243,9 @@ export function OptionsClient({ options: allOptions }: { options: OptionRow[] })
             </div>
           ) : (
             options.map(o => {
-              const isItmVal = isITM(o);
-              const hasAction = !o.listed && isItmVal && o.dte <= 14 && o.dte >= 0;
+              const isItmVal = o.itm;
+              const hasAction =
+                !o.listed && isItmVal && o.dte !== null && o.dte <= 14 && o.dte >= 0;
               return (
                 <div key={o.id} className={`card bg-white border rounded-[14px] p-4.5 shadow-shadow space-y-3 ${hasAction ? "border-green bg-green-bg/5" : "border-line"}`}>
                   <div className="flex justify-between items-center">
@@ -261,16 +271,16 @@ export function OptionsClient({ options: allOptions }: { options: OptionRow[] })
                     </div>
                     <div>
                       <div className="text-[10px] uppercase font-mono tracking-wider text-mut">Strike</div>
-                      <div className="font-mono font-semibold text-xs text-ink">${o.strike.toFixed(2)}</div>
+                      <div className="font-mono font-semibold text-xs text-ink">{price(o.strike)}</div>
                     </div>
                     <div>
                       <div className="text-[10px] uppercase font-mono tracking-wider text-mut">Underlying</div>
-                      <div className="font-mono font-semibold text-xs text-ink">${o.under.toFixed(2)}</div>
+                      <div className="font-mono font-semibold text-xs text-ink">{price(o.under)}</div>
                     </div>
                   </div>
 
                   <div className="py-1">
-                    <ExpiryRail dte={o.dte} />
+                    {o.dte !== null ? <ExpiryRail dte={o.dte} /> : <span className="text-mut text-[11px]">no expiry on file</span>}
                   </div>
 
                   <div className="pt-2 select-none">

@@ -3,6 +3,10 @@
 import { useState } from "react";
 import type { Position, SignalRow } from "@/lib/data/queries";
 import { posValue, posCost, posPL } from "@/lib/data/compute";
+import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+
+const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
+const qty0 = (n: number) => (n ? Math.round(n).toLocaleString("en-AU") : "—");
 
 // Reusable Donut Chart Component
 const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v: number; col: string }[]; size?: number; thick?: number }) => {
@@ -67,13 +71,16 @@ export function PositionsClient({
   cash,
   unlisted,
   signals,
+  portfolio,
 }: {
   positions: Position[];
   cash: number;
   unlisted: number;
   signals: Record<string, SignalRow>;
+  /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
+  portfolio: ClientPortfolio;
 }) {
-  const [tab, setTab] = useState<"holdings" | "analytics">("holdings");
+  const [tab, setTab] = useState<"holdings" | "pnl" | "analytics">("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
 
   // Custom states for trade execution inside modal
@@ -81,15 +88,20 @@ export function PositionsClient({
   const [tradeAction, setTradeAction] = useState<"Buy" | "Sell">("Buy");
   const [tradeAmount, setTradeAmount] = useState("10,000");
 
+  // Market value of what is held right now. Cost base and P&L deliberately do
+  // NOT come from here any more — see below.
   let tv = 0;
-  let tc = 0;
   positions.forEach(p => {
     tv += posValue(p);
-    tc += posCost(p);
   });
 
-  const tpl = tv - tc;
-  const tplp = tc > 0 ? (tpl / tc) * 100 : 0;
+  // `tv` / `tc` are live mark-to-market on what is held right now. Kept for
+  // Market value, which is genuinely that question — but NOT used for cost base
+  // or P&L any more: those come from the stored figures, so this page and the
+  // adviser's screen cannot report different returns on the same holdings.
+  const deskCost = portfolio.total.buyPrice;
+  const deskPnl = portfolio.total.pnl;
+  const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
   const totalAssets = tv + cash + unlisted;
 
   const handleOpenHolding = (code: string) => {
@@ -139,6 +151,100 @@ export function PositionsClient({
   };
 
   // Render analytics view
+  /**
+   * The desk's own P&L table, for this client.
+   *
+   * Same rows, same rollup and same corrections as the staff console — see
+   * lib/pnl/client-portfolio.ts — minus the desk's working notes. Sorted by
+   * absolute P&L so the positions that moved the total are at the top, which is
+   * the order somebody reads their own return in.
+   */
+  const renderPnl = () => {
+    const rows = [...portfolio.rows].sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+
+    return (
+      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+        <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none flex-wrap gap-2">
+          <div>
+            <b className="text-ink text-sm font-semibold">Profit &amp; loss</b>
+            <p className="text-xs text-mut mt-0.5">
+              Every parcel across your accounts — sold and still held.
+            </p>
+          </div>
+          <span className="text-mut text-xs font-medium">{rows.length} lines</span>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left text-[12.5px] font-medium">
+            <thead>
+              <tr className="border-b border-line text-mut select-none">
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3">Holding</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Bought</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Sold</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden md:table-cell">Held</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Cost</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Proceeds / value</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">P&amp;L</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#f0ede5]">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="text-center text-mut py-6">
+                    No figures yet. Your P&amp;L appears once Vitti has processed your
+                    first contract notes.
+                  </td>
+                </tr>
+              ) : (
+                rows.map((r) => (
+                  <tr key={`${r.ticker}-${r.type}`} className="hover:bg-[#faf9f5]">
+                    <td className="px-4.5 py-3.5">
+                      <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{r.ticker}</span>
+                      <div className="text-[10.5px] text-mut mt-1">
+                        {r.name}
+                        {r.openPosition && " · open"}
+                        {r.type.toLowerCase().includes("option") && " · option"}
+                      </div>
+                    </td>
+                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">{qty0(r.buyQty)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">{qty0(r.sellQty)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono hidden md:table-cell">{qty0(r.heldQty)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono">{money0(r.buyPrice)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono">{money0(r.sellOrCurrent)}</td>
+                    <td className={`px-4.5 py-3.5 text-right font-mono font-semibold ${r.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+                      {r.pnl >= 0 ? "+" : ""}{money0(r.pnl)}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+            {rows.length > 0 && (
+              <tfoot>
+                <tr className="border-t-2 border-line bg-paper-2 font-semibold">
+                  <td className="px-4.5 py-3.5 text-ink" colSpan={4}>Total</td>
+                  <td className="px-4.5 py-3.5 text-right font-mono text-ink hidden sm:table-cell">{money0(portfolio.total.buyPrice)}</td>
+                  <td className="px-4.5 py-3.5 text-right font-mono text-ink">{money0(portfolio.total.sellOrCurrent)}</td>
+                  <td className={`px-4.5 py-3.5 text-right font-mono ${portfolio.total.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+                    {portfolio.total.pnl >= 0 ? "+" : ""}{money0(portfolio.total.pnl)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+
+        {/* A total that quietly omits a holding is worse than one that says so. */}
+        {portfolio.outsideTotal > 0 && (
+          <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
+            {portfolio.outsideTotal} line{portfolio.outsideTotal === 1 ? " is" : "s are"} outside
+            the total while Vitti confirms {portfolio.outsideTotal === 1 ? "its" : "their"} cost
+            base. Ask your adviser if you would like the detail.
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderAnalytics = () => {
     const alloc = [
       { label: "Listed equities", v: tv, col: "#1d202f" },
@@ -288,6 +394,12 @@ export function PositionsClient({
             Holdings
           </button>
           <button
+            onClick={() => setTab("pnl")}
+            className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "pnl" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
+          >
+            Profit &amp; loss
+          </button>
+          <button
             onClick={() => setTab("analytics")}
             className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "analytics" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
           >
@@ -307,16 +419,16 @@ export function PositionsClient({
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(tc).toLocaleString("en-AU")}</div>
-          <div className="text-xs text-mut mt-1">invested</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(deskCost)}</div>
+          <div className="text-xs text-mut mt-1">invested, all accounts</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Unrealised P&amp;L</div>
-          <div className={`font-disp font-medium text-2xl mt-1 ${tpl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {tpl >= 0 ? "+" : ""}${Math.round(tpl).toLocaleString("en-AU")}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
+          <div className={`font-disp font-medium text-2xl mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {deskPnl >= 0 ? "+" : ""}{money0(deskPnl)}
           </div>
-          <div className={`text-xs mt-1 font-mono ${tpl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {tpl >= 0 ? "+" : ""}{tplp.toFixed(1)}%
+          <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {deskPnl >= 0 ? "+" : ""}{deskPnlPct.toFixed(1)}% &middot; realised + open
           </div>
         </div>
       </div>
@@ -324,6 +436,8 @@ export function PositionsClient({
       {/* Render selected Tab content */}
       {tab === "analytics" ? (
         renderAnalytics()
+      ) : tab === "pnl" ? (
+        renderPnl()
       ) : (
         <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
           <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none">

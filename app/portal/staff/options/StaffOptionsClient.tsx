@@ -6,36 +6,12 @@ import type { StoredPnlRow } from "@/lib/data/pnl";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
 import { TablePagination } from "@/app/components/TablePagination";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
-import {
-  moneynessOf,
-  UNKNOWN_MONEYNESS,
-  type OptionMoneyness,
-} from "@/lib/options/moneyness";
+import { optionsFromSources, type OptionTableItem } from "@/lib/options/from-stored-pnl";
 
-export type OptionTableItem = {
-  id: string;
-  accountId: string;
-  clientId: string;
-  ticker: string;
-  parentTicker: string | null;
-  company: string;
-  isUnlisted: boolean;
-  isListed: boolean;
-  quantity: number;
-  costBasis: number;
-  marketValue: number;
-  pnl: number;
-  strike: number | null;
-  underlyingPrice: number | null;
-  /** Where the strike sits against the underlying, and what exercising is worth. */
-  money: OptionMoneyness;
-  expiryDate: string | null;
-  dte: number | null;
-  pricingMethod: string | null;
-  termsNote: string | null;
-  source: string | null;
-  status: "live" | "expired" | "exercised" | "pending";
-};
+// `OptionTableItem` and the derivation now live in lib/options/from-stored-pnl.ts,
+// so the client portal's Options tab reads the same register off the same rules.
+// Re-exported because this module was where it lived.
+export type { OptionTableItem };
 
 type OptionFilterTab = "all" | "listed" | "unlisted" | "itm" | "gain" | "loss";
 
@@ -51,46 +27,6 @@ const money4 = (n: number) =>
 
 const fmtQty = (n: number) =>
   Math.round(n).toLocaleString("en-AU");
-
-/**
- * Parses expiry date and calculates days-to-expiry from date or security name.
- */
-function parseExpiry(
-  dateStr?: string | null,
-  companyName?: string | null,
-): { date: string | null; dte: number | null } {
-  if (dateStr) {
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-      const now = new Date();
-      const diffDays = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      return { date: dateStr, dte: diffDays };
-    }
-  }
-
-  if (companyName) {
-    const match = companyName.match(/OPTION\s+(\d{1,2})-([A-Za-z]{3})-(\d{2,4})/i);
-    if (match) {
-      const day = parseInt(match[1], 10);
-      const monStr = match[2].toUpperCase();
-      let year = parseInt(match[3], 10);
-      if (year < 100) year += 2000;
-      const months: Record<string, number> = {
-        JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
-        JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11,
-      };
-      if (monStr in months) {
-        const d = new Date(year, months[monStr], day);
-        const now = new Date();
-        const diffDays = Math.round((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        const formatted = `${year}-${String(months[monStr] + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-        return { date: formatted, dte: diffDays };
-      }
-    }
-  }
-
-  return { date: null, dte: null };
-}
 
 /**
  * Identify internal broker / suspense / house accounts
@@ -145,144 +81,12 @@ export function StaffOptionsClient({
   const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
   const accountMap = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
 
-  // Build unified options list across all accounts
-  const allOptionItems: OptionTableItem[] = useMemo(() => {
-    const items: OptionTableItem[] = [];
-    const seenKeys = new Set<string>();
-
-    // 1. Options from stored P&L (both listed & unlisted option models)
-    for (const r of storedPnl) {
-      const isOption = Boolean(
-        r.isOption ||
-        r.isUnlistedOption ||
-        r.ticker.endsWith("-UO") ||
-        (r.instrument && r.instrument.toLowerCase().includes("option"))
-      );
-      if (!isOption) continue;
-
-      const isUnlisted = Boolean(r.isUnlistedOption || r.ticker.endsWith("-UO"));
-      const key = `${r.accountId}:${r.ticker}`;
-      seenKeys.add(key);
-
-      const quantity =
-        r.buyQty > 0
-          ? r.buyQty
-          : r.sellQty > 0
-          ? r.sellQty
-          : r.openQty !== 0
-          ? Math.abs(r.openQty)
-          : 0;
-
-      // Terms are carried only by the MODELLED grants — they were the inputs to
-      // that row's price. A listed series is quoted and traded on its own
-      // market, so its Current Value is already the answer; a strike and an
-      // intrinsic figure struck off the underlying would be a second, unrelated
-      // number sitting beside it claiming to describe the same row.
-      const uo = r.unlistedOption;
-      const strike = uo?.strike ?? null;
-      const underlyingPrice = uo?.spot ?? null;
-      const { date: expiryDate, dte } = parseExpiry(uo?.expiry ?? null, r.company);
-      const pricingMethod = uo?.pricingMethod
-        ? uo.pricingMethod === "black-scholes"
-          ? "Black-Scholes model"
-          : "Intrinsic value"
-        : isUnlisted
-        ? "Modelled grant"
-        : "Listed feed";
-
-      const termsNote =
-        uo?.raw ||
-        r.comment ||
-        (isUnlisted
-          ? "Free unlisted placement options"
-          : r.company || "Exchange traded listed options");
-
-      items.push({
-        id: `pnl-${key}`,
-        accountId: r.accountId,
-        clientId: r.clientId,
-        ticker: r.ticker,
-        parentTicker: r.parentTicker,
-        company: r.company || r.ticker,
-        isUnlisted,
-        isListed: !isUnlisted,
-        quantity,
-        costBasis: r.buyPrice,
-        marketValue: r.sellPrice,
-        pnl: r.pnl,
-        strike,
-        underlyingPrice,
-        // Placement grants are calls by construction.
-        money: isUnlisted
-          ? moneynessOf({ spot: underlyingPrice, strike, qty: quantity, kind: "Call" })
-          : UNKNOWN_MONEYNESS,
-        expiryDate,
-        dte,
-        pricingMethod,
-        termsNote,
-        source: isUnlisted ? "Placement grant" : "Broker feed",
-        status: "live",
-      });
-    }
-
-    // 2. Options from option_holdings table
-    for (const o of optionHoldings) {
-      const acctId = o.accountId || "";
-      const key = `${acctId}:${o.code}`;
-      if (seenKeys.has(key)) continue;
-
-      const isUnlisted = !o.listed;
-      const { date: expiryDate, dte } = parseExpiry(o.expiryDate, o.name);
-
-      const statusMap: Record<string, "live" | "expired" | "exercised" | "pending"> = {
-        open: "live",
-        expired: "expired",
-        exercised: "exercised",
-        pending: "pending",
-      };
-
-      // These rows have no stored valuation behind them — the register is all
-      // there is — so exercise value IS the value reported, for listed and
-      // unlisted alike. Taken from the shared helper rather than open-coded,
-      // which is what had a registered PUT reading as worthless whenever it was
-      // in the money.
-      const money = moneynessOf({
-        spot: o.under,
-        strike: o.strike,
-        qty: o.qty,
-        kind: o.type,
-      });
-
-      items.push({
-        id: `opt-${o.id}`,
-        accountId: acctId,
-        clientId: o.clientId,
-        ticker: o.code,
-        parentTicker: o.code.replace(/O[A-Z]?$/, ""),
-        company: o.name || o.code,
-        isUnlisted,
-        isListed: o.listed,
-        quantity: o.qty,
-        costBasis: 0,
-        marketValue: money.intrinsicValue,
-        pnl: money.intrinsicValue,
-        // Reported only for the unlisted grants, matching the stored-P&L rows
-        // above — one rule for the whole table, so a listed series never shows
-        // a strike on one screen and a dash on the other.
-        strike: isUnlisted ? o.strike : null,
-        underlyingPrice: isUnlisted ? o.under : null,
-        money: isUnlisted ? money : UNKNOWN_MONEYNESS,
-        expiryDate,
-        dte,
-        pricingMethod: o.listed ? "Listed feed" : "Manual registry",
-        termsNote: o.source || (o.listed ? "Listed option series" : "Unlisted placement option"),
-        source: o.source || (o.listed ? "Broker feed" : "Manual register"),
-        status: statusMap[o.status] || "live",
-      });
-    }
-
-    return items;
-  }, [storedPnl, optionHoldings]);
+  // One register, derived by the same rules the client portal uses — see
+  // lib/options/from-stored-pnl.ts for why that had to stop being two.
+  const allOptionItems: OptionTableItem[] = useMemo(
+    () => optionsFromSources(storedPnl, optionHoldings),
+    [storedPnl, optionHoldings],
+  );
 
   // Count options per account
   const optionsCountByAccount = useMemo(() => {
