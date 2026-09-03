@@ -29,6 +29,12 @@ import { graphCaller } from "@/lib/placements/tracker-writer";
  * duplicating. `?days=N` widens the window for a manual backfill; the default is
  * deliberately small because each date costs the upstream a market-data lookup
  * per ticker and possibly an LLM call.
+ *
+ * `?tracker=N` raises how many owed tabs one run will attempt. The default is 2
+ * because a tab is minutes of Graph calls against a 13 MB workbook and this route
+ * has 60 seconds — but nothing is lost to a run that is killed part-way, since
+ * each deal is marked as it settles and the rest stay queued. Raise it only for a
+ * catch-up somebody is watching.
  */
 
 export const dynamic = "force-dynamic";
@@ -46,11 +52,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
-  const days = Number(new URL(request.url).searchParams.get("days")) || undefined;
+  const params = new URL(request.url).searchParams;
+  const days = Number(params.get("days")) || undefined;
+  // How many owed tabs this run may attempt. The default is small because a tab
+  // is minutes of Graph calls and this route has 60 seconds; raise it by hand for
+  // a catch-up run that is being watched.
+  const trackerLimit = Number(params.get("tracker")) || undefined;
 
   // The same ingest the mail webhook runs — see `ingest-run.ts` for why it is one
   // function rather than two that drift.
-  const { ok: ingestOk, candidates, tracker } = await runPlacementIngest({ days });
+  const { ok: ingestOk, candidates, tracker } = await runPlacementIngest({ days, trackerLimit });
 
   // Keeping the Graph mail subscription alive rides along here rather than on a
   // cron of its own. A mail subscription expires after ~3 days whatever happens,
@@ -65,8 +76,11 @@ export async function GET(request: Request) {
   // ("could not reach the feed" must not read as "no new deals").
   //
   // One deal failing is different and stays a 200: it is reported, and the next
-  // run retries it, because the candidate is stored and the workbook check will
-  // still say it is missing.
+  // run retries it, because the deal stays owed a tab until it has one
+  // (`tracker_written_at IS NULL`). That retry was a claim this comment made and
+  // the code did not honour until 3 September 2026 — the write only ever looked
+  // at candidates the SAME run had stored, so a failure was permanent and the
+  // desk built the tabs by hand. `tracker-state.ts` is why it is now true.
   //
   // A subscription that cannot be established fails the run too. Without it the
   // instant path is dead and only this hourly job is left — which still works, and

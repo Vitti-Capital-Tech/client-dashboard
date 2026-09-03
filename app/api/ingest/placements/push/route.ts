@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { storeCandidates, type CandidateFeedItem } from "@/lib/placements/candidates";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { writeFreshDealsToTracker } from "@/lib/placements/ingest-run";
+import { writeOwedDealsToTracker } from "@/lib/placements/ingest-run";
 
 /**
  * The instant path: upstream hands us a deal the moment it classifies one.
@@ -23,9 +23,13 @@ import { writeFreshDealsToTracker } from "@/lib/placements/ingest-run";
  * This does NOT replace the scheduled sync, and the cron entry stays. A webhook
  * that fails is silent by nature — the sender is not watching, and a deal that
  * was pushed once and dropped is gone. The schedule is the backstop that finds
- * it later, and because both paths share `storeCandidates` they agree about
- * what "new" means: a deal the push already stored is not fresh to the cron, so
- * the tracker does not grow a second tab for it.
+ * it later, and because both paths share `storeCandidates` they agree about what
+ * "new" means, so the desk's inbox does not grow the same deal twice.
+ *
+ * The tracker is a queue rather than a consequence of either path (see
+ * `tracker-state.ts`): whichever door a deal comes through, it is owed a tab
+ * until it has one, and the duplicate guard — ticker AND issue date, re-read off
+ * the Overview immediately before the write — is what stops a second one.
  *
  * ── Shape ────────────────────────────────────────────────────────────────────
  * The body is what `GET /api/placements/{date}` already returns for one deal —
@@ -98,9 +102,12 @@ export async function POST(request: Request) {
   // inbox is the thing that must not lose a deal. A tracker that cannot be
   // written is recoverable from a stored candidate; the reverse is not.
   const db = createAdminClient();
-  const { seen, fresh, freshItems } = await storeCandidates(items, { db });
+  const { seen, fresh } = await storeCandidates(items, { db });
 
-  const tracker = await writeFreshDealsToTracker(freshItems);
+  // The queue, not this request's own arrivals. A push that stores a deal and
+  // then fails to write its tab used to leave that deal unwritable forever,
+  // because the hourly sweep only ever looked at what IT had just stored.
+  const tracker = await writeOwedDealsToTracker({ db });
   const ok = tracker?.ok !== false;
 
   return NextResponse.json(

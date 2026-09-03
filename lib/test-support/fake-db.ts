@@ -76,6 +76,19 @@ class FakeBuilder {
     return this;
   }
 
+  /**
+   * `is(col, null)` — SQL's IS NULL, which `eq` cannot express.
+   *
+   * A column the seed row simply does not carry counts as null, the way a real
+   * table's default does: the tracker queue asks for `tracker_written_at IS NULL`
+   * and a fixture written before that column existed must read as owed, not as
+   * invisible.
+   */
+  is(col: string, val: null | boolean) {
+    this.filters.push((r) => (val === null ? (r[col] ?? null) === null : r[col] === val));
+    return this;
+  }
+
   /** Real ordering, because callers use it to pick "the latest" row. */
   order(col?: string, opts?: { ascending?: boolean }) {
     if (col) this.sortBy = { col, ascending: opts?.ascending !== false };

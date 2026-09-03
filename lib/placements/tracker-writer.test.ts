@@ -1060,12 +1060,118 @@ test("tracker sync: a missing permission is reported once, not once per deal", (
   });
 });
 
-test("tracker sync: nothing fresh means nothing is touched", async () => {
+test("tracker sync: nothing owed means nothing is touched", async () => {
   const graph: GraphCall = async () => {
     throw new Error("the tracker must not be opened for an empty run");
   };
   const report = await syncTrackerRows([], { graph, target: async () => target });
   assert.deepEqual(report, { ok: true, written: [], skipped: 0, failed: [], notes: [] });
+});
+
+/* ---------------------------------------------------------------- */
+/* Reporting each deal as it settles                                 */
+/* ---------------------------------------------------------------- */
+
+test("tracker sync: each deal is reported the moment it settles, not at the end", async () => {
+  // This is what makes a killed invocation survivable, and it is the exact shape
+  // of the 3 September 2026 failure: the run created FBR's tab and died before it
+  // reached NGY. A caller told only at the end keeps nothing; a caller told per
+  // deal keeps the tab that landed and re-queues the one that did not.
+  const { graph } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
+
+  const order: string[] = [];
+  await syncTrackerRows([{ ...CANDIDATE, ticker: "NGY" }, { ...CANDIDATE, ticker: "FBR" }], {
+    graph,
+    target: async () => target,
+    onSettled: async (item, outcome) => {
+      order.push(`settled:${item.ticker}:${outcome.state}`);
+    },
+  });
+
+  // Interleaved with the writes, in queue order — NGY is recorded before FBR is
+  // begun, so a death between the two loses only the one not yet attempted.
+  assert.deepEqual(order, ["settled:NGY:written", "settled:FBR:written"]);
+});
+
+test("tracker sync: the outcome carries the tab's name, so the queue can record it", async () => {
+  const { graph } = fakeGraph({ sheets: ["Template", "PGF"], overview: OVERVIEW });
+
+  const seen: unknown[] = [];
+  await syncTrackerRows([CANDIDATE], {
+    graph,
+    target: async () => target,
+    onSettled: async (_item, outcome) => void seen.push(outcome),
+  });
+
+  // `PGF` is taken, so the repeat issuer's tab is `PGF (b)` — and that, not the
+  // ticker, is what the row has to remember.
+  assert.deepEqual(seen, [{ state: "written", sheet: "PGF (b)" }]);
+});
+
+test("tracker sync: a deal already on the Overview settles as skipped, which is filed", async () => {
+  // Filed, but not by us. A caller keeping a queue must stop owing it — leaving
+  // it owed would mean re-reading the workbook for it every hour forever.
+  const { graph } = fakeGraph({
+    sheets: ["Template", "PGF"],
+    overview: [[57, "PGF", serial("2026-08-11")]],
+  });
+
+  const seen: unknown[] = [];
+  await syncTrackerRows([CANDIDATE], {
+    graph,
+    target: async () => target,
+    onSettled: async (_item, outcome) => void seen.push(outcome),
+  });
+
+  assert.deepEqual(seen, [{ state: "skipped" }]);
+});
+
+test("tracker sync: a blocked run settles every deal as failed, so none is lost", async () => {
+  // A missing permission stops the run after the first deal, and the rest are
+  // deliberately not attempted. They still have to be reported: a deal nobody
+  // reports is a deal nobody retries.
+  const graph: GraphCall = async (path, init = {}) => {
+    if ((init.method ?? "GET") === "GET") {
+      if (path.includes("/worksheets?")) {
+        return { ok: true, status: 200, body: { value: [{ name: "Template" }] } };
+      }
+      if (path.includes("usedRange")) {
+        return { ok: true, status: 200, body: { address: "Template!A1:P30", formulas: [["x"]] } };
+      }
+      return { ok: true, status: 200, body: { values: [["", "", ""]] } };
+    }
+    return { ok: false, status: 403, body: { error: { message: "no edit access" } } };
+  };
+
+  const states: string[] = [];
+  await syncTrackerRows([CANDIDATE, { ...CANDIDATE, ticker: "KNI" }], {
+    graph,
+    target: async () => target,
+    onSettled: async (item, outcome) => {
+      states.push(`${item.ticker}:${outcome.state}`);
+    },
+  });
+
+  assert.deepEqual(states, ["pgf:failed", "KNI:failed"]);
+});
+
+test("tracker sync: a queue that cannot be updated is a note, not an abandoned batch", async () => {
+  // The tab is already in the workbook by the time this is called. Throwing here
+  // would trade one redundant duplicate check on the next run for the rest of
+  // the batch going unwritten.
+  const { graph } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
+
+  const report = await syncTrackerRows([CANDIDATE, { ...CANDIDATE, ticker: "KNI" }], {
+    graph,
+    target: async () => target,
+    onSettled: async () => {
+      throw new Error("database unreachable");
+    },
+  });
+
+  assert.equal(report.written.length, 2, "both tabs were still written");
+  assert.ok(report.notes.some((n) => /recording that failed/.test(n)));
+  assert.ok(report.notes.some((n) => /database unreachable/.test(n)));
 });
 
 function toRow(r: (string | number)[]) {

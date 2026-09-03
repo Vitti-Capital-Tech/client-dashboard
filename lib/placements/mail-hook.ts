@@ -23,6 +23,28 @@ import type { GraphCall } from "./tracker-writer.ts";
  * within seconds, we pull the deal, and the upstream is not asked to do anything
  * it was not already doing.
  *
+ * ── But the mail can outrun the feed, and once it did by 40 minutes ──────────
+ * Those three are same-second, and most are. They are not a guarantee. Sending
+ * the approval mail and listing the deal on `GET /api/placements/{date}` are two
+ * separate acts upstream, and on 3 September 2026 they came apart: NGY's mail
+ * went out at 23:25 UTC and the feed had not yet created the `2026-09-03` date
+ * bucket that deal belongs in — the upstream files by SYDNEY date, and 23:25 UTC
+ * is 09:25 the next morning there. The webhook fired, matched the subject, read
+ * the feed and found nothing new. So did the 00:00 sweep. The deal only appeared
+ * when the NEXT mail (FBR, 00:06:40) triggered a run at 00:07, by which time the
+ * bucket existed with both deals in it.
+ *
+ * Two consequences, both handled rather than assumed away:
+ *
+ *   • the ingest reads two dates, not one, so a bucket that is not the newest is
+ *     still read — see the route
+ *   • the tracker write is a queue keyed on `tracker_written_at`, not on which
+ *     run first saw a deal, so whichever run finally sees it still gets the tab
+ *     written — see `tracker-state.ts`
+ *
+ * The webhook is therefore a latency optimisation with a real floor, and the
+ * hourly schedule is load-bearing rather than decorative.
+ *
  * ── Sent Items, not the Inbox ────────────────────────────────────────────────
  * The broker's own mail lands in the Inbox ~2 minutes EARLIER (NMD at 04:16), and
  * that is the tempting trigger because it is faster. It is also too early: the

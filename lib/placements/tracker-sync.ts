@@ -19,10 +19,18 @@ import type { CandidateFeedItem } from "./candidates.ts";
  * dismissed, because by then a person may have typed into it. That is the trade
  * for never having to remember to press a button.
  *
- * ── Only what arrived ────────────────────────────────────────────────────────
- * Fresh candidates only, and the workbook is checked again before each write.
- * The cron re-reads the same dates every run, so without both guards the tracker
- * would grow a tab per deal per run.
+ * ── What is offered here, and what stops a second tab ───────────────────────
+ * The caller offers the deals still OWED a tab — `tracker_written_at IS NULL`,
+ * see `tracker-state.ts` — not the ones a particular run happened to see first.
+ * Keying it on freshness is what made a failed write unrecoverable, because a
+ * candidate is fresh exactly once and the hourly sweep then had nothing to
+ * retry.
+ *
+ * So the duplicate guard is the only thing standing between the cron and a tab
+ * per deal per run, and it is the right one for the job: `writeDealToTracker`
+ * re-reads the Overview by ticker AND issue date immediately before touching the
+ * workbook. That holds however the queue got into the state it is in — a run
+ * killed half way, a mark that never got recorded, a tab somebody built by hand.
  */
 
 export type TrackerSyncReport = {
@@ -34,12 +42,34 @@ export type TrackerSyncReport = {
   notes: string[];
 };
 
-export type TrackerSyncDeps = {
+/**
+ * What became of one deal, reported the moment it settles.
+ *
+ * `skipped` is the duplicate guard finding the deal already on the Overview —
+ * which for a caller keeping a queue means the same thing as written: it is in
+ * the workbook, stop owing it.
+ */
+export type TrackerOutcome =
+  | { state: "written"; sheet: string }
+  | { state: "skipped" }
+  | { state: "failed"; error: string };
+
+export type TrackerSyncDeps<T extends CandidateFeedItem = CandidateFeedItem> = {
   graph: GraphCall;
   /** Resolves the workbook for a year — one file per year. */
   target: (year: number) => Promise<TrackerTarget | null>;
   /** Deals older than this are not written. Defaults to the current year. */
   years?: number[];
+  /**
+   * Called as each deal settles, before the next one is started.
+   *
+   * Per-deal and immediate, not once at the end with the report, because the
+   * thing this run has to survive is being KILLED half way — which is exactly
+   * what happened on 3 September 2026. A caller that records outcomes here keeps
+   * every tab this run managed to write even if the invocation never returns; a
+   * caller handed the finished report keeps nothing.
+   */
+  onSettled?: (item: T, outcome: TrackerOutcome) => Promise<void>;
 };
 
 /** The mail item, read into the shape a tracker tab wants. */
@@ -67,12 +97,33 @@ function isoDay(value: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
-export async function syncTrackerRows(
-  items: CandidateFeedItem[],
-  deps: TrackerSyncDeps,
+export async function syncTrackerRows<T extends CandidateFeedItem>(
+  items: T[],
+  deps: TrackerSyncDeps<T>,
 ): Promise<TrackerSyncReport> {
   const report: TrackerSyncReport = { ok: true, written: [], skipped: 0, failed: [], notes: [] };
   if (items.length === 0) return report;
+
+  /**
+   * Tell the caller how one deal ended, without letting that reporting break
+   * the run.
+   *
+   * A queue that cannot be updated is worth a note and nothing more: the tab is
+   * already in the workbook, and the only cost of a lost mark is that the next
+   * run offers the deal again — where the duplicate guard reads the Overview and
+   * skips it. Throwing here would trade a redundant check for an abandoned batch.
+   */
+  const settled = async (item: T, outcome: TrackerOutcome) => {
+    if (!deps.onSettled) return;
+    try {
+      await deps.onSettled(item, outcome);
+    } catch (err) {
+      report.notes.push(
+        `${item.ticker}: the write was ${outcome.state} but recording that failed — ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
 
   // One workbook per year, resolved once and reused — resolving it is two Graph
   // calls, and a morning's mail is nearly always the same year.
@@ -92,6 +143,7 @@ export async function syncTrackerRows(
   for (const item of items) {
     if (blocked) {
       report.failed.push({ ticker: item.ticker, error: blocked });
+      await settled(item, { state: "failed", error: blocked });
       continue;
     }
 
@@ -100,10 +152,15 @@ export async function syncTrackerRows(
 
     const year = Number(deal.issueDate?.slice(0, 4));
     if (!Number.isFinite(year)) {
-      report.failed.push({ ticker: deal.ticker, error: "No date to file this deal under." });
+      const error = "No date to file this deal under.";
+      report.failed.push({ ticker: deal.ticker, error });
+      await settled(item, { state: "failed", error });
       continue;
     }
     if (deps.years && !deps.years.includes(year)) {
+      // Deliberately NOT settled: this run declined to file the deal, which is
+      // not the same as the workbook having it. Nothing in production passes
+      // `years`, so nothing is left owed by this in practice.
       report.skipped++;
       continue;
     }
@@ -113,6 +170,7 @@ export async function syncTrackerRows(
       report.ok = false;
       blocked = `No Placement Tracker workbook configured with a "${year} Overview" sheet.`;
       report.failed.push({ ticker: deal.ticker, error: blocked });
+      await settled(item, { state: "failed", error: blocked });
       continue;
     }
 
@@ -120,6 +178,7 @@ export async function syncTrackerRows(
 
     if (res.ok && res.skipped) {
       report.skipped++;
+      await settled(item, { state: "skipped" });
     } else if (res.ok && res.sheet) {
       report.written.push({ ticker: deal.ticker, sheet: res.sheet, row: res.overviewRow ?? 0 });
       if (res.via === "replay") replayed++;
@@ -127,9 +186,11 @@ export async function syncTrackerRows(
       // The deal IS filed, so these belong in the run's notes rather than
       // anywhere that reads as a failure.
       if (res.notes?.length) report.notes.push(...res.notes);
+      await settled(item, { state: "written", sheet: res.sheet });
     } else {
       const error = [res.error, res.hint].filter(Boolean).join(" ");
       report.failed.push({ ticker: deal.ticker, error });
+      await settled(item, { state: "failed", error });
       // A missing permission will not fix itself between two deals in one run.
       if (res.hint?.includes("ReadWrite")) {
         report.ok = false;

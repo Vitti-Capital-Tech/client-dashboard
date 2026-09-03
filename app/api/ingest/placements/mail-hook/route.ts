@@ -104,15 +104,43 @@ export async function POST(request: Request) {
         return;
       }
 
-      // One ingest however many announcements arrived together: the sync reads the
-      // upstream's newest date and picks up everything on it, so running it per
-      // message would be the same work several times.
-      const result = await runPlacementIngest({ days: 1 });
+      // One ingest however many announcements arrived together: the sync reads a
+      // couple of the upstream's newest dates and picks up everything on them, so
+      // running it per message would be the same work several times.
+      //
+      // `days` is deliberately NOT narrowed to 1 here any more. The upstream
+      // files a deal under its SYDNEY date, so a mail that arrives before 10am
+      // there belongs to a date bucket that is not the newest one the feed lists,
+      // and a one-date read walks straight past it. Two dates is what the
+      // schedule already reads and it costs one extra feed call.
+      const result = await runPlacementIngest();
+
+      // A matching subject with nothing new behind it is its own event, and it
+      // needs saying rather than reading as a quiet success. The upstream sends
+      // the approval mail and lists the deal in its feed as two separate acts,
+      // and on 3 September 2026 they were 40 minutes apart: NGY's mail went out
+      // at 23:25 UTC while the feed had not yet created the date bucket holding
+      // it, so this run — and the 00:00 sweep after it — could not see the deal
+      // the notification was about.
+      //
+      // Nothing is lost when it happens: the deal is picked up by the next run
+      // that can see it, and the tracker queue then owes it a tab regardless of
+      // which run stored it. But it is the difference between "no new deals" and
+      // "the mail beat the feed", and those must not log the same way.
+      if (result.candidates.fresh === 0) {
+        console.warn(
+          "mail-hook: %s matched, but the feed lists nothing new yet (read %j) — " +
+            "the mail has outrun the upstream; the schedule will pick it up",
+          relevant[0]?.slice(0, 60),
+          result.candidates.dates,
+        );
+      }
+
       console.info(
         "mail-hook: %s -> %d new candidate(s), tracker %j",
         relevant[0]?.slice(0, 60),
         result.candidates.fresh,
-        result.tracker?.notes ?? "not run",
+        result.tracker?.notes ?? "nothing owed a tab",
       );
     } catch (err) {
       // Nothing is listening for a throw here — Graph already has its 202 — so an
