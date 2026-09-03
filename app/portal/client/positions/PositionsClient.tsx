@@ -1,9 +1,21 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Position, SignalRow } from "@/lib/data/queries";
-import { posValue, posCost, posPL } from "@/lib/data/compute";
+import type {
+  Position,
+  SignalRow,
+  SecurityCommentaryRow,
+} from "@/lib/data/queries";
+import {
+  posValue,
+  posCost,
+  posPL,
+  realizedBetween,
+  monthsBack,
+} from "@/lib/data/compute";
+import type { SellAttribution } from "@/lib/import/trades";
 import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+import { sectorMix, type SectorScope } from "@/lib/pnl/sector-mix";
 import { TablePagination } from "@/app/components/TablePagination";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
@@ -23,8 +35,31 @@ const returnPct = (pl: number, cost: number): number | null =>
 
 const pct1 = (n: number | null) => (n === null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`);
 
-// Reusable Donut Chart Component
-const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v: number; col: string }[]; size?: number; thick?: number }) => {
+/**
+ * Reusable donut / pie.
+ *
+ * `thick = size / 2` takes the inner radius to zero, so the same component
+ * draws both and the cards on a row stay visually of a piece.
+ *
+ * `onHover` is optional. Where it is given, each slice becomes focusable and
+ * reports itself on pointer AND on keyboard focus — a chart whose figures are
+ * only reachable with a mouse simply has no figures for anyone using a
+ * keyboard, and on a touch screen "hover" never happens at all, which is why
+ * the caller also renders the same numbers in the legend.
+ */
+const DonutChart = ({
+  segs,
+  size = 128,
+  thick = 18,
+  onHover,
+  activeLabel,
+}: {
+  segs: { label: string; v: number; col: string }[];
+  size?: number;
+  thick?: number;
+  onHover?: (label: string | null) => void;
+  activeLabel?: string | null;
+}) => {
   const r = (size - thick) / 2;
   const cx = size / 2;
   const cy = size / 2;
@@ -40,25 +75,64 @@ const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v
     return { ...s, len, offset };
   });
 
+  const interactive = Boolean(onHover);
+
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      {segsWithOffsets.map((s, idx) => (
-        <circle
-          key={idx}
-          cx={cx}
-          cy={cy}
-          r={r}
-          fill="none"
-          stroke={s.col}
-          strokeWidth={thick}
-          strokeDasharray={`${s.len} ${C - s.len}`}
-          strokeDashoffset={-s.offset}
-          transform={`rotate(-90 ${cx} ${cy})`}
-        />
-      ))}
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      onMouseLeave={onHover ? () => onHover(null) : undefined}
+      role={interactive ? "group" : undefined}
+    >
+      {segsWithOffsets.map((s, idx) => {
+        const dimmed = interactive && activeLabel !== null && activeLabel !== s.label;
+        return (
+          <circle
+            key={idx}
+            cx={cx}
+            cy={cy}
+            r={r}
+            fill="none"
+            stroke={s.col}
+            strokeWidth={thick}
+            strokeDasharray={`${s.len} ${C - s.len}`}
+            strokeDashoffset={-s.offset}
+            transform={`rotate(-90 ${cx} ${cy})`}
+            opacity={dimmed ? 0.32 : 1}
+            style={
+              interactive
+                ? { cursor: "pointer", transition: "opacity 120ms" }
+                : undefined
+            }
+            tabIndex={interactive ? 0 : undefined}
+            onMouseEnter={onHover ? () => onHover(s.label) : undefined}
+            onFocus={onHover ? () => onHover(s.label) : undefined}
+            onBlur={onHover ? () => onHover(null) : undefined}
+          >
+            {/* A native tooltip as the floor: it works before any JS runs and
+                on platforms where the hover state never fires. */}
+            {interactive && <title>{s.label}</title>}
+          </circle>
+        );
+      })}
     </svg>
   );
 };
+
+/**
+ * Slice colours. Ordered so the first few are the most distinguishable from one
+ * another, since most portfolios only fill three or four sectors.
+ */
+const palette = ["#1d202f", "#36bb91", "#c98a2b", "#5c5775", "#1f8e6b", "#9aa0b4", "#b8543f", "#4a7fb5"];
+
+/** The presets, in the order they read: shortest window first. */
+const RANGE_PRESETS: { label: string; months: number }[] = [
+  { label: "3M", months: 3 },
+  { label: "6M", months: 6 },
+  { label: "1Y", months: 12 },
+  { label: "3Y", months: 36 },
+];
 
 export function PositionsClient({
   positions,
@@ -66,6 +140,9 @@ export function PositionsClient({
   unlisted,
   signals,
   portfolio,
+  sells,
+  sectorByTicker,
+  commentary,
 }: {
   positions: Position[];
   cash: number;
@@ -73,6 +150,25 @@ export function PositionsClient({
   signals: Record<string, SignalRow>;
   /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
   portfolio: ClientPortfolio;
+  /**
+   * Every sale, with the date its money was realised on, replayed on the server
+   * through the importer's own cost-basis walk. What the date range is taken
+   * over.
+   */
+  sells: SellAttribution[];
+  /**
+   * Ticker → sector, with a derivative already resolved to its ordinary's
+   * sector by the caller. Passed in because the lookup needs `securities`,
+   * which is server-only, and the chart re-buckets in the browser as its scope
+   * toggles.
+   */
+  sectorByTicker: Record<string, string | null>;
+  /**
+   * This week's note per security, in both framings. Which one a holder is
+   * shown depends on the sign of their own P&L on that holding — the note is
+   * one market read, not two opinions.
+   */
+  commentary: Record<string, SecurityCommentaryRow>;
 }) {
   const [tab, setTab] = useState<"holdings" | "pnl" | "analytics">("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
@@ -86,6 +182,115 @@ export function PositionsClient({
   const [pnlSearch, setPnlSearch] = useState("");
   const [pnlPage, setPnlPage] = useState(1);
   const [pnlSize, setPnlSize] = useState(25);
+
+  /**
+   * The realised-P&L window.
+   *
+   * `to` defaults to the last day anything was actually sold rather than to
+   * today. An account whose last sale was in June would otherwise open on a
+   * range ending today, and every preset inside it would read $0 — a screen
+   * that looks broken to the one client it matters most to. Where there are no
+   * sales at all the card says so instead of drawing a picker over nothing.
+   */
+  const lastSaleDate = useMemo(
+    () => sells.reduce((latest, s) => (s.tradeDate > latest ? s.tradeDate : latest), ""),
+    [sells],
+  );
+  const firstSaleDate = useMemo(
+    () =>
+      sells.reduce(
+        (earliest, s) => (!earliest || s.tradeDate < earliest ? s.tradeDate : earliest),
+        "",
+      ),
+    [sells],
+  );
+
+  const defaultRange = useMemo(
+    () => (lastSaleDate ? monthsBack(lastSaleDate, 12) : { from: "", to: "" }),
+    [lastSaleDate],
+  );
+  const [rangeFrom, setRangeFrom] = useState(defaultRange.from);
+  const [rangeTo, setRangeTo] = useState(defaultRange.to);
+
+  const deltaByTicker = useMemo(
+    () => new Map(portfolio.overrideDeltas),
+    [portfolio.overrideDeltas],
+  );
+  const window_ = useMemo(
+    () =>
+      rangeFrom && rangeTo
+        ? realizedBetween(sells, rangeFrom, rangeTo, deltaByTicker)
+        : null,
+    [sells, rangeFrom, rangeTo, deltaByTicker],
+  );
+
+  /** Which preset, if any, the current range corresponds to — for the pills. */
+  const activePreset = useMemo(() => {
+    if (!lastSaleDate || rangeTo !== lastSaleDate) return null;
+    return (
+      RANGE_PRESETS.find((p) => monthsBack(lastSaleDate, p.months).from === rangeFrom)
+        ?.label ?? null
+    );
+  }, [lastSaleDate, rangeFrom, rangeTo]);
+
+  const applyPreset = (months: number) => {
+    if (!lastSaleDate) return;
+    const { from, to } = monthsBack(lastSaleDate, months);
+    setRangeFrom(from);
+    setRangeTo(to);
+  };
+
+  const applyAllTime = () => {
+    if (!firstSaleDate || !lastSaleDate) return;
+    setRangeFrom(firstSaleDate);
+    setRangeTo(lastSaleDate);
+  };
+
+  // ── Sector chart: which holdings, and which slice is being pointed at ──────
+  const [sectorScope, setSectorScope] = useState<SectorScope>("held");
+  const [hoveredSector, setHoveredSector] = useState<string | null>(null);
+
+  /**
+   * Today's market value for a still-held row, by ticker.
+   *
+   * The P&L rows are the source of truth for cost and result, but they carry no
+   * live price; `positions` does. Summed rather than looked up, because a client
+   * can hold the same security in more than one account and the P&L rows are
+   * already rolled up across them.
+   */
+  const marketValueByTicker = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const p of positions) {
+      map.set(p.code, (map.get(p.code) ?? 0) + posValue(p));
+    }
+    return map;
+  }, [positions]);
+
+  const mix = useMemo(
+    () =>
+      sectorMix(
+        portfolio.rows,
+        sectorScope,
+        (ticker) => sectorByTicker[ticker] ?? null,
+        (ticker) => marketValueByTicker.get(ticker) ?? null,
+      ),
+    [portfolio.rows, sectorScope, sectorByTicker, marketValueByTicker],
+  );
+
+  const sectorSegs = useMemo(
+    () =>
+      mix.buckets.map((b, i) => ({
+        label: b.label,
+        v: b.value,
+        col: palette[i % palette.length],
+      })),
+    [mix.buckets],
+  );
+
+  /** The slice being pointed at, or the whole mix when nothing is. */
+  const focusedBucket = hoveredSector
+    ? mix.buckets.find((b) => b.label === hoveredSector) ?? null
+    : null;
 
   // Custom states for trade execution inside modal
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
@@ -179,6 +384,466 @@ export function PositionsClient({
       )
       .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
   }, [portfolio.rows, pnlSearch]);
+
+  /**
+   * Realised P&L over a date range.
+   *
+   * Captioned as REALISED throughout, and never as "your return over this
+   * period". A date range can only describe money that actually changed hands:
+   * unrealised P&L is a cost base against today's price, it belongs to no date,
+   * and there is no price history here to value a holding as at an earlier one.
+   * Labelling this as a period return would be the wrong number with no way for
+   * the client to tell.
+   */
+  const renderRealisedWindow = () => {
+    if (!lastSaleDate || !window_) {
+      return (
+        <div className="card bg-white border border-line rounded-[14px] shadow-shadow p-5">
+          <b className="text-sm font-semibold text-ink">Realised over a period</b>
+          <p className="text-xs text-mut mt-1.5 leading-relaxed">
+            Nothing has been sold from your accounts yet, so there is no realised profit to
+            show over a period. The table below covers everything you hold.
+          </p>
+        </div>
+      );
+    }
+
+    const pl = window_.realizedPl;
+    // A return needs something to divide by. Cost of what was sold is the right
+    // denominator for realised P&L — not the portfolio's value, which includes
+    // everything that was never sold in the window.
+    const pct =
+      window_.costOfSold > 0 && Number.isFinite(pl / window_.costOfSold)
+        ? (pl / window_.costOfSold) * 100
+        : null;
+
+    const dateStr = (iso: string) =>
+      new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      });
+
+    return (
+      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+        <div className="px-4.5 py-4 border-b border-line flex flex-wrap justify-between items-start gap-3">
+          <div className="select-none">
+            <b className="text-ink text-sm font-semibold">Realised over a period</b>
+            <p className="text-xs text-mut mt-0.5 leading-normal">
+              Profit on what was <b>sold</b> between these dates. Holdings you still own are
+              not in this figure.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            {RANGE_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                onClick={() => applyPreset(p.months)}
+                className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
+                  activePreset === p.label
+                    ? "bg-navy text-white"
+                    : "bg-paper-2 text-mut hover:text-ink"
+                }`}
+              >
+                {p.label}
+              </button>
+            ))}
+            <button
+              onClick={applyAllTime}
+              className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
+                rangeFrom === firstSaleDate && rangeTo === lastSaleDate
+                  ? "bg-navy text-white"
+                  : "bg-paper-2 text-mut hover:text-ink"
+              }`}
+            >
+              All
+            </button>
+          </div>
+        </div>
+
+        {/* The pickers. `min`/`max` are pinned to the sale history so the range
+            cannot be dragged somewhere there was never anything to realise. */}
+        <div className="px-4.5 py-3.5 border-b border-line flex flex-wrap items-end gap-3 bg-paper-2/40">
+          <div className="space-y-1">
+            <label htmlFor="pnl-from" className="block text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              From
+            </label>
+            <input
+              id="pnl-from"
+              type="date"
+              value={rangeFrom}
+              min={firstSaleDate}
+              max={lastSaleDate}
+              onChange={(e) => setRangeFrom(e.target.value)}
+              className="border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs font-mono focus:border-green focus:outline-none"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="pnl-to" className="block text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              To
+            </label>
+            <input
+              id="pnl-to"
+              type="date"
+              value={rangeTo}
+              min={firstSaleDate}
+              max={lastSaleDate}
+              onChange={(e) => setRangeTo(e.target.value)}
+              className="border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs font-mono focus:border-green focus:outline-none"
+            />
+          </div>
+          <p className="text-[11px] text-mut leading-normal flex-1 min-w-45">
+            Sales on file run {dateStr(firstSaleDate)} – {dateStr(lastSaleDate)}.
+          </p>
+        </div>
+
+        {/* Headline */}
+        <div className="px-4.5 py-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              Realised P&amp;L
+            </div>
+            <div
+              className={`font-mono font-bold text-xl mt-1 ${pl >= 0 ? "text-gain" : "text-loss-d"}`}
+            >
+              {pl >= 0 ? "+" : ""}
+              {money0(pl)}
+            </div>
+            <div className="text-[11px] text-mut mt-0.5">
+              {pct === null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% on cost`}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              Proceeds
+            </div>
+            <div className="font-mono font-semibold text-lg mt-1 text-ink">
+              {money0(window_.proceeds)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              Cost of sold
+            </div>
+            <div className="font-mono font-semibold text-lg mt-1 text-ink">
+              {money0(window_.costOfSold)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+              Sales
+            </div>
+            <div className="font-mono font-semibold text-lg mt-1 text-ink">
+              {window_.saleCount}
+            </div>
+          </div>
+        </div>
+
+        {/* Who moved it */}
+        {window_.contributors.length > 0 && (
+          <div className="overflow-x-auto border-t border-line">
+            <table className="w-full border-collapse text-left text-[12.5px] font-medium">
+              <thead>
+                <tr className="border-b border-line text-mut select-none">
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5">
+                    Holding
+                  </th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right hidden sm:table-cell">
+                    Units sold
+                  </th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right hidden md:table-cell">
+                    Cost
+                  </th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right">
+                    Proceeds
+                  </th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right">
+                    P&amp;L
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f0ede5]">
+                {window_.contributors.map((c) => (
+                  <tr key={c.parent} className="hover:bg-[#faf9f5]">
+                    <td className="px-4.5 py-3">
+                      <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">
+                        {c.parent}
+                      </span>
+                      {c.noCostBasis && (
+                        <div className="text-[10.5px] text-amber-d mt-1">
+                          cost base not on file
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-4.5 py-3 text-right font-mono hidden sm:table-cell">
+                      {qty0(c.units)}
+                    </td>
+                    <td className="px-4.5 py-3 text-right font-mono hidden md:table-cell">
+                      {money0(c.costOfSold)}
+                    </td>
+                    <td className="px-4.5 py-3 text-right font-mono">{money0(c.proceeds)}</td>
+                    <td
+                      className={`px-4.5 py-3 text-right font-mono font-semibold ${c.realizedPl >= 0 ? "text-gain" : "text-loss-d"}`}
+                    >
+                      {c.realizedPl >= 0 ? "+" : ""}
+                      {money0(c.realizedPl)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {window_.saleCount === 0 && (
+          <div className="px-4.5 py-6 text-center text-xs text-mut">
+            Nothing was sold between {dateStr(window_.from)} and {dateStr(window_.to)}.
+          </div>
+        )}
+
+        {/* Where profit has no cost behind it, the figure is overstated. Saying
+            so is the difference between a number and a misleading one. */}
+        {window_.hasUncosted && (
+          <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
+            Some of these sales have no purchase on file yet, so their profit is shown as the
+            full proceeds and this total is higher than the real result. Vitti is confirming
+            the cost base.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /**
+   * This week's note about one holding.
+   *
+   * ── Which of the two framings ───────────────────────────────────────────────
+   * Chosen by the sign of the client's own unrealised P&L on the position, which
+   * is the only thing that differs between two clients holding the same stock.
+   * The market read underneath is identical for both, deliberately — see the
+   * 20260904100000 migration.
+   *
+   * ── Labelled as general information, and dated ─────────────────────────────
+   * The note is written from market conditions and the client's own figures,
+   * not from their objectives or circumstances, so it is general information and
+   * says so. It is also stamped with the week it was written: a note that
+   * describes "this week" without saying which week is a note that quietly goes
+   * stale, and the reader has no way to tell.
+   */
+  const renderCommentary = (position: Position) => {
+    const note = commentary[position.code];
+    if (!note) return null;
+
+    const pl = posPL(position);
+    // Flat counts as ahead: the note for a holder who is level reads as "what
+    // to watch from here", which is right, where the loss framing would be
+    // explaining a fall that has not happened.
+    const text = pl < 0 ? note.lossNote : note.profitNote;
+
+    const weekLabel = new Date(`${note.weekOf}T00:00:00Z`).toLocaleDateString("en-AU", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+
+    return (
+      <div className="rounded-[10px] border border-line bg-paper-2/50 p-3.5 space-y-2">
+        <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <b className="text-[12.5px] font-semibold text-ink">
+            {pl < 0 ? "What has been weighing on this" : "Where this stands"}
+          </b>
+          <span className="text-[10px] font-mono text-mut whitespace-nowrap">
+            week to {weekLabel}
+          </span>
+        </div>
+
+        <p className="text-xs text-mut leading-relaxed">{text}</p>
+
+        {note.sources.length > 0 && (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 pt-0.5">
+            {/* A market claim nobody can check is not worth showing a client. */}
+            {note.sources.slice(0, 3).map((src) => (
+              <a
+                key={src.url}
+                href={src.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10.5px] text-mut underline decoration-dotted hover:text-ink truncate max-w-45"
+                title={src.title}
+              >
+                {src.title}
+              </a>
+            ))}
+          </div>
+        )}
+
+        <p className="text-[10px] text-mut-d leading-normal">
+          General information about the market, not personal advice. It does not take your
+          objectives or circumstances into account.
+          {note.editedBy ? ` Written by ${note.editedBy}.` : " Updated weekly."}
+        </p>
+      </div>
+    );
+  };
+
+  /**
+   * Sector split, over what is held now or over everything ever held.
+   *
+   * The two scopes are measured differently and the card says which: exposure
+   * today is a market value, while a sold parcel has no market value at all and
+   * only its cost base is still a fact about it. See lib/pnl/sector-mix.ts.
+   *
+   * P&L is on every legend row as well as on hover. A tooltip is not a place to
+   * keep a number: it is unreachable on a touch screen, and this is the figure
+   * the chart exists to show.
+   */
+  const renderSectorCard = () => {
+    const measure = sectorScope === "held" ? "market value" : "amount invested";
+
+    return (
+      <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow flex flex-col">
+        <div className="flex justify-between items-start text-xs mb-3 gap-2 flex-wrap">
+          <div>
+            <b className="text-sm font-semibold text-ink">Sector split</b>
+            <div className="text-[11px] text-mut mt-0.5">by {measure}</div>
+          </div>
+
+          <div className="inline-flex bg-paper-2 rounded-[8px] p-0.5 flex-none">
+            <button
+              onClick={() => {
+                setSectorScope("held");
+                setHoveredSector(null);
+              }}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-[6px] cursor-pointer transition-colors ${
+                sectorScope === "held" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"
+              }`}
+            >
+              Held now
+            </button>
+            <button
+              onClick={() => {
+                setSectorScope("alltime");
+                setHoveredSector(null);
+              }}
+              className={`text-[11px] font-semibold px-2.5 py-1 rounded-[6px] cursor-pointer transition-colors ${
+                sectorScope === "alltime" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"
+              }`}
+            >
+              Incl. past
+            </button>
+          </div>
+        </div>
+
+        {mix.buckets.length === 0 ? (
+          <div className="flex-1 flex items-center">
+            <p className="text-xs text-mut leading-relaxed">
+              {sectorScope === "held"
+                ? "Nothing held in your accounts right now."
+                : "No holdings on file yet."}
+            </p>
+          </div>
+        ) : mix.unclassified ? (
+          <div className="flex-1 flex items-center">
+            <p className="text-xs text-mut leading-relaxed">
+              Sector classifications are not on file for these holdings yet, so there is
+              nothing to break down. Your adviser can tell you the exposure in the meantime.
+            </p>
+          </div>
+        ) : (
+          <div className="flex gap-5 items-center flex-wrap">
+            {/* A pie, not a donut: `thick = size / 2` takes the inner radius to
+                zero, so the same component draws both and the two cards on this
+                row stay visually of a piece. The centre is then given back by
+                overlaying the readout on top. */}
+            <div className="relative flex-none">
+              <DonutChart
+                segs={sectorSegs}
+                size={128}
+                thick={focusedBucket ? 44 : 64}
+                onHover={setHoveredSector}
+                activeLabel={hoveredSector}
+              />
+              {/* Only drawn while a slice is focused, because the ring only
+                  opens up a hole then. */}
+              {focusedBucket && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none px-6 text-center">
+                  <div
+                    className={`font-mono font-bold text-[13px] ${focusedBucket.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                  >
+                    {focusedBucket.pnl >= 0 ? "+" : ""}
+                    {money0(focusedBucket.pnl)}
+                  </div>
+                  <div className="text-[8.5px] text-mut uppercase font-semibold tracking-wide">
+                    P&amp;L
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 min-w-45 space-y-1.5">
+              {mix.buckets.map((b, i) => {
+                const share = mix.total > 0 ? Math.round((b.value / mix.total) * 100) : 0;
+                const focused = hoveredSector === b.label;
+                return (
+                  <button
+                    key={b.label}
+                    onMouseEnter={() => setHoveredSector(b.label)}
+                    onMouseLeave={() => setHoveredSector(null)}
+                    onFocus={() => setHoveredSector(b.label)}
+                    onBlur={() => setHoveredSector(null)}
+                    className={`w-full text-left rounded-[7px] px-1.5 py-1 transition-colors cursor-pointer ${
+                      focused ? "bg-paper-2" : ""
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 text-xs font-medium text-ink">
+                      <i
+                        style={{ backgroundColor: palette[i % palette.length] }}
+                        className="w-2.5 h-2.5 rounded-[3px] block flex-none"
+                      />
+                      <span className="truncate" title={b.label}>
+                        {b.label}
+                      </span>
+                      <b className="ml-auto font-mono text-[13px] font-semibold whitespace-nowrap">
+                        {share}%
+                      </b>
+                    </div>
+                    <div className="flex items-baseline gap-2 pl-4.5 mt-0.5">
+                      <span
+                        className={`font-mono text-[11.5px] font-semibold ${b.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                      >
+                        {b.pnl >= 0 ? "+" : ""}
+                        {money0(b.pnl)}
+                      </span>
+                      <span className="text-[10.5px] text-mut">
+                        {pct1(b.returnPct)} · {b.holdings} holding
+                        {b.holdings === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+
+              <div className="flex items-center gap-2 pt-1.5 mt-1 border-t border-line text-xs">
+                <span className="text-mut font-medium">Total</span>
+                <span className="ml-auto font-mono text-[11.5px] text-mut">
+                  {money0(mix.total)}
+                </span>
+                <span
+                  className={`font-mono text-[11.5px] font-semibold ${mix.totalPnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                >
+                  {mix.totalPnl >= 0 ? "+" : ""}
+                  {money0(mix.totalPnl)}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderPnl = () => {
     const rows = pnlRows;
@@ -315,39 +980,6 @@ export function PositionsClient({
     const share = (v: number) => (allocTotal > 0 ? Math.round((v / allocTotal) * 100) : 0);
 
     /**
-     * Sector exposure, by market value of what is held.
-     *
-     * `p.sector` rolls a derivative up to its ordinary (see `toPosition`), so an
-     * option grant counts as exposure to the underlying's sector — which is the
-     * question this chart is asking. Positions worth nothing are left out: a
-     * zero-value slice is invisible in the pie and a 0% line in the legend.
-     *
-     * Labels are no longer cut at the first word, where "Health Care" and
-     * "Health Insurance" both rendered as "Health".
-     */
-    const sectorTotals: Record<string, number> = {};
-    positions.forEach(p => {
-      const v = posValue(p);
-      if (v <= 0) return;
-      const sector = p.sector ?? "Other";
-      sectorTotals[sector] = (sectorTotals[sector] || 0) + v;
-    });
-
-    const palette = ["#1d202f", "#36bb91", "#c98a2b", "#5c5775", "#1f8e6b", "#9aa0b4", "#b8543f", "#4a7fb5"];
-    const sectorArr = Object.keys(sectorTotals)
-      .map(k => ({ label: k, v: sectorTotals[k] }))
-      .sort((a, b) => b.v - a.v);
-    const sectorWithColors = sectorArr.map((x, i) => ({ ...x, col: palette[i % palette.length] }));
-    const sectorTotal = sectorArr.reduce((sum, x) => sum + x.v, 0);
-
-    // `securities.sector` was NULL on all 775 rows until `npm run
-    // backfill:sectors` was written to fill it from Yahoo, and any name Yahoo
-    // cannot classify stays NULL by design. Where NOTHING is classified the
-    // chart would be one slice reading "Other 100%", which looks broken rather
-    // than empty — so it says which it is instead of drawing that.
-    const hasSectors = sectorArr.some((x) => x.label !== "Other");
-
-    /**
      * Where the P&L actually comes from — closed parcels vs still-held, and
      * equities vs option grants.
      *
@@ -426,43 +1058,7 @@ export function PositionsClient({
             </div>
           </div>
 
-          <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow flex flex-col">
-            <div className="flex justify-between items-center text-xs mb-3">
-              <b className="text-sm font-semibold text-ink">Sector exposure</b>
-              <span className="text-mut font-mono">${Math.round(sectorTotal).toLocaleString("en-AU")}</span>
-            </div>
-
-            {hasSectors ? (
-              <div className="flex gap-5 items-center flex-wrap">
-                {/* A pie, not a donut: `thick = size / 2` takes the inner radius
-                    to zero, so the same component draws both and the two cards
-                    on this row stay visually of a piece. */}
-                <div className="flex-none">
-                  <DonutChart segs={sectorWithColors} size={128} thick={64} />
-                </div>
-
-                <div className="flex-1 min-w-37.5 space-y-2">
-                  {sectorWithColors.map(x => (
-                    <div key={x.label} className="flex items-center gap-2 text-xs font-medium text-ink">
-                      <i style={{ backgroundColor: x.col }} className="w-2.5 h-2.5 rounded-[3px] block flex-none" />
-                      <span className="truncate" title={x.label}>{x.label}</span>
-                      <b className="ml-auto font-mono text-[13px] font-semibold whitespace-nowrap">
-                        {sectorTotal > 0 ? Math.round((x.v / sectorTotal) * 100) : 0}%
-                      </b>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center">
-                <p className="text-xs text-mut leading-relaxed">
-                  Sector classifications are not on file for these holdings yet, so
-                  there is nothing to break down. Your adviser can tell you the
-                  exposure in the meantime.
-                </p>
-              </div>
-            )}
-          </div>
+          {renderSectorCard()}
         </div>
 
         {/* Bottom split: Movers and Growth */}
@@ -617,7 +1213,13 @@ export function PositionsClient({
       {tab === "analytics" ? (
         renderAnalytics()
       ) : tab === "pnl" ? (
-        renderPnl()
+        // The dated window first: "what did I make recently" is the question
+        // people arrive on this tab with, and the full parcel-by-parcel table
+        // below it is the reference the answer can be checked against.
+        <div className="space-y-4">
+          {renderRealisedWindow()}
+          {renderPnl()}
+        </div>
       ) : (
         <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
           <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none flex-wrap gap-2">
@@ -675,7 +1277,19 @@ export function PositionsClient({
                       onClick={() => handleOpenHolding(p.code)}
                       className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
                     >
-                      <td className="px-4.5 py-3"><span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{p.code}</span></td>
+                      <td className="px-4.5 py-3">
+                        <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{p.code}</span>
+                        {/* There is a weekly note behind this row. Without a
+                            hint, a note that only exists inside a modal is a
+                            note nobody knows to open. */}
+                        {commentary[p.code] && (
+                          <span
+                            className="ml-1.5 align-middle inline-block w-1.5 h-1.5 rounded-full bg-green"
+                            title="A note on this holding was written this week — open the row to read it"
+                            aria-label="Weekly note available"
+                          />
+                        )}
+                      </td>
                       <td className="px-4.5 py-3 hidden sm:table-cell text-mut">
                         <span className="text-ink font-semibold">{p.name}</span>
                         <div className="text-[10.5px] mt-0.5">{p.sector ?? "—"}</div>
@@ -713,12 +1327,12 @@ export function PositionsClient({
       )}
 
       {/* Holdings Detailed Advice Modal */}
-      {selectedStock && advice && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4">
+      {selectedStock && (
+        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto">
             <div className="flex items-center gap-2.5">
               <span className="code text-lg bg-paper-2 rounded-[5px] px-2 py-0.5">{selectedHolding}</span>
-              {getActionPill(advice.action)}
+              {advice && getActionPill(advice.action)}
             </div>
 
             <div>
@@ -738,20 +1352,26 @@ export function PositionsClient({
                   {posPL(selectedStock) >= 0 ? "+" : ""}${Math.round(posPL(selectedStock)).toLocaleString("en-AU")} ({(posPL(selectedStock) / posCost(selectedStock) * 100).toFixed(1)}%)
                 </b>
               </div>
-              <div className="flex justify-between py-2 text-xs">
-                <span className="text-mut font-semibold">Vitti target</span>
-                <b className="font-mono text-ink font-semibold">
-                  {advice.target && selectedStock.last
-                    ? `$${advice.target.toFixed(2)} · +${Math.round((advice.target / selectedStock.last - 1) * 100)}%`
-                    : "—"}
-                </b>
-              </div>
+              {advice && (
+                <div className="flex justify-between py-2 text-xs">
+                  <span className="text-mut font-semibold">Vitti target</span>
+                  <b className="font-mono text-ink font-semibold">
+                    {advice.target && selectedStock.last
+                      ? `$${advice.target.toFixed(2)} · +${Math.round((advice.target / selectedStock.last - 1) * 100)}%`
+                      : "—"}
+                  </b>
+                </div>
+              )}
             </div>
 
-            <div className="space-y-1">
-              <div className="font-semibold text-[13.5px] leading-snug">{advice.headline}</div>
-              <p className="text-xs text-mut leading-relaxed">{advice.detail}</p>
-            </div>
+            {advice && (
+              <div className="space-y-1">
+                <div className="font-semibold text-[13.5px] leading-snug">{advice.headline}</div>
+                <p className="text-xs text-mut leading-relaxed">{advice.detail}</p>
+              </div>
+            )}
+
+            {renderCommentary(selectedStock)}
 
             <div className="flex gap-2.5 pt-2">
               <button
@@ -761,7 +1381,7 @@ export function PositionsClient({
                 Close
               </button>
 
-              {advice.action === "Add" && (
+              {advice?.action === "Add" && (
                 <button
                   onClick={() => {
                     setTradeAction("Buy");
@@ -773,7 +1393,7 @@ export function PositionsClient({
                 </button>
               )}
 
-              {(advice.action === "Trim" || advice.action === "Take profit") && (
+              {(advice?.action === "Trim" || advice?.action === "Take profit") && (
                 <button
                   onClick={() => {
                     setTradeAction("Sell");
@@ -791,8 +1411,8 @@ export function PositionsClient({
 
       {/* Trade Execution Modal */}
       {isTradeModalOpen && selectedStock && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">
               Route {tradeAction === "Buy" ? "Buy" : "Sell"} Order to Desk
             </h3>

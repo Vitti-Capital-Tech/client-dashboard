@@ -99,7 +99,7 @@ export function PortalShell({
       { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: "M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", tab: true },
       { k: "mismatches", label: "Mismatched Qty", path: "/portal/staff/mismatches", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z", tab: true },
       { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0", tab: false, badge: "alerts" },
-      { k: "merge", label: "Merge requests", path: "/portal/staff/merge-requests", icon: "M7 3v6a5 5 0 0 0 5 5 5 5 0 0 1 5 5v2M7 3H4m3 0h3M17 21h3m-3 0h-3", tab: false, badge: "pendingMerge" },
+      { k: "merge", label: "Account requests", path: "/portal/staff/merge-requests", icon: "M7 3v6a5 5 0 0 0 5 5 5 5 0 0 1 5 5v2M7 3H4m3 0h3M17 21h3m-3 0h-3", tab: false, badge: "pendingMerge" },
       { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: "M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tab: false }
     ]
   };

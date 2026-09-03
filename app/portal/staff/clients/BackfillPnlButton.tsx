@@ -125,7 +125,7 @@ export function BackfillPnlButton() {
 
       {/* Rebuild All P&L Confirmation & Progress Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-xs animate-in fade-in duration-150">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
           <div
             className="relative w-full max-w-lg bg-white border border-line rounded-[16px] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}

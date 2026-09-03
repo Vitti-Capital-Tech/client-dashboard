@@ -39,6 +39,70 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_claim_requests: {
+        Row: {
+          account_number: string
+          client_id: string
+          decided_at: string | null
+          decided_by: string | null
+          decision_note: string | null
+          id: string
+          matched_account_id: string | null
+          note: string | null
+          previous_client_id: string | null
+          requested_at: string
+          status: Database["public"]["Enums"]["claim_status"]
+        }
+        Insert: {
+          account_number: string
+          client_id: string
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_note?: string | null
+          id?: string
+          matched_account_id?: string | null
+          note?: string | null
+          previous_client_id?: string | null
+          requested_at?: string
+          status?: Database["public"]["Enums"]["claim_status"]
+        }
+        Update: {
+          account_number?: string
+          client_id?: string
+          decided_at?: string | null
+          decided_by?: string | null
+          decision_note?: string | null
+          id?: string
+          matched_account_id?: string | null
+          note?: string | null
+          previous_client_id?: string | null
+          requested_at?: string
+          status?: Database["public"]["Enums"]["claim_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_claim_requests_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "account_claim_requests_matched_account_id_fkey"
+            columns: ["matched_account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "account_claim_requests_previous_client_id_fkey"
+            columns: ["previous_client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       account_merge_requests: {
         Row: {
           client_id: string
@@ -408,6 +472,45 @@ export type Database = {
           },
         ]
       }
+      commentary_runs: {
+        Row: {
+          batch_id: string
+          collected_at: string | null
+          errored: number
+          model: string
+          notes: string[]
+          requested: number
+          status: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at: string
+          week_of: string
+          written: number
+        }
+        Insert: {
+          batch_id: string
+          collected_at?: string | null
+          errored?: number
+          model: string
+          notes?: string[]
+          requested?: number
+          status?: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at?: string
+          week_of: string
+          written?: number
+        }
+        Update: {
+          batch_id?: string
+          collected_at?: string | null
+          errored?: number
+          model?: string
+          notes?: string[]
+          requested?: number
+          status?: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at?: string
+          week_of?: string
+          written?: number
+        }
+        Relationships: []
+      }
       clients: {
         Row: {
           created_at: string
@@ -416,6 +519,7 @@ export type Database = {
           external_ref: string | null
           id: string
           initials: string | null
+          merged_into: string | null
           placement_aliases: string[]
           ref: string | null
           updated_at: string
@@ -427,6 +531,7 @@ export type Database = {
           external_ref?: string | null
           id?: string
           initials?: string | null
+          merged_into?: string | null
           placement_aliases?: string[]
           ref?: string | null
           updated_at?: string
@@ -438,11 +543,20 @@ export type Database = {
           external_ref?: string | null
           id?: string
           initials?: string | null
+          merged_into?: string | null
           placement_aliases?: string[]
           ref?: string | null
           updated_at?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "clients_merged_into_fkey"
+            columns: ["merged_into"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ingest_attachments: {
         Row: {
@@ -1407,6 +1521,47 @@ export type Database = {
         }
         Relationships: []
       }
+      security_commentary: {
+        Row: {
+          edited_by: string | null
+          generated_at: string
+          loss_note: string
+          model: string | null
+          profit_note: string
+          security_code: string
+          sources: Json
+          week_of: string
+        }
+        Insert: {
+          edited_by?: string | null
+          generated_at?: string
+          loss_note: string
+          model?: string | null
+          profit_note: string
+          security_code: string
+          sources?: Json
+          week_of: string
+        }
+        Update: {
+          edited_by?: string | null
+          generated_at?: string
+          loss_note?: string
+          model?: string | null
+          profit_note?: string
+          security_code?: string
+          sources?: Json
+          week_of?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "security_commentary_security_code_fkey"
+            columns: ["security_code"]
+            isOneToOne: false
+            referencedRelation: "securities"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
       sectors: {
         Row: {
           beneficiaries: string[]
@@ -1667,13 +1822,25 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      approve_account_claim: {
+        Args: {
+          p_request_id: string
+          p_actor: string
+          p_decision_note?: string | null
+        }
+        Returns: Json
+      }
       current_client_id: { Args: never; Returns: string }
       is_staff: { Args: never; Returns: boolean }
+      normalise_account_number: { Args: { raw: string }; Returns: string }
+      role_from_email_domain: { Args: { addr: string }; Returns: string }
     }
     Enums: {
       alert_direction: "above" | "below"
       alert_kind: "expiry" | "itm" | "window" | "price"
       alert_severity: "red" | "amber" | "green"
+      claim_status: "pending" | "approved" | "rejected"
+      commentary_run_status: "submitted" | "collected" | "failed"
       merge_status: "pending" | "approved" | "rejected"
       news_direction: "up" | "dn"
       option_status: "open" | "pending" | "expired"

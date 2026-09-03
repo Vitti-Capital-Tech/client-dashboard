@@ -89,6 +89,35 @@ class FakeBuilder {
     return this;
   }
 
+  /**
+   * `gt(col, val)` — used to ask for the positions that are actually held.
+   *
+   * A missing column is NOT greater than anything, matching SQL: a comparison
+   * against NULL is unknown, and an unknown does not pass a WHERE clause.
+   */
+  gt(col: string, val: any) {
+    this.filters.push((r) => r[col] != null && r[col] > val);
+    return this;
+  }
+
+  /**
+   * `maybeSingle()` — one row or null, never an error for "no rows".
+   *
+   * Distinct from `single()`, which the real client errors on when nothing
+   * matches. Callers reach for this precisely where absence is an expected
+   * answer ("has this week's batch been submitted yet?").
+   */
+  maybeSingle() {
+    this.take = 1;
+    return {
+      then: (resolve: (v: any) => any, reject?: (e: any) => any) =>
+        Promise.resolve()
+          .then(() => this.run())
+          .then((res: any) => ({ data: res.data?.[0] ?? null, error: res.error ?? null }))
+          .then(resolve, reject),
+    };
+  }
+
   /** Real ordering, because callers use it to pick "the latest" row. */
   order(col?: string, opts?: { ascending?: boolean }) {
     if (col) this.sortBy = { col, ascending: opts?.ascending !== false };
@@ -173,7 +202,8 @@ class FakeBuilder {
     return `${this.table}-${this.rows().length + 1}`;
   }
 
-  private run() {
+  /** Not private: `maybeSingle()` reuses it to unwrap a one-row result. */
+  run() {
     switch (this.op) {
       case "select": {
         const cols = String(this.payload ?? "");

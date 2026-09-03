@@ -182,20 +182,59 @@ export async function runHoldingsImport(
     ]),
   );
 
-  await upsertChunked(
-    db,
-    "accounts",
-    accounts.map((a) => ({
-      external_ref: a.externalRef,
-      client_id: clientIdByRef.get(a.externalRef),
-      label: a.displayName,
-      account_type: "Wholesale",
-      adviser_code: a.adviserCode,
-      adviser_name: a.adviserName,
-      status: a.status,
-    })),
-    { onConflict: "external_ref" },
+  // ── Who owns an account is NOT the importer's to decide, after the first time
+  //
+  // This was one upsert carrying `client_id`, which meant every run reset the
+  // owner to the auto-created client row for that ref. That is harmless while
+  // accounts are 1:1 with clients — and it silently undoes an approved account
+  // claim (`approve_account_claim`, 20260904090000), which exists precisely to
+  // put one person's several accounts onto one login. The next morning's
+  // snapshot would hand the account back to the empty stub row, and the client
+  // would watch an account disappear from their switcher overnight.
+  //
+  // So ownership is written when the account is CREATED and never afterwards.
+  // The broker still owns everything it is actually the authority on — label,
+  // adviser, status — and those keep updating on every run.
+  const { data: knownAccountRows, error: knownErr } = await db
+    .from("accounts")
+    .select("external_ref")
+    .in("external_ref", accountRefs);
+  if (knownErr) throw knownErr;
+
+  const existingRefs = new Set(
+    ((knownAccountRows ?? []) as unknown as { external_ref: string }[]).map(
+      (a) => a.external_ref,
+    ),
   );
+
+  const brokerOwned = (a: (typeof accounts)[number]) => ({
+    external_ref: a.externalRef,
+    label: a.displayName,
+    account_type: "Wholesale",
+    adviser_code: a.adviserCode,
+    adviser_name: a.adviserName,
+    status: a.status,
+  });
+
+  const newAccounts = accounts.filter((a) => !existingRefs.has(a.externalRef));
+  if (newAccounts.length > 0) {
+    await upsertChunked(
+      db,
+      "accounts",
+      newAccounts.map((a) => ({
+        ...brokerOwned(a),
+        client_id: clientIdByRef.get(a.externalRef),
+      })),
+      { onConflict: "external_ref" },
+    );
+  }
+
+  const knownAccounts = accounts.filter((a) => existingRefs.has(a.externalRef));
+  if (knownAccounts.length > 0) {
+    await upsertChunked(db, "accounts", knownAccounts.map(brokerOwned), {
+      onConflict: "external_ref",
+    });
+  }
 
   const { data: accountRows, error: accountErr } = await db
     .from("accounts")
