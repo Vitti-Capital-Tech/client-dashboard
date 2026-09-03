@@ -1,12 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { Position, SignalRow } from "@/lib/data/queries";
 import { posValue, posCost, posPL } from "@/lib/data/compute";
 import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+import { TablePagination } from "@/app/components/TablePagination";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 const qty0 = (n: number) => (n ? Math.round(n).toLocaleString("en-AU") : "—");
+
+/**
+ * A return as a percentage of cost, or null when there is no cost to divide by.
+ *
+ * Free placement options have a cost base of zero, so `pl / cost` was `Infinity`
+ * — and `0 / 0` was `NaN`. Both reached the screen: the Top movers table read
+ * `+Infinity%` on three rows and `+NaN%` on a fourth, and because it SORTED by
+ * that percentage the infinities took every top slot, so the one thing the table
+ * exists to show was pushed off it entirely.
+ */
+const returnPct = (pl: number, cost: number): number | null =>
+  cost > 0 && Number.isFinite(pl / cost) ? (pl / cost) * 100 : null;
+
+const pct1 = (n: number | null) => (n === null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`);
 
 // Reusable Donut Chart Component
 const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v: number; col: string }[]; size?: number; thick?: number }) => {
@@ -83,6 +98,16 @@ export function PositionsClient({
   const [tab, setTab] = useState<"holdings" | "pnl" | "analytics">("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
 
+  // Search + paging per table. A client with a long history has hundreds of P&L
+  // lines — one tested account has 334 — and scrolling is not a way to find a
+  // ticker in that.
+  const [holdSearch, setHoldSearch] = useState("");
+  const [holdPage, setHoldPage] = useState(1);
+  const [holdSize, setHoldSize] = useState(25);
+  const [pnlSearch, setPnlSearch] = useState("");
+  const [pnlPage, setPnlPage] = useState(1);
+  const [pnlSize, setPnlSize] = useState(25);
+
   // Custom states for trade execution inside modal
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
   const [tradeAction, setTradeAction] = useState<"Buy" | "Sell">("Buy");
@@ -95,14 +120,12 @@ export function PositionsClient({
     tv += posValue(p);
   });
 
-  // `tv` / `tc` are live mark-to-market on what is held right now. Kept for
-  // Market value, which is genuinely that question — but NOT used for cost base
-  // or P&L any more: those come from the stored figures, so this page and the
-  // adviser's screen cannot report different returns on the same holdings.
+  // The desk's stored figures. Cost base and P&L come from here rather than from
+  // `tv` above, so this page and the adviser's screen cannot report different
+  // returns on the same holdings.
   const deskCost = portfolio.total.buyPrice;
   const deskPnl = portfolio.total.pnl;
   const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
-  const totalAssets = tv + cash + unlisted;
 
   const handleOpenHolding = (code: string) => {
     setSelectedHolding(code);
@@ -159,8 +182,28 @@ export function PositionsClient({
    * absolute P&L so the positions that moved the total are at the top, which is
    * the order somebody reads their own return in.
    */
+  const holdingRows = useMemo(() => {
+    const q = holdSearch.trim().toLowerCase();
+    if (!q) return positions;
+    return positions.filter(
+      (p) =>
+        p.code.toLowerCase().includes(q) || (p.name ?? "").toLowerCase().includes(q),
+    );
+  }, [positions, holdSearch]);
+
+  const pnlRows = useMemo(() => {
+    const q = pnlSearch.trim().toLowerCase();
+    return [...portfolio.rows]
+      .filter(
+        (r) =>
+          !q || r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q),
+      )
+      .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+  }, [portfolio.rows, pnlSearch]);
+
   const renderPnl = () => {
-    const rows = [...portfolio.rows].sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
+    const rows = pnlRows;
+    const page = rows.slice((pnlPage - 1) * pnlSize, (pnlPage - 1) * pnlSize + pnlSize);
 
     return (
       <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
@@ -171,7 +214,20 @@ export function PositionsClient({
               Every parcel across your accounts — sold and still held.
             </p>
           </div>
-          <span className="text-mut text-xs font-medium">{rows.length} lines</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="search"
+              value={pnlSearch}
+              onChange={(e) => {
+                setPnlSearch(e.target.value);
+                setPnlPage(1);
+              }}
+              placeholder="Search ticker or name"
+              aria-label="Search profit and loss"
+              className="w-46 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
+            />
+            <span className="text-mut text-xs font-medium whitespace-nowrap">{rows.length} lines</span>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
@@ -191,12 +247,13 @@ export function PositionsClient({
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="text-center text-mut py-6">
-                    No figures yet. Your P&amp;L appears once Vitti has processed your
-                    first contract notes.
+                    {pnlSearch.trim()
+                      ? `Nothing matches "${pnlSearch.trim()}".`
+                      : "No figures yet. Your P&L appears once Vitti has processed your first contract notes."}
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
+                page.map((r) => (
                   <tr key={`${r.ticker}-${r.type}`} className="hover:bg-[#faf9f5]">
                     <td className="px-4.5 py-3.5">
                       <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{r.ticker}</span>
@@ -221,7 +278,12 @@ export function PositionsClient({
             {rows.length > 0 && (
               <tfoot>
                 <tr className="border-t-2 border-line bg-paper-2 font-semibold">
-                  <td className="px-4.5 py-3.5 text-ink" colSpan={4}>Total</td>
+                  {/* Always the whole portfolio, never the page or the search
+                      result — a footer that silently totalled 25 of 334 lines
+                      would be a different number every time you paged. */}
+                  <td className="px-4.5 py-3.5 text-ink" colSpan={4}>
+                    Total{rows.length !== portfolio.rows.length ? " (all lines)" : ""}
+                  </td>
                   <td className="px-4.5 py-3.5 text-right font-mono text-ink hidden sm:table-cell">{money0(portfolio.total.buyPrice)}</td>
                   <td className="px-4.5 py-3.5 text-right font-mono text-ink">{money0(portfolio.total.sellOrCurrent)}</td>
                   <td className={`px-4.5 py-3.5 text-right font-mono ${portfolio.total.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
@@ -232,6 +294,19 @@ export function PositionsClient({
             )}
           </table>
         </div>
+
+        <TablePagination
+          totalItems={rows.length}
+          currentPage={pnlPage}
+          pageSize={pnlSize}
+          onPageChange={setPnlPage}
+          onPageSizeChange={(size) => {
+            setPnlSize(size);
+            setPnlPage(1);
+          }}
+          pageSizeOptions={[10, 25, 50, 100, 1000]}
+          itemLabel="lines"
+        />
 
         {/* A total that quietly omits a holding is worse than one that says so. */}
         {portfolio.outsideTotal > 0 && (
@@ -246,11 +321,19 @@ export function PositionsClient({
   };
 
   const renderAnalytics = () => {
-    const alloc = [
+    // `unlisted || totalAssets * 0.04` used to sit in the middle row — a
+    // hardcoded 4% invented whenever the real figure was zero, and not included
+    // in `totalAssets`, so the three shares read 100% / 4% / 0% and summed to
+    // 104%. Real values only, and the percentages are taken against the sum of
+    // the slices actually drawn, so they add up.
+    const allocSegs = [
       { label: "Listed equities", v: tv, col: "#1d202f" },
-      { label: "Unlisted / options", v: unlisted || totalAssets * 0.04, col: "#36bb91" },
-      { label: "Cash", v: cash, col: "#cfc9bb" }
+      { label: "Unlisted / options", v: unlisted, col: "#36bb91" },
+      { label: "Cash", v: cash, col: "#cfc9bb" },
     ];
+    const allocTotal = allocSegs.reduce((sum, a) => sum + a.v, 0);
+    const alloc = allocSegs.filter((a) => a.v > 0);
+    const share = (v: number) => (allocTotal > 0 ? Math.round((v / allocTotal) * 100) : 0);
 
     // Sector breakdown
     const sectorTotals: Record<string, number> = {};
@@ -259,9 +342,16 @@ export function PositionsClient({
       sectorTotals[sector] = (sectorTotals[sector] || 0) + posValue(p);
     });
 
+    // Labels are no longer cut at the first word — "Health Care" and "Health
+    // Insurance" both rendered as "Health".
     const sectorArr = Object.keys(sectorTotals)
-      .map(k => ({ label: k.split(" ")[0], v: sectorTotals[k] }))
+      .map(k => ({ label: k, v: sectorTotals[k] }))
       .sort((a, b) => b.v - a.v);
+
+    // `securities.sector` is null for most of the broker feed's tickers, so this
+    // collapses to a single bar labelled "Other" — one meaningless column, which
+    // reads as a broken chart rather than as missing data. Say which it is.
+    const hasSectors = sectorArr.some((x) => x.label !== "Other");
 
     const palette = ["#1d202f", "#36bb91", "#c98a2b", "#5c5775", "#1f8e6b", "#9aa0b4"];
     const sectorWithColors = sectorArr.map((s, i) => ({
@@ -269,14 +359,47 @@ export function PositionsClient({
       col: palette[i % palette.length]
     }));
 
-    // Top Movers
+    /**
+     * Where the P&L actually comes from — closed parcels vs still-held, and
+     * equities vs option grants.
+     *
+     * This replaces a "Portfolio growth" card whose curve was a hardcoded SVG
+     * path (`M0 96 L100 90 … L600 18`) under the caption "Up +6.4% over 12
+     * months" — the same invented 6.4% the dashboard was showing. There is no
+     * price history in this app to draw a growth curve from, and `pnl_runs` is a
+     * record of when the desk RECOMPUTED rather than of how the market moved, so
+     * charting it as growth would be a second wrong answer. This is the same
+     * total, split four ways, and every number in it is one the desk stands
+     * behind.
+     */
+    const isOption = (t: string) => t.toLowerCase().includes("option");
+    const split = [
+      {
+        label: "Closed",
+        v: portfolio.rows.filter((r) => !r.openPosition && !isOption(r.type)).reduce((n, r) => n + r.pnl, 0),
+      },
+      {
+        label: "Still held",
+        v: portfolio.rows.filter((r) => r.openPosition && !isOption(r.type)).reduce((n, r) => n + r.pnl, 0),
+      },
+      {
+        label: "Options",
+        v: portfolio.rows.filter((r) => isOption(r.type)).reduce((n, r) => n + r.pnl, 0),
+      },
+    ];
+    const splitMax = Math.max(...split.map((x) => Math.abs(x.v)), 1);
+
+    // Sorted by the SIZE of the move, not by percentage. Sorting by percentage
+    // put the zero-cost rows — whose percentage was `Infinity` — in every top
+    // slot, so the table showed free option grants instead of the positions that
+    // actually moved the portfolio.
     const movers = positions
       .map(p => ({
         code: p.code,
         pl: posPL(p),
-        plp: (posPL(p) / posCost(p)) * 100
+        plp: returnPct(posPL(p), posCost(p)),
       }))
-      .sort((a, b) => b.plp - a.plp);
+      .sort((a, b) => Math.abs(b.pl) - Math.abs(a.pl));
 
     return (
       <div className="space-y-4 select-none">
@@ -285,26 +408,32 @@ export function PositionsClient({
           <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow">
             <div className="flex justify-between items-center text-xs mb-3">
               <b className="text-sm font-semibold text-ink">Asset allocation</b>
-              <span className="text-mut font-mono">${Math.round(totalAssets).toLocaleString("en-AU")}</span>
+              <span className="text-mut font-mono">${Math.round(allocTotal).toLocaleString("en-AU")}</span>
             </div>
 
             <div className="flex gap-5 items-center flex-wrap">
               <div className="relative flex-none">
                 <DonutChart segs={alloc} size={128} thick={18} />
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <div className="font-mono font-bold text-base text-ink">{Math.round((tv / totalAssets) * 100)}%</div>
+                  <div className="font-mono font-bold text-base text-ink">{share(tv)}%</div>
                   <div className="text-[9.5px] text-mut uppercase font-semibold">equities</div>
                 </div>
               </div>
 
               <div className="flex-1 min-w-37.5 space-y-2">
-                {alloc.map(a => (
-                  <div key={a.label} className="flex items-center gap-2 text-xs font-medium text-ink">
-                    <i style={{ backgroundColor: a.col }} className="w-2.5 h-2.5 rounded-[3px] block flex-none" />
-                    <span>{a.label}</span>
-                    <b className="ml-auto font-mono text-[13px] font-semibold">{Math.round((a.v / totalAssets) * 100)}%</b>
-                  </div>
-                ))}
+                {alloc.length === 0 ? (
+                  <p className="text-xs text-mut leading-relaxed">
+                    Nothing held in this account right now.
+                  </p>
+                ) : (
+                  alloc.map(a => (
+                    <div key={a.label} className="flex items-center gap-2 text-xs font-medium text-ink">
+                      <i style={{ backgroundColor: a.col }} className="w-2.5 h-2.5 rounded-[3px] block flex-none" />
+                      <span>{a.label}</span>
+                      <b className="ml-auto font-mono text-[13px] font-semibold">{share(a.v)}%</b>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -315,7 +444,15 @@ export function PositionsClient({
               <span className="text-mut font-semibold">listed equities</span>
             </div>
             <div className="flex-1 flex flex-col justify-end">
-              <BarChart items={sectorWithColors} height={120} />
+              {hasSectors ? (
+                <BarChart items={sectorWithColors} height={120} />
+              ) : (
+                <p className="text-xs text-mut leading-relaxed pb-2">
+                  Sector classifications are not on file for these holdings yet, so
+                  there is nothing to break down. Your adviser can tell you the
+                  exposure in the meantime.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -325,7 +462,7 @@ export function PositionsClient({
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
             <div className="flex justify-between items-center px-4.5 py-3 border-b border-line">
               <b className="text-sm font-semibold text-ink">Top movers</b>
-              <span className="text-mut text-xs font-semibold">unrealised</span>
+              <span className="text-mut text-xs font-semibold">unrealised, this account</span>
             </div>
             <table className="w-full border-collapse text-left text-xs font-medium">
               <tbody className="divide-y divide-[#f0ede5]">
@@ -337,8 +474,8 @@ export function PositionsClient({
                       <td className={`px-4.5 py-3 text-right font-mono text-[13px] ${isUp ? "text-gain" : "text-loss-d"}`}>
                         {isUp ? "+" : ""}${Math.round(m.pl).toLocaleString("en-AU")}
                       </td>
-                      <td className={`px-4.5 py-3 text-right font-mono text-[13px] ${isUp ? "text-gain" : "text-loss-d"}`}>
-                        {isUp ? "+" : ""}{m.plp.toFixed(1)}%
+                      <td className={`px-4.5 py-3 text-right font-mono text-[13px] ${m.plp === null ? "text-mut" : isUp ? "text-gain" : "text-loss-d"}`}>
+                        {pct1(m.plp)}
                       </td>
                     </tr>
                   );
@@ -349,23 +486,45 @@ export function PositionsClient({
 
           <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow space-y-3">
             <div className="flex justify-between items-center text-xs">
-              <b className="text-sm font-semibold text-ink">Portfolio growth</b>
-              <span className="text-mut font-semibold">1Y</span>
+              <b className="text-sm font-semibold text-ink">Where the P&amp;L comes from</b>
+              <span className="text-mut font-semibold">all accounts</span>
             </div>
-            <div className="w-full h-30">
-              <svg className="w-full h-full block" viewBox="0 0 600 120" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stopColor="#36bb91" stopOpacity="0.18" />
-                    <stop offset="1" stopColor="#36bb91" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <path d="M0 96 L100 90 L200 78 L300 64 L400 48 L500 34 L600 18" fill="none" stroke="#36bb91" strokeWidth="2.5" />
-                <path d="M0 96 L100 90 L200 78 L300 64 L400 48 L500 34 L600 18 V120 H0Z" fill="url(#ga)" />
-              </svg>
+
+            <div className="space-y-2.5 pt-1">
+              {split.map((x) => {
+                const up = x.v >= 0;
+                return (
+                  <div key={x.label} className="space-y-1">
+                    <div className="flex justify-between items-baseline text-xs font-medium">
+                      <span className="text-ink">{x.label}</span>
+                      <b className={`font-mono text-[13px] ${up ? "text-gain" : "text-loss-d"}`}>
+                        {up ? "+" : ""}{money0(x.v)}
+                      </b>
+                    </div>
+                    {/* Centre line, so a loss reads as a bar going the other way
+                        rather than as a smaller gain. */}
+                    <div className="relative h-1.5 bg-paper-2 rounded-full overflow-hidden">
+                      <div
+                        className="absolute top-0 h-full rounded-full"
+                        style={{
+                          width: `${(Math.abs(x.v) / splitMax) * 50}%`,
+                          left: up ? "50%" : undefined,
+                          right: up ? undefined : "50%",
+                          backgroundColor: up ? "var(--color-green)" : "var(--color-loss)",
+                        }}
+                      />
+                      <div className="absolute left-1/2 top-0 h-full w-px bg-line-2" />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            <div className="legend flex gap-3.5 text-xs text-mut font-medium pt-1">
-              <span><i className="inline-block w-2.5 h-2.5 rounded-[2.5px] mr-1.5 bg-green self-center" />Up +6.4% over 12 months</span>
+
+            <div className="flex justify-between items-baseline text-xs pt-2 border-t border-line">
+              <span className="text-mut font-semibold">Total</span>
+              <b className={`font-mono text-[13px] ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+                {deskPnl >= 0 ? "+" : ""}{money0(deskPnl)}
+              </b>
             </div>
           </div>
         </div>
@@ -408,19 +567,25 @@ export function PositionsClient({
         </div>
       </div>
 
-      {/* KPI Cards Grid */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Market value</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(tv + cash).toLocaleString("en-AU")}</div>
-          <div className="text-xs text-mut mt-1">
-            {positions.length} positions + cash
-          </div>
-        </div>
+      {/* KPI Cards Grid
+
+          The first three are the desk's own Grand Total and are the SAME
+          question — cost, what it came to, the difference. They were briefly
+          shown beside "Market value", which is a different question entirely
+          (current holdings of ONE account at last price), and the pair read as a
+          catastrophe: $3,289 next to a $9.9M lifetime cost base. Comparable
+          figures sit together; the account's current value is labelled as what
+          it is and put last. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
           <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(deskCost)}</div>
           <div className="text-xs text-mut mt-1">invested, all accounts</div>
+        </div>
+        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Proceeds &amp; value</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(portfolio.total.sellOrCurrent)}</div>
+          <div className="text-xs text-mut mt-1">sold, plus what is still held</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
@@ -429,6 +594,13 @@ export function PositionsClient({
           </div>
           <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
             {deskPnl >= 0 ? "+" : ""}{deskPnlPct.toFixed(1)}% &middot; realised + open
+          </div>
+        </div>
+        <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">This account now</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(tv + cash).toLocaleString("en-AU")}</div>
+          <div className="text-xs text-mut mt-1">
+            {positions.length} holding{positions.length === 1 ? "" : "s"} + cash, at last price
           </div>
         </div>
       </div>
@@ -440,9 +612,22 @@ export function PositionsClient({
         renderPnl()
       ) : (
         <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-          <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none">
-            <b className="text-ink text-sm font-semibold">Holdings</b>
-            <span className="text-mut text-xs font-medium">Tap a holding for Vitti&apos;s view</span>
+          <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none flex-wrap gap-2">
+            <div>
+              <b className="text-ink text-sm font-semibold">Holdings</b>
+              <p className="text-xs text-mut mt-0.5">Tap a holding for Vitti&apos;s view</p>
+            </div>
+            <input
+              type="search"
+              value={holdSearch}
+              onChange={(e) => {
+                setHoldSearch(e.target.value);
+                setHoldPage(1);
+              }}
+              placeholder="Search ticker or name"
+              aria-label="Search holdings"
+              className="w-46 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
+            />
           </div>
 
           <div className="overflow-x-auto">
@@ -459,9 +644,20 @@ export function PositionsClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {positions.map(p => {
+                {holdingRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-center text-mut py-6">
+                      {holdSearch.trim()
+                        ? `Nothing matches "${holdSearch.trim()}".`
+                        : "No holdings in this account."}
+                    </td>
+                  </tr>
+                )}
+                {holdingRows
+                  .slice((holdPage - 1) * holdSize, (holdPage - 1) * holdSize + holdSize)
+                  .map(p => {
                   const pl = posPL(p);
-                  const plp = pl / posCost(p) * 100;
+                  const plp = returnPct(pl, posCost(p));
                   const val = posValue(p);
                   const isUp = pl >= 0;
                   const sg = signals[p.code];
@@ -481,7 +677,7 @@ export function PositionsClient({
                       <td className="px-4.5 py-3 text-right font-mono font-semibold">${Math.round(val).toLocaleString("en-AU")}</td>
                       <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
                         ${Math.round(pl).toLocaleString("en-AU")}
-                        <div className="text-[10.5px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
+                        <div className="text-[10.5px]">{pct1(plp)}</div>
                       </td>
                       <td className="px-4.5 py-3 text-center">
                         {getActionPill(sg ? sg.action : "Hold")}
@@ -492,6 +688,19 @@ export function PositionsClient({
               </tbody>
             </table>
           </div>
+
+          <TablePagination
+            totalItems={holdingRows.length}
+            currentPage={holdPage}
+            pageSize={holdSize}
+            onPageChange={setHoldPage}
+            onPageSizeChange={(size) => {
+              setHoldSize(size);
+              setHoldPage(1);
+            }}
+            pageSizeOptions={[10, 25, 50, 100, 1000]}
+            itemLabel="holdings"
+          />
         </div>
       )}
 

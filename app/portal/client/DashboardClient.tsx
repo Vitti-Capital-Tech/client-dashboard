@@ -370,7 +370,7 @@ export function DashboardClient({
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 hidden sm:table-cell">Holding</th>
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right">Value</th>
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right">Unreal. P&amp;L</th>
-                    <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right hidden sm:table-cell">Day</th>
+                    <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right hidden sm:table-cell">Cost</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f0ede5] font-medium">
@@ -391,8 +391,14 @@ export function DashboardClient({
                           ${Math.round(pl).toLocaleString("en-AU")}
                           <div className="text-[10.5px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
                         </td>
-                        <td className={`px-4 py-3 text-right font-mono text-[13px] hidden sm:table-cell ${p.code === "PLS" ? "text-gain" : "text-gain"}`}>
-                          {p.code === "PLS" ? "+2.1%" : "+0.4%"}
+                        {/* Was a "Day" column reading `p.code === "PLS" ? "+2.1%" : "+0.4%"`
+                            — one hardcoded move for one ticker and one for
+                            everything else, in green either way. There is no
+                            intraday price history here to fill it from, so the
+                            column shows the parcel's cost instead, which is a
+                            fact the ledger holds. */}
+                        <td className="px-4 py-3 text-right font-mono text-[13px] hidden sm:table-cell text-mut">
+                          ${Math.round(posCost(p)).toLocaleString("en-AU")}
                         </td>
                       </tr>
                     );

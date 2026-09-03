@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import type { OptionRow } from "@/lib/data/queries";
-import { isITM } from "@/lib/data/compute";
+import type { OptionTableItem } from "@/lib/options/from-stored-pnl";
+import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+
+const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 
 interface Message {
   role: "user" | "ai";
@@ -12,29 +14,46 @@ interface Message {
 
 export function AskVittiClient({
   clientName,
-  pv,
-  dpl,
+  marketValue,
+  portfolio,
   options,
-  mrdBid,
+  openPlacements,
 }: {
   clientName: string;
-  pv: number;
-  dpl: number;
-  options: OptionRow[];
-  mrdBid: number | null;
+  /** Current holdings of the active account, at last price. */
+  marketValue: number;
+  /** The desk's stored figures — see lib/pnl/client-portfolio.ts. */
+  portfolio: ClientPortfolio;
+  options: OptionTableItem[];
+  openPlacements: number;
 }) {
-  const pvVal = pv;
-  const dplVal = dpl;
+  const pnl = portfolio.total.pnl;
+  const cost = portfolio.total.buyPrice;
+
+  /** In the money AND inside the window — the only options worth naming. */
+  const urgentOptions = options.filter(
+    (o) => o.status === "live" && o.money.isItm && o.dte !== null && o.dte <= 14 && o.dte >= 0,
+  );
 
   const [messages, setMessages] = useState<Message[]>(() => [
     {
+      // No hardcoded date. The greeting used to read "your briefing for Friday,
+      // 12 Jun 2026" whatever day it actually was.
       role: "ai",
-      text: `Good morning, ${clientName.split(" ")[0]}. I’m Vitti Intelligence. Here’s your briefing for Friday, 12 Jun 2026:`,
+      text: `Hello, ${clientName.split(" ")[0]}. I’m Vitti Intelligence — I can answer from your holdings, your options and the deals on our book.`,
       brief: true
     },
     {
+      // Was: "…The MRD placement closes at 4:00pm, and one of your unlisted
+      // options is in the money inside its exercise window." Both invented, and
+      // stated about this client's own book.
       role: "ai",
-      text: `Your portfolio is $${Math.round(pvVal).toLocaleString("en-AU")} (${dplVal >= 0 ? "+" : ""}${(dplVal / pvVal * 100).toFixed(1)}% today). The MRD placement closes at 4:00pm, and one of your unlisted options is in the money inside its exercise window. Ask me anything below.`
+      text:
+        `Your lifetime profit and loss is ${pnl >= 0 ? "+" : ""}${money0(pnl)} on ${money0(cost)} invested, and this account holds ${money0(marketValue)} at last price.` +
+        (urgentOptions.length > 0
+          ? ` ${urgentOptions.length} of your options ${urgentOptions.length === 1 ? "is" : "are"} in the money inside the exercise window — worth a look.`
+          : "") +
+        " Ask me anything below."
     }
   ]);
   const [inputValue, setInputValue] = useState("");
@@ -53,30 +72,61 @@ export function AskVittiClient({
     const updatedMessages = [...messages, { role: "user" as const, text: q }];
     setMessages(updatedMessages);
 
-    // Calculate Response
-    let ans = "I can help with your portfolio, your options and placements, watchlist names, and the daily market read. Try one of the suggestions, or ask about a specific holding.";
+    /**
+     * Answers are assembled from the data this component was handed, and nothing
+     * else.
+     *
+     * Every branch here used to carry invented specifics — a day move multiplied
+     * by a stray `105`, "PLS +2.1% and BHP +0.8%", "Year to date +6.4%, ahead of
+     * the ASX 200 at +5.4%", a week of events that had not happened, and a whole
+     * placement complete with a **desk recommendation** ("a spec buy with a
+     * $0.78 target"). None of it came from anywhere. Fabricated market colour is
+     * bad; a fabricated price target on a deal is advice nobody gave.
+     *
+     * So the rule is now: answer from the figures, or say what cannot be
+     * answered yet. An assistant that declines is useful; one that invents is
+     * worse than none.
+     */
+    let ans =
+      "I can answer from your holdings, your profit and loss, and your options and their exercise windows. Ask about any of those, or about a specific holding.";
 
-    const isPortfolio = /portfolio|how am i|doing today/i.test(q);
-    const isWatch = /watch|this week|what.*look/i.test(q);
-    const isMrd = /mrd|meridian|placement/i.test(q);
+    const isPortfolio = /portfolio|how am i|doing|profit|loss|p&l|return/i.test(q);
+    const isDeals = /placement|deal|ipo|book|offer/i.test(q);
     const isOptions = /option|expiry|exercise|itm/i.test(q);
+    const isMarket = /market|today|asx|index|week|outlook|news/i.test(q);
 
-    if (isPortfolio) {
-      ans = `Your portfolio is $${Math.round(pvVal).toLocaleString("en-AU")}, up $${Math.abs(Math.round(dplVal)).toLocaleString("en-AU")} (${dplVal >= 0 ? "+" : ""}${(dplVal / pvVal * 105).toFixed(1)}%) today. The lift is led by your materials names — PLS +2.1% and BHP +0.8%. Year to date you are tracking +6.4%, ahead of the ASX 200 at +5.4%. Nothing in your book needs action right now beyond the MRD book closing at 4:00pm.`;
-    } else if (isWatch) {
-      ans = `Three things this week: (1) the MRD placement closes today at 4:00pm — you have a live opportunity at a 15.3% discount. (2) Two of your options are inside their expiry window — Aurora (AURO) is in the money with 3 days to exercise, which is the one I would action first. (3) Aurora Biotech’s pre-IPO opens Monday; you flagged interest, so I will alert you when the book opens.`;
-    } else if (isMrd) {
-      const bidNote = mrdBid ? ` You have placed a bid of $${mrdBid.toLocaleString("en-AU")}.` : "";
-
-      ans = `Meridian Resources (MRD) is raising $12.0m at $0.50, a 15.3% discount to the last close of $0.59, with one free attaching option per two shares. Our desk rates it a spec buy with a $0.78 target. Minimum bid is $10,000 and the book closes at 4:00pm today.${bidNote} Would you like to review this placement?`;
-    } else if (isOptions) {
-      const urgentOpts = options.filter(o => o.status === "open" && isITM(o) && o.dte <= 14);
-      if (urgentOpts.length > 0) {
-        const details = urgentOpts.map(o => `${o.code} (${o.dte}d left, strike $${o.strike.toFixed(2)})`).join(", ");
-        ans = `You have ${urgentOpts.length} option${urgentOpts.length > 1 ? "s" : ""} in the money and close to expiry: ${details}. Unlisted options are not auto-exercised, so these are the ones to act on. Head over to the Options tab to lodge your instructions.`;
+    if (isOptions) {
+      if (urgentOptions.length > 0) {
+        const details = urgentOptions
+          .map(
+            (o) =>
+              `${o.ticker} (${o.dte}d left${o.strike !== null ? `, strike $${o.strike.toFixed(2)}` : ""})`,
+          )
+          .join(", ");
+        ans = `You have ${urgentOptions.length} option${urgentOptions.length > 1 ? "s" : ""} in the money and close to expiry: ${details}. Unlisted options are not auto-exercised, so these are the ones to act on — the Options tab has the full register.`;
+      } else if (options.length > 0) {
+        ans = `You hold ${options.length} option series. None is both in the money and inside its exercise window right now. The Options tab lists them all with strikes and expiry dates.`;
       } else {
-        ans = "None of your options are both in the money and near expiry right now — your nearest is comfortably out of the window. I will alert you the moment that changes.";
+        ans = "There are no option series on your register at the moment.";
       }
+    } else if (isPortfolio) {
+      ans =
+        `Your lifetime profit and loss is ${pnl >= 0 ? "+" : ""}${money0(pnl)} on ${money0(cost)} invested, across ${portfolio.rows.length} line${portfolio.rows.length === 1 ? "" : "s"} of history. ` +
+        `This account currently holds ${money0(marketValue)} at last price. ` +
+        (portfolio.outsideTotal > 0
+          ? `${portfolio.outsideTotal} line${portfolio.outsideTotal === 1 ? " is" : "s are"} outside that total while the desk confirms the cost base. `
+          : "") +
+        "The Portfolio tab breaks it down parcel by parcel.";
+    } else if (isDeals) {
+      ans =
+        openPlacements > 0
+          ? `There ${openPlacements === 1 ? "is" : "are"} ${openPlacements} placement${openPlacements === 1 ? "" : "s"} open on our book. The Placements tab has the terms and the closing times, and you can bid from there.`
+          : "There are no placements open on our book right now. I will have them here as soon as the desk opens one.";
+    } else if (isMarket) {
+      // Deliberately refused. There is no market data feed behind this app, and
+      // the previous answer to this question was pure invention.
+      ans =
+        "I do not have a market feed behind me, so I will not guess at today's moves or an index comparison. Your adviser can give you the market read — what I can do is your holdings, your profit and loss, and your options.";
     }
 
     // Delay response slightly for natural feel

@@ -1,7 +1,7 @@
 import { getActiveClientId } from "@/lib/session";
 import { getClientOptions } from "@/lib/data/queries";
 import { getClientStoredPnl } from "@/lib/data/pnl";
-import { optionsFromSources, toClientOptionViews } from "@/lib/options/from-stored-pnl";
+import { optionsFromSources } from "@/lib/options/from-stored-pnl";
 import { OptionsClient } from "./OptionsClient";
 
 /**
@@ -43,7 +43,5 @@ export default async function ClientOptionsPage() {
     getClientOptions(clientId),
   ]);
 
-  const options = toClientOptionViews(optionsFromSources(storedPnl, holdings));
-
-  return <OptionsClient options={options} />;
+  return <OptionsClient options={optionsFromSources(storedPnl, holdings)} />;
 }
