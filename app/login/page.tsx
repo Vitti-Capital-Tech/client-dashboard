@@ -131,11 +131,26 @@ export default function LoginPage() {
   /**
    * Codes arrive to be copied, not typed. Without this, pasting all six digits
    * lands one character in one box and looks broken.
+   *
+   * A paste LONGER than the boxes is refused rather than trimmed. Truncating it
+   * silently filled six boxes from an eight-digit code and auto-submitted the
+   * first six — which fails as "not a valid code" and sends you looking at the
+   * wrong thing. It happened for real: the project's Email OTP Length was 8
+   * while this form asked for 6, and the only symptom was a code that never
+   * worked. Say what is actually wrong instead.
    */
   const handlePaste = (index: number, e: React.ClipboardEvent<HTMLInputElement>) => {
     const pasted = e.clipboardData.getData("text").replace(/\D/g, "");
     if (!pasted) return;
     e.preventDefault();
+
+    if (pasted.length > CODE_LENGTH) {
+      setError(
+        `That code is ${pasted.length} digits — this screen expects ${CODE_LENGTH}. ` +
+          `Ask an administrator to check the one-time code length.`,
+      );
+      return;
+    }
 
     const next = [...digits];
     for (let i = 0; i < pasted.length && index + i < CODE_LENGTH; i++) {
