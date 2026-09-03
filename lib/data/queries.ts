@@ -423,14 +423,24 @@ function toPosition(
   >,
 ): Position {
   const sec = securityMap.get(p.security_code);
+  // A derivative rolls up to its ordinary; an ordinary is its own parent.
+  const parent = sec?.parent ?? p.security_code;
   return {
     accountId: p.account_id,
     clientId: p.client_id,
     code: p.security_code,
-    // A derivative rolls up to its ordinary; an ordinary is its own parent.
-    parent: sec?.parent ?? p.security_code,
+    parent,
     name: sec?.name ?? p.security_code,
-    sector: sec?.sector ?? null,
+    /**
+     * The ORDINARY's sector where the row is a derivative.
+     *
+     * An option series has no sector of its own — no data source classifies
+     * `ABXO`, only `ABX` — so reading it off the row's own code left every
+     * option unclassified and dropped it into "Other". The exposure a client
+     * has through a grant is exposure to the underlying's sector, which is the
+     * question a sector breakdown is asking.
+     */
+    sector: sec?.sector ?? securityMap.get(parent)?.sector ?? null,
     qty: p.qty,
     cost: p.avg_cost,
     last: sec?.last ?? null,

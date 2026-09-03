@@ -60,27 +60,6 @@ const DonutChart = ({ segs, size = 128, thick = 18 }: { segs: { label: string; v
   );
 };
 
-// Reusable Bar Chart Component
-const BarChart = ({ items, height = 120 }: { items: { label: string; v: number; col?: string }[]; height?: number }) => {
-  const max = Math.max(...items.map(i => Math.abs(i.v))) || 1;
-  return (
-    <div className="flex items-end gap-1.5 h-30 select-none">
-      {items.map((it, idx) => {
-        const bh = (Math.abs(it.v) / max) * (height - 26);
-        const col = it.col || (it.v < 0 ? "var(--color-loss)" : "var(--color-green)");
-        return (
-          <div key={idx} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0">
-            <div style={{ height: `${bh}px`, backgroundColor: col }} className="w-[60%] max-w-7.5 rounded-t-[3px] transition-all" />
-            <div className="text-[9.5px] text-mut text-center overflow-hidden text-ellipsis whitespace-nowrap w-full">
-              {it.label}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-};
-
 export function PositionsClient({
   positions,
   cash,
@@ -335,29 +314,38 @@ export function PositionsClient({
     const alloc = allocSegs.filter((a) => a.v > 0);
     const share = (v: number) => (allocTotal > 0 ? Math.round((v / allocTotal) * 100) : 0);
 
-    // Sector breakdown
+    /**
+     * Sector exposure, by market value of what is held.
+     *
+     * `p.sector` rolls a derivative up to its ordinary (see `toPosition`), so an
+     * option grant counts as exposure to the underlying's sector — which is the
+     * question this chart is asking. Positions worth nothing are left out: a
+     * zero-value slice is invisible in the pie and a 0% line in the legend.
+     *
+     * Labels are no longer cut at the first word, where "Health Care" and
+     * "Health Insurance" both rendered as "Health".
+     */
     const sectorTotals: Record<string, number> = {};
     positions.forEach(p => {
+      const v = posValue(p);
+      if (v <= 0) return;
       const sector = p.sector ?? "Other";
-      sectorTotals[sector] = (sectorTotals[sector] || 0) + posValue(p);
+      sectorTotals[sector] = (sectorTotals[sector] || 0) + v;
     });
 
-    // Labels are no longer cut at the first word — "Health Care" and "Health
-    // Insurance" both rendered as "Health".
+    const palette = ["#1d202f", "#36bb91", "#c98a2b", "#5c5775", "#1f8e6b", "#9aa0b4", "#b8543f", "#4a7fb5"];
     const sectorArr = Object.keys(sectorTotals)
       .map(k => ({ label: k, v: sectorTotals[k] }))
       .sort((a, b) => b.v - a.v);
+    const sectorWithColors = sectorArr.map((x, i) => ({ ...x, col: palette[i % palette.length] }));
+    const sectorTotal = sectorArr.reduce((sum, x) => sum + x.v, 0);
 
-    // `securities.sector` is null for most of the broker feed's tickers, so this
-    // collapses to a single bar labelled "Other" — one meaningless column, which
-    // reads as a broken chart rather than as missing data. Say which it is.
+    // `securities.sector` was NULL on all 775 rows until `npm run
+    // backfill:sectors` was written to fill it from Yahoo, and any name Yahoo
+    // cannot classify stays NULL by design. Where NOTHING is classified the
+    // chart would be one slice reading "Other 100%", which looks broken rather
+    // than empty — so it says which it is instead of drawing that.
     const hasSectors = sectorArr.some((x) => x.label !== "Other");
-
-    const palette = ["#1d202f", "#36bb91", "#c98a2b", "#5c5775", "#1f8e6b", "#9aa0b4"];
-    const sectorWithColors = sectorArr.map((s, i) => ({
-      ...s,
-      col: palette[i % palette.length]
-    }));
 
     /**
      * Where the P&L actually comes from — closed parcels vs still-held, and
@@ -441,19 +429,39 @@ export function PositionsClient({
           <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow flex flex-col">
             <div className="flex justify-between items-center text-xs mb-3">
               <b className="text-sm font-semibold text-ink">Sector exposure</b>
-              <span className="text-mut font-semibold">listed equities</span>
+              <span className="text-mut font-mono">${Math.round(sectorTotal).toLocaleString("en-AU")}</span>
             </div>
-            <div className="flex-1 flex flex-col justify-end">
-              {hasSectors ? (
-                <BarChart items={sectorWithColors} height={120} />
-              ) : (
-                <p className="text-xs text-mut leading-relaxed pb-2">
+
+            {hasSectors ? (
+              <div className="flex gap-5 items-center flex-wrap">
+                {/* A pie, not a donut: `thick = size / 2` takes the inner radius
+                    to zero, so the same component draws both and the two cards
+                    on this row stay visually of a piece. */}
+                <div className="flex-none">
+                  <DonutChart segs={sectorWithColors} size={128} thick={64} />
+                </div>
+
+                <div className="flex-1 min-w-37.5 space-y-2">
+                  {sectorWithColors.map(x => (
+                    <div key={x.label} className="flex items-center gap-2 text-xs font-medium text-ink">
+                      <i style={{ backgroundColor: x.col }} className="w-2.5 h-2.5 rounded-[3px] block flex-none" />
+                      <span className="truncate" title={x.label}>{x.label}</span>
+                      <b className="ml-auto font-mono text-[13px] font-semibold whitespace-nowrap">
+                        {sectorTotal > 0 ? Math.round((x.v / sectorTotal) * 100) : 0}%
+                      </b>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 flex items-center">
+                <p className="text-xs text-mut leading-relaxed">
                   Sector classifications are not on file for these holdings yet, so
                   there is nothing to break down. Your adviser can tell you the
                   exposure in the meantime.
                 </p>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </div>
 

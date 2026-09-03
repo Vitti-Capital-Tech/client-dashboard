@@ -15,7 +15,8 @@
     "suggest:aliases": "node --env-file=.env.local scripts/suggest-placement-aliases.mjs",
     "seed:auth": "node --env-file=.env.local scripts/seed-auth-users.mjs",
     "login:link": "node --env-file=.env.local scripts/login-link.mjs",
-    "client:login": "node --env-file=.env.local scripts/link-client-login.mjs"
+    "client:login": "node --env-file=.env.local scripts/link-client-login.mjs",
+    "backfill:sectors": "node --env-file=.env.local scripts/backfill-sectors.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
