@@ -1,15 +1,16 @@
-"use client";
-
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
+/**
+ * One sign-in for clients and staff alike.
+ *
+ * The two cards below used to be buttons into `/login?role=client|admin`. They
+ * are descriptions now: which workspace somebody lands in follows from their
+ * email domain and is settled after the code is verified, so asking them to pick
+ * first only offered a stranger two doors and a chance to guess wrong.
+ *
+ * No `"use client"` any more either — with the router gone this page is static.
+ */
 export default function Home() {
-  const router = useRouter();
-
-  const handleStartLogin = (role: "client" | "admin") => {
-    router.push(`/login?role=${role}`);
-  };
-
   return (
     <div className="relative min-h-screen bg-navy text-white overflow-hidden flex flex-col justify-between font-body">
       {/* Radial grid background */}
@@ -56,45 +57,58 @@ export default function Home() {
           </p>
         </div>
 
-        {/* Roles Selectors */}
-        <div className="grid md:grid-cols-2 gap-5 max-w-205">
-          <button 
-            onClick={() => handleStartLogin("client")}
-            className="group text-left bg-navy-2 border border-navy-line hover:border-green rounded-[18px] p-6.5 transition-all cursor-pointer hover:-translate-y-0.75 hover:shadow-shadow-lg"
+        {/* One way in. */}
+        <div className="max-w-205">
+          <Link
+            href="/login"
+            className="group inline-flex items-center gap-2.5 bg-green text-[#08130e] rounded-[12px] px-7 py-3.5 text-[14px] font-semibold transition-all hover:shadow-lg hover:shadow-green-bg"
           >
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4 transition-colors">
-              <svg className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+            Sign in
+            <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
+          </Link>
+          <p className="text-[13px] text-[#7e8298] mt-3.5 leading-relaxed">
+            Enter your email and we will send you a one-time code — no password.
+            Your workspace is chosen for you once you are signed in.
+          </p>
+        </div>
+
+        {/* What each workspace holds. Descriptive, not a choice to make: the
+            domain on the address decides, after the code is verified. */}
+        <div className="grid md:grid-cols-2 gap-5 max-w-205 mt-11">
+          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
+            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
+              <svg
+                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
                 <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
               </svg>
             </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">Client sign in</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] mb-4 leading-normal">
-              See your portfolio, options, placements and alerts — your data only.
+            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For clients</h3>
+            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
+              Your portfolio, options, placements and alerts — your data only.
             </p>
-            <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-green group-hover:translate-x-1 transition-transform">
-              Continue as client &rarr;
-            </span>
-          </button>
+          </div>
 
-          <button 
-            onClick={() => handleStartLogin("admin")}
-            className="group text-left bg-navy-2 border border-navy-line hover:border-green rounded-[18px] p-6.5 transition-all cursor-pointer hover:-translate-y-0.75 hover:shadow-shadow-lg"
-          >
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4 transition-colors">
-              <svg className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
+            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
+              <svg
+                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
                 <circle cx="12" cy="8" r="3.4" />
                 <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" />
                 <path d="M19 4.5l1.4 1.4M4.6 4.5 3.2 5.9" />
               </svg>
             </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">Vitti staff sign in</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] mb-4 leading-normal">
-              Consolidated book across all clients, bidding on their behalf, allocations, alerts and audit.
+            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For the desk</h3>
+            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
+              Consolidated book across all clients, bidding on their behalf,
+              allocations, alerts and audit.
             </p>
-            <span className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-green group-hover:translate-x-1 transition-transform">
-              Continue as staff &rarr;
-            </span>
-          </button>
+          </div>
         </div>
       </main>
 

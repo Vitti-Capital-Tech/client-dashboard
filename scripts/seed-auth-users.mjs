@@ -1,8 +1,21 @@
-// Seed the Supabase Auth staff user.
+// Provision Supabase Auth users.
 // ----------------------------------------------------------------------------
-// Stamps the workspace role into app_metadata.role ('admin'), which is what
-// lib/session.ts reads to decide the workspace. Idempotent: re-running updates
-// the existing user (role + password) instead of erroring.
+// Creates the auth users who are allowed to sign in. Idempotent: re-running
+// leaves an existing user alone rather than erroring.
+//
+// NO PASSWORD is set, and no role is stamped here:
+//
+//   • Sign-in is a one-time code emailed to the address (app/actions/session.ts).
+//     A password would be a second, weaker way in that no screen shows and
+//     nobody rotates — and `signInWithPassword` stays callable against the API
+//     whether or not a form for it exists.
+//   • `app_metadata.role` is derived from the email domain by a trigger on
+//     auth.users (…_role_from_email_domain.sql). Anything passed here would be
+//     overwritten by it, so passing it would only describe the rule twice.
+//
+// This script IS the guest list: `signInWithOtp` runs with
+// `shouldCreateUser: false`, so an address that is not created here cannot log
+// in and cannot be created by typing it into the form.
 //
 // Only staff are seeded. Client logins now come from the broker import
 // (scripts/import-holdings.mjs), which creates clients WITHOUT an email —
@@ -29,13 +42,35 @@ if (!url || !serviceKey) {
   process.exit(1);
 }
 
-const DEMO_PASSWORD = "demo1234";
-
 // A client user's email MUST match clients.email in the DB (see the
 // add_client_email migration) so lib/session.ts can resolve the client row from
-// the auth email. Add entries here with role 'client' once real client logins
-// are issued.
-const USERS = [{ email: "goyal.s@vitti.capital", role: "admin" }];
+// the auth email. Staff addresses need no such row — they see everything through
+// is_staff(). The domain decides which workspace an address lands in.
+const ROSTER = ["goyal.s@vitti.capital"];
+
+/**
+ * Addresses passed on the command line are provisioned too:
+ *
+ *   npm run seed:auth -- someone@vitti.capital another@client.com
+ *
+ * Because `signInWithOtp` runs with `shouldCreateUser: false`, an address that
+ * was never provisioned gets the same "code sent" answer as one that was — and
+ * no email. That is deliberate (the login form must not reveal who holds an
+ * account) and it makes "I never got a code" the single most likely support
+ * call, so adding someone has to be quicker than editing a committed list.
+ */
+const EXTRA = process.argv
+  .slice(2)
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+
+const invalid = EXTRA.filter((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+if (invalid.length > 0) {
+  console.error(`Not an email address: ${invalid.join(", ")}`);
+  process.exit(1);
+}
+
+const USERS = [...new Set([...ROSTER, ...EXTRA])];
 
 const admin = createClient(url, serviceKey, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -61,28 +96,34 @@ async function existingUsers() {
 async function main() {
   const found = await existingUsers();
 
-  for (const { email, role } of USERS) {
-    const id = found.get(email.toLowerCase());
-    if (id) {
-      const { error } = await admin.auth.admin.updateUserById(id, {
-        password: DEMO_PASSWORD,
-        app_metadata: { role },
-      });
-      if (error) throw error;
-      console.log(`updated  ${email.padEnd(28)} role=${role}`);
-    } else {
-      const { error } = await admin.auth.admin.createUser({
-        email,
-        password: DEMO_PASSWORD,
-        email_confirm: true, // skip the confirmation email for the demo
-        app_metadata: { role },
-      });
-      if (error) throw error;
-      console.log(`created  ${email.padEnd(28)} role=${role}`);
+  for (const address of USERS) {
+    const email = address.trim().toLowerCase();
+
+    if (found.has(email)) {
+      // Deliberately not updated. There is nothing left here to refresh — no
+      // password, and the role belongs to the trigger — so a write would only
+      // risk disturbing a live account.
+      console.log(`exists   ${email}`);
+      continue;
     }
+
+    const { data, error } = await admin.auth.admin.createUser({
+      email,
+      // Confirmed on creation: these addresses are provisioned by staff who
+      // already know whose they are, and an unconfirmed user cannot be sent a
+      // login code.
+      email_confirm: true,
+    });
+    if (error) throw error;
+    console.log(
+      `created  ${email.padEnd(30)} role=${data.user?.app_metadata?.role ?? "?"}`,
+    );
   }
 
-  console.log(`\nDone. Seeded users use password: ${DEMO_PASSWORD}`);
+  console.log(
+    "\nDone. These addresses can now request a login code. No passwords exist;\n" +
+      "if mail is down, mint one directly with scripts/login-link.mjs.",
+  );
 }
 
 main().catch((err) => {

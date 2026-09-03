@@ -1,0 +1,114 @@
+<!--
+  Supabase → Authentication → Email Templates → "Magic Link"
+  ---------------------------------------------------------------------------
+  This is the mail `signInWithOtp` sends, and it is the ONLY way anybody signs
+  in: there is no password (see app/actions/session.ts). Kept in the repo because
+  dashboard config is otherwise invisible to review — paste it into the template
+  editor, and edit it here too when you change it there.
+
+  Subject:  Your Vitti Capital sign-in code
+
+  ── {{ .Token }}, and NOT {{ .ConfirmationURL }} ─────────────────────────────
+  `{{ .Token }}` is the six digits the login screen asks for. The default
+  Supabase template ships `{{ .ConfirmationURL }}` instead, which is why an
+  unedited project emails a link and the code box can never be filled.
+
+  The link is deliberately left out rather than offered as well. This app has no
+  auth callback route — nothing under /auth — so a clicked link verifies at
+  Supabase and lands nowhere that can establish the session cookies. A link in an
+  email is the thing people click first, so one that cannot work is worse than
+  none at all. Add `{{ .ConfirmationURL }}` only alongside a route that handles it.
+
+  ── Why the markup looks like 2005 ──────────────────────────────────────────
+  Tables, inline styles, no images, no web fonts. Mail clients strip <style>
+  blocks and external CSS, Outlook ignores flexbox, and blocked images would hide
+  the code itself. The one thing that must survive every client is the number.
+
+  Expiry text: keep "10 minutes" in step with Auth → Sessions → OTP expiry.
+-->
+<table
+  role="presentation"
+  width="100%"
+  cellpadding="0"
+  cellspacing="0"
+  style="background-color:#f7f6f3;margin:0;padding:32px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+>
+  <tr>
+    <td align="center">
+      <table
+        role="presentation"
+        width="100%"
+        cellpadding="0"
+        cellspacing="0"
+        style="max-width:480px;background-color:#ffffff;border:1px solid #e7e4dc;border-radius:14px;overflow:hidden"
+      >
+        <!-- Wordmark band -->
+        <tr>
+          <td style="background-color:#1d202f;padding:22px 28px">
+            <span style="color:#ffffff;font-size:18px;font-weight:600;letter-spacing:0.02em">
+              Vitti
+            </span>
+            <span style="color:#9aa0b4;font-size:10px;font-weight:600;letter-spacing:0.16em;text-transform:uppercase;padding-left:4px">
+              Capital
+            </span>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:32px 28px 8px">
+            <h1 style="margin:0 0 10px;font-size:21px;font-weight:600;color:#1d202f">
+              Your sign-in code
+            </h1>
+            <p style="margin:0;font-size:14px;line-height:1.6;color:#6e7180">
+              Enter this code on the sign-in screen to access your Vitti Capital
+              account.
+            </p>
+          </td>
+        </tr>
+
+        <!-- The code. Letter-spaced and monospaced so digits cannot be misread,
+             and selectable text rather than an image so it can be copied. -->
+        <tr>
+          <td style="padding:24px 28px">
+            <div
+              style="background-color:#f7f6f3;border:1px solid #dedacf;border-radius:10px;padding:20px;text-align:center;font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:32px;font-weight:700;letter-spacing:0.22em;color:#1d202f"
+            >
+              {{ .Token }}
+            </div>
+          </td>
+        </tr>
+
+        <tr>
+          <td style="padding:0 28px 28px">
+            <p style="margin:0 0 16px;font-size:13px;line-height:1.6;color:#6e7180">
+              The code expires in 10 minutes and can be used once.
+            </p>
+            <p style="margin:0;font-size:13px;line-height:1.6;color:#6e7180">
+              If you did not try to sign in, you can ignore this email — nobody
+              can access your account without this code. If it keeps arriving
+              unprompted, tell us at
+              <a href="mailto:info@vitti.capital" style="color:#1f8e6b;font-weight:600;text-decoration:underline">info@vitti.capital</a>.
+            </p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background-color:#f7f6f3;border-top:1px solid #e7e4dc;padding:18px 28px">
+            <p style="margin:0;font-size:11px;line-height:1.6;color:#9aa0b4">
+              Vitti Capital Pty Ltd (ABN 13 670 030 145) is a Corporate
+              Authorised Representative (001306367) of Point Capital Group Pty
+              Ltd (ABN 41 625 931 900), holder of AFSL 518031. For wholesale
+              clients only.
+            </p>
+          </td>
+        </tr>
+      </table>
+
+      <p style="max-width:480px;margin:14px auto 0;font-size:11px;line-height:1.6;color:#9aa0b4;text-align:center">
+        Never share this code. Vitti Capital staff will not ask you for it.
+      </p>
+    </td>
+  </tr>
+</table>
