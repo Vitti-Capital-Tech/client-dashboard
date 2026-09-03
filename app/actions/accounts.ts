@@ -4,12 +4,18 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { getActor } from "@/lib/session";
 import { ACCOUNT_TYPES } from "@/lib/data/discovery";
+import {
+  normaliseAccountNumber,
+  accountNumberProblem,
+} from "@/lib/accounts/account-number";
 
 /**
  * Account lifecycle actions (Stage 10):
  *  - createAccount        — a client opens a new account (self-service).
  *  - requestAccountMerge  — a client requests merging one account into another.
  *  - decideAccountMerge   — STAFF approve/reject; approval executes the merge.
+ *  - requestAccountClaim  — a client says an EXISTING account number is theirs.
+ *  - decideAccountClaim   — STAFF verify; approval re-parents that account.
  */
 
 /** Client opens a new (empty) account. s708 stays null = verification pending. */
@@ -250,5 +256,136 @@ export async function decideAccountMerge(requestId: string, approve: boolean) {
     client_id: req.client_id,
   });
 
+  revalidatePath("/portal", "layout");
+}
+
+/**
+ * A client states that the account with this broker number is also theirs.
+ *
+ * Records the number and nothing more. It does NOT look the account up, and the
+ * caller gets the same answer whether the number matches an account, a
+ * different firm's, or nothing at all — otherwise the form is a way to
+ * enumerate the firm's account numbers with a login and a loop. Verification is
+ * a staff job (`decideAccountClaim`), against the broker record.
+ */
+export async function requestAccountClaim(accountNumber: string, note?: string) {
+  const { actor, role, clientId } = await getActor();
+  if (!clientId) throw new Error("No active client");
+
+  const problem = accountNumberProblem(accountNumber);
+  if (problem) throw new Error(problem);
+  const normalised = normaliseAccountNumber(accountNumber);
+
+  const supabase = await createClient();
+
+  // A number the client already holds is a no-op worth naming, rather than a
+  // request for staff to work out and reject.
+  const { data: own, error: ownErr } = await supabase
+    .from("accounts")
+    .select("external_ref")
+    .eq("client_id", clientId);
+  if (ownErr) throw ownErr;
+  if (
+    (own ?? []).some(
+      (a) => a.external_ref && normaliseAccountNumber(a.external_ref) === normalised,
+    )
+  ) {
+    throw new Error("That account is already on your login.");
+  }
+
+  const { error } = await supabase.from("account_claim_requests").insert({
+    client_id: clientId,
+    account_number: normalised,
+    note: note?.trim() || null,
+    status: "pending",
+  });
+  if (error) {
+    // The partial unique index on (client_id, account_number) WHERE pending.
+    // Reported as the plain-English fact rather than a constraint name.
+    if (error.code === "23505") {
+      throw new Error("You already have a pending request for that account number.");
+    }
+    throw error;
+  }
+
+  await supabase.from("audit_log").insert({
+    actor,
+    role,
+    action: "Requested account claim",
+    detail: `Account number ${normalised}`,
+    client_id: clientId,
+  });
+
+  revalidatePath("/portal", "layout");
+}
+
+/**
+ * Staff verify a claim. Approval RE-PARENTS the account.
+ *
+ * The approval path is a single SECURITY DEFINER RPC and not a sequence of
+ * writes from here, because it rewrites `client_id` across eight tables plus
+ * the account itself. Done as separate PostgREST calls, a failure partway
+ * through would leave the account under one client and its P&L under another —
+ * a client reading someone else's figures. The function is one transaction, and
+ * it does its own `is_staff()` check, so this action's role guard is
+ * defence-in-depth rather than the boundary.
+ *
+ * Rejection is a plain update: it moves no data, so the `claim_decide` policy
+ * is enough.
+ */
+export async function decideAccountClaim(
+  requestId: string,
+  approve: boolean,
+  decisionNote?: string,
+) {
+  const { actor, role } = await getActor();
+  if (role !== "admin") throw new Error("Only staff can decide account claims");
+
+  const supabase = await createClient();
+  const trimmedNote = decisionNote?.trim() || null;
+
+  if (!approve) {
+    const { data: req, error: reqErr } = await supabase
+      .from("account_claim_requests")
+      .select("id, client_id, account_number, status")
+      .eq("id", requestId)
+      .maybeSingle();
+    if (reqErr) throw reqErr;
+    if (!req || req.status !== "pending") return; // already decided / missing
+
+    const { error } = await supabase
+      .from("account_claim_requests")
+      .update({
+        status: "rejected",
+        decided_by: actor,
+        decided_at: new Date().toISOString(),
+        decision_note: trimmedNote,
+      })
+      .eq("id", requestId);
+    if (error) throw error;
+
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Rejected account claim",
+      detail: `Account number ${req.account_number}`,
+      client_id: req.client_id,
+    });
+
+    revalidatePath("/portal", "layout");
+    return;
+  }
+
+  // The RPC raises on every refusal — no such number, an ambiguous number, an
+  // account whose current owner can log in — and its messages are written to be
+  // read by staff, so they are surfaced as-is rather than replaced.
+  const { error } = await supabase.rpc("approve_account_claim", {
+    p_request_id: requestId,
+    p_actor: actor,
+    p_decision_note: trimmedNote,
+  });
+  if (error) throw new Error(error.message);
+
+  // The RPC writes its own audit row: it is the thing that knows what moved.
   revalidatePath("/portal", "layout");
 }

@@ -88,6 +88,32 @@ export type MergeRequestRow = {
   decidedAt: string | null;
 };
 
+/**
+ * A client's claim over an existing account, by its broker account number.
+ *
+ * `accountNumber` is what the person typed (normalised). There is deliberately
+ * no "does it exist" field: the request records the string and nothing else, so
+ * that the form cannot be used to enumerate the firm's account numbers — see
+ * supabase/migrations/20260904090000_account_claims.sql.
+ */
+export type ClaimRequestRow = {
+  id: string;
+  clientId: string;
+  clientName: string; // resolved for staff display
+  clientEmail: string | null; // the login the account would join
+  accountNumber: string;
+  note: string | null;
+  status: Enums<"claim_status">;
+  requestedAt: string;
+  /** Set by an approval: the account that was actually moved. */
+  matchedAccountId: string | null;
+  /** Set by an approval: who held it before. */
+  previousClientId: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+};
+
 export type Position = {
   accountId: string | null;
   clientId: string; // owning person (denormalized)
@@ -323,11 +349,22 @@ export const getMarketIndices = cache(async (): Promise<IndexRow[]> => {
 // ---------------------------------------------------------------------------
 // Clients & holdings
 // ---------------------------------------------------------------------------
+/**
+ * Every client the firm has — excluding rows a claim has emptied.
+ *
+ * `merged_into` marks a broker-created client row whose last account moved to
+ * another login (see `approve_account_claim`). The row is kept for the audit
+ * trail and so the next import does not re-create it, but it owns nothing: left
+ * in this list it would show up in the staff Clients table as a client with no
+ * holdings, no P&L and no explanation, and in the client-view switcher as
+ * somebody to inspect.
+ */
 export const getClients = cache(async (): Promise<ClientRow[]> => {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("clients")
     .select("*")
+    .is("merged_into", null)
     .order("ref");
   if (error) throw error;
   return data.map((c) => ({
@@ -410,6 +447,113 @@ export const getMergeRequests = cache(
       requestedAt: r.requested_at,
       decidedBy: r.decided_by,
       decidedAt: r.decided_at,
+    }));
+  },
+);
+
+/**
+ * This week's note about one security, in both framings.
+ *
+ * Which one a client is shown depends on the sign of THEIR P&L on the holding,
+ * which is the caller's business — the note itself is the same market read for
+ * everybody, which is the point (see the 20260904100000 migration).
+ */
+export type SecurityCommentaryRow = {
+  code: string;
+  /** The Friday this note belongs to. */
+  weekOf: string;
+  lossNote: string;
+  profitNote: string;
+  sources: { title: string; url: string }[];
+  /** A desk member's name where the note was written or corrected by hand. */
+  editedBy: string | null;
+};
+
+/**
+ * The most recent weekly commentary, one row per security.
+ *
+ * ── Why the newest week per security, and not "this week" ───────────────────
+ * Asking for `commentaryWeek(now)` would blank the whole feature between the
+ * Friday close and whenever the batch finishes — and blank it permanently for
+ * any security whose note failed validation that week. A note is captioned with
+ * its own date on screen, so serving last week's is honest and useful where
+ * serving nothing is neither.
+ *
+ * Rows arrive newest-first and the first one per code wins, which is the
+ * newest. Done in JS rather than as a lateral join because PostgREST has no way
+ * to express "latest row per group" and the table is small: one row per held
+ * security per week, so ~142 a week.
+ */
+export const getSecurityCommentary = cache(
+  async (): Promise<Map<string, SecurityCommentaryRow>> => {
+    const supabase = await createClient();
+    const { data, error } = await supabase
+      .from("security_commentary")
+      .select("*")
+      .order("week_of", { ascending: false })
+      // Twelve weeks of a fully covered book. Bounded because this is a read on
+      // every portfolio page load and an unbounded one grows without limit.
+      .limit(2000);
+
+    // A missing table (the migration has not been applied yet) must not take
+    // the portfolio page down with it — the commentary is an addition to that
+    // screen, not a prerequisite for it.
+    if (error) {
+      console.warn(`security_commentary unavailable: ${error.message}`);
+      return new Map();
+    }
+
+    const latest = new Map<string, SecurityCommentaryRow>();
+    for (const r of data) {
+      if (latest.has(r.security_code)) continue; // newest-first, so this is older
+      latest.set(r.security_code, {
+        code: r.security_code,
+        weekOf: r.week_of,
+        lossNote: r.loss_note,
+        profitNote: r.profit_note,
+        sources: Array.isArray(r.sources)
+          ? (r.sources as { title: string; url: string }[])
+          : [],
+        editedBy: r.edited_by,
+      });
+    }
+    return latest;
+  },
+);
+
+/**
+ * Account claims. RLS scopes a client to their own; staff see all.
+ *
+ * `clientId` narrows it further for the client's own page, which asks for its
+ * own rows explicitly rather than relying on RLS alone — belt and braces, and
+ * it also means a staff member inspecting a client sees that client's claims
+ * rather than the whole firm's.
+ */
+export const getAccountClaims = cache(
+  async (clientId?: string): Promise<ClaimRequestRow[]> => {
+    const supabase = await createClient();
+    let query = supabase
+      .from("account_claim_requests")
+      .select("*")
+      .order("requested_at", { ascending: false });
+    if (clientId) query = query.eq("client_id", clientId);
+    const [{ data, error }, clients] = await Promise.all([query, getClients()]);
+    if (error) throw error;
+    const byId = new Map(clients.map((c) => [c.id, c]));
+    return data.map((r) => ({
+      id: r.id,
+      clientId: r.client_id,
+      clientName: byId.get(r.client_id)?.name ?? "",
+      clientEmail: byId.get(r.client_id)?.email ?? null,
+      accountNumber: r.account_number,
+      note: r.note,
+      status: r.status,
+      requestedAt: r.requested_at,
+      matchedAccountId: r.matched_account_id,
+      previousClientId: r.previous_client_id,
+      decidedBy: r.decided_by,
+      decidedAt: r.decided_at,
+      decisionNote: r.decision_note,
     }));
   },
 );

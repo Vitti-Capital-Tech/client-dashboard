@@ -230,6 +230,15 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 ```
 
+#### Weekly position commentary (optional — Claude API)
+Each week after the Friday close, a short note is written against every security a client holds — what has been weighing on it, or where it stands if the holder is ahead. Without a key the feature is simply off: the job reports `not-configured` and returns success, and the portal renders exactly as before with no note on the holding.
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+```
+Uses `claude-opus-5` with the server-side web-search tool for market context, on the **Message Batches API** — half price, and it sidesteps the 60-second route ceiling, which 142 web-search-grounded generations cannot fit inside however they are ordered. One tick submits the week's batch, a later tick collects it. See §4.7 for the schedule, and `lib/commentary/` for the prompt, the validation gate and the job.
+
+Cost is roughly one request per **held** security per week — 142 on the current book, not 662, because the market read is written once per security and stored in two framings rather than once per client-position. The system prompt is byte-identical across every request in the batch and carries a cache breakpoint.
+
 #### Private spreadsheet links (optional — P&L calculator)
 The P&L calculator's **Placement Tracker Integration** card accepts a pasted link instead of a file upload. Public "anyone with the link" URLs work with no configuration. To also read **private** files, add machine credentials — `lib/remote-sheets.ts` uses them to fetch the workbook server-side. Both blocks are optional and independent; without them the calculator falls back to the anonymous fetch and tells the user which credentials would fix the failure.
 
@@ -473,21 +482,48 @@ UPDATE clients
 
 Aliases are read live, so a **Recalculate** on that client is all that follows — no tracker re-parse, since the workbooks have not changed. They only ever *add* candidates, never redirect an account that already resolved. Add one only when it is certain: an alias moves a parcel onto that client's P&L.
 
-### 4.7 Run Development Server
+### 4.7 Weekly position commentary (Friday close → notes on holdings)
+
+Set `ANTHROPIC_API_KEY` (§4.2), then schedule `supabase/migrations/…_commentary_cron.sql` the same way as the morning ingest — substitute `<APP_URL>` and `<CRON_SECRET>` in the SQL editor.
+
+It fires **every two hours from 06:00 UTC Friday to 22:00 UTC Sunday**, and each tick is cheap because the job decides for itself what state the week is in:
+
+* the first tick inside the window **submits** one Batch API job covering every currently-held security that has no note for this week;
+* later ticks find the `commentary_runs` row for that week and **poll**, then **collect** once the batch has ended;
+* a tick on a week already written does nothing.
+
+The window is checked in the job as well as in the schedule — `withinCommentaryWindow` refuses anything before 17:00 Sydney on Friday — because a mis-set cron entry and a manual catch-up arrive as the same request, and neither should write a note against a market that is still open. The week a note belongs to is **its Friday**, resolved on Sydney's clock so a Saturday and a Sunday catch-up top up the same week rather than opening two more (`lib/commentary/week.ts`).
+
+To force a run outside the window:
+```bash
+curl -X POST "https://<host>/api/commentary/weekly?force=1" -H "Authorization: Bearer $CRON_SECRET"
+```
+
+**What the client sees, and what they do not.** Each note exists in two framings of one market read — one for a holder sitting on a loss, one for a holder who is ahead — and the portal picks by the sign of *that client's* own P&L. Two clients in the same stock therefore cannot be told contradictory things about it. Every note is stamped with its week, carries the URLs the search actually returned, and is labelled as general information rather than advice.
+
+**A validation gate stands between the model and the screen** (`lib/commentary/prompt.ts`). A note is *rejected*, not trimmed, if it states a figure of any kind — the client's real numbers are shown next to it and a generated one that disagrees is worse than no note — or if it reads as personal advice ("you should sell", "price target"). One rejected note costs that security its note and nothing else; the reason is recorded in `commentary_runs.notes`. The prompt itself never carries a price or a holder count, so there is nothing to quote back.
+
+**The failure mode to watch for** is a batch submitted and never collected: from `cron.job_run_details` it looks like a series of successful runs, while the client's screen stays empty.
+```sql
+SELECT * FROM commentary_runs
+ WHERE status = 'submitted' AND submitted_at < now() - interval '24 hours';
+```
+
+### 4.8 Run Development Server
 ```bash
 npm run dev
 ```
 Open [http://localhost:3000](http://localhost:3000).
 
-### 4.8 Production Build, Lint & Verification
+### 4.9 Production Build, Lint & Verification
 ```bash
 npm run lint    # ESLint strict validation (0 errors, 0 warnings)
-npm test        # 270 automated unit & regression tests (100% pass)
+npm test        # 494 automated unit & regression tests (100% pass)
 npm run build   # Next.js App Router dynamic production build
 ```
 Migrated routes read the DAL through the async server client (`cookies()`), so they build as **dynamic** (`ƒ`, server-rendered on demand); unmigrated client routes remain statically prerendered shells. A clean build confirms TypeScript constraints, zero ESLint issues, and that `useSearchParams()` Suspense boundaries (see `app/login/page.tsx`) compile without CSR bailout errors.
 
-### 4.9 A quiet failure mode: PostgREST's 1,000-row cap
+### 4.10 A quiet failure mode: PostgREST's 1,000-row cap
 
 Supabase's PostgREST returns at most **1,000 rows** and says nothing about it — no error, no flag, just a short array. `.range()` does not lift the cap, it only moves the window. Anywhere a full set is assumed, that is a silent correctness bug, and this codebase assumed it where it decides money:
 
@@ -516,6 +552,8 @@ Every such read now pages until a short page arrives. There are deliberately two
 | Fabricated client-facing figures removed | ✅ `mtd = pv * 0.018` and `ytd = pv * 0.064` rendered in green as Month/Year to date; `dailyPL()` models a day move from fixed per-security factors; the "auto-generated" morning briefing and the Ask Vitti card asserted hardcoded market colour and day moves. Fine while only the desk opened those screens, not fine once a client could sign in. Replaced with the stored cost base and P&L. Also fixed on the Analytics tab: `+Infinity%` / `+NaN%` in Top movers (zero-cost option grants divided by their cost — and the table SORTED by that, so the infinities took every top slot), an allocation donut summing to 104% (`unlisted || totalAssets * 0.04`, a hardcoded 4% outside the denominator), a single meaningless "Other" sector bar, and a "Portfolio growth" curve that was a hardcoded SVG path under the same invented +6.4%. Ask Vitti was a canned if/else quoting a **price target** nobody gave ("a spec buy with a $0.78 target") and now declines the market question instead. Sector exposure is a **pie** with real data behind it: `securities.sector` was NULL on all 775 rows (the broker export carries no classification), so `npm run backfill:sectors` fills it from Yahoo and options inherit the ordinary's sector via `parent_code` — which took the tested account from "Other 69%" to Basic Materials 76% / Technology 24%. A real month-/year-to-date needs the per-sale dates the staff chart replays |
 | Multi-account model | ✅ `…_multi_account.sql` — `accounts` table; holdings/cash/bids gain `account_id`; client switches account via a topbar switcher, staff aggregate across accounts |
 | Account lifecycle | ✅ `…_account_lifecycle.sql` — clients self-serve **create** accounts; **merge** requires staff approval (`account_merge_requests`; `/portal/client/accounts` + `/portal/staff/merge-requests`) |
+| Account claims (one login, several existing accounts) | ✅ `…_account_claims.sql` — a client enters the **account number** from their broker statement; the request stores the string and resolves nothing (a form that answered would be an oracle for the firm's account numbers). Staff verify against the broker record; `approve_account_claim`, a `SECURITY DEFINER` RPC, re-parents the account and rewrites `client_id` across eight tables in **one transaction**. An account whose owner has a login is refused — use a merge. The emptied broker-created client row is marked `clients.merged_into`, never deleted. The holdings importer no longer rewrites `accounts.client_id` on every run, which would have reversed a claim overnight. LLD §8.34 |
+| Weekly position commentary | ✅ `…_security_commentary.sql` + `…_commentary_cron.sql` — one note per **held** security per week (`claude-opus-5`, web-search server tool, Message Batches API), stored in two framings and served by the sign of the client's own P&L. Submitted and collected on separate `pg_cron` ticks because the route has 60 seconds; the week is its **Friday** on Sydney's clock. A validation gate rejects any note that states a figure or reads as advice. Off, not broken, without `ANTHROPIC_API_KEY`. LLD §8.36 |
 | Broker data pipeline | ✅ `…_trade_ledger.sql` — `trades` ledger + derived `realized_pnl`; `securities.parent_code` rolls derivatives up to their ordinary; importers in `scripts/import-{holdings,trades}.mjs` with shared pure logic in `lib/import/`; a reconciliation report flags every sale with no cost basis and proposes a ticker-change match where the ledger itself contains one |
 | Order history + realised P&L | ✅ `/portal/staff/clients/[id]` **Order history** tab — a P&L-by-company table (one row per ticker, same columns as the exports) plus a diverging **column chart of realised P&L by month**. Zero-cost-basis rows are flagged in both. Holdings live on the same page's Holdings tab; there is deliberately no separate firm-wide holdings route |
 | P&L summary export | ✅ one row per company (Row Labels · Company · Buy Qty · Sell Qty · Buy Price · Sell/Current Price · PnL · Position · Type, where Position names the state — Open / Partly open / Closed / Unknown — rather than answering Yes/No) with a summing Grand Total, rendered identically on screen and in both files. **CSV** for data interchange; a real **.xlsx** via ExcelJS for the colour-coded copy — the P&L column is green above zero and red below it (a loss reading `-$1,234.56`, not accounting brackets), on every row and on the Grand Total alike. The workbook is built in a server action so the ~1 MB library never reaches the browser |

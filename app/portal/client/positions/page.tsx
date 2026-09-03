@@ -4,12 +4,15 @@ import {
   getAccount,
   getSignals,
   getClientOptions,
+  getClientTrades,
+  getSecurityMap,
+  getSecurityCommentary,
   type SignalRow,
 } from "@/lib/data/queries";
 import { getClientStoredPnl } from "@/lib/data/pnl";
 import { getClientPnlOverrides } from "@/lib/data/holdings";
 import { clientPortfolio } from "@/lib/pnl/client-portfolio";
-import { unlistedValue } from "@/lib/data/compute";
+import { unlistedValue, attributeSells } from "@/lib/data/compute";
 import { PositionsClient } from "./PositionsClient";
 
 /**
@@ -44,13 +47,26 @@ export default async function ClientPositionsPage() {
     getActiveClientId(),
   ]);
 
-  const [positions, options, account, signals, storedPnl, overrides] = await Promise.all([
+  const [
+    positions,
+    options,
+    account,
+    signals,
+    storedPnl,
+    overrides,
+    trades,
+    securityMap,
+    commentaryByCode,
+  ] = await Promise.all([
     getPositions(accountId),
     getClientOptions(clientId),
     getAccount(accountId),
     getSignals(),
     clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
     clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
+    clientId ? getClientTrades(clientId) : Promise.resolve([]),
+    getSecurityMap(),
+    getSecurityCommentary(),
   ]);
 
   const cash = account?.cash ?? 0;
@@ -59,13 +75,54 @@ export default async function ClientPositionsPage() {
     signals.map((s) => [s.code, s]),
   );
 
+  /**
+   * Dated realised P&L, attributed HERE rather than in the browser.
+   *
+   * The date picker is interactive, so the island needs the underlying data
+   * rather than one pre-computed answer — but it needs the SALES, not the
+   * ledger. One tested account holds 1,650 contract notes and the replay that
+   * turns them into per-sale results is the same cost-basis walk the importer
+   * uses; running it on the server sends the browser only the sales (a few
+   * hundred small rows), and keeps one implementation of the arithmetic instead
+   * of a second one written for the client.
+   */
+  const sells = attributeSells(trades);
+
+  const portfolio = clientPortfolio(storedPnl, overrides);
+
+  /**
+   * Ticker → sector, for every ticker the sector chart can be asked about.
+   *
+   * The derivative-to-ordinary rollup is resolved HERE rather than in the
+   * browser, the same way `toPosition` does it: an option series has no sector
+   * of its own — no data source classifies 'EOSXX' — but the exposure a client
+   * has through a grant is exposure to the underlying's sector, which is the
+   * question a sector breakdown is asking. `parentTicker` comes off the stored
+   * row; where it is absent the code IS the ordinary.
+   *
+   * Built from the tickers actually in the portfolio rather than from the whole
+   * 775-row catalogue, so the payload is the client's own holdings.
+   */
+  const parentOf = new Map(
+    storedPnl.map((r) => [r.ticker, r.parentTicker ?? r.ticker]),
+  );
+  const sectorByTicker: Record<string, string | null> = {};
+  for (const row of portfolio.rows) {
+    const parent = parentOf.get(row.ticker) ?? row.ticker;
+    sectorByTicker[row.ticker] =
+      securityMap.get(row.ticker)?.sector ?? securityMap.get(parent)?.sector ?? null;
+  }
+
   return (
     <PositionsClient
       positions={positions}
       cash={cash}
       unlisted={unlisted}
       signals={signalMap}
-      portfolio={clientPortfolio(storedPnl, overrides)}
+      portfolio={portfolio}
+      sells={sells}
+      sectorByTicker={sectorByTicker}
+      commentary={Object.fromEntries(commentaryByCode)}
     />
   );
 }

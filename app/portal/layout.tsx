@@ -12,6 +12,7 @@ import {
   getAlerts,
   getPlacements,
   getMergeRequests,
+  getAccountClaims,
 } from "@/lib/data/queries";
 import { PortalShell } from "./PortalShell";
 
@@ -59,9 +60,20 @@ export default async function PortalLayout({
     accountType: a.accountType,
   }));
 
-  // Staff badge: number of merge requests awaiting a decision.
-  const pendingMergeCount =
-    role === "admin" ? (await getMergeRequests("pending")).length : 0;
+  // Staff badge: everything on the Account requests page awaiting a decision.
+  // Claims and merges share one badge because they share one page — a client
+  // waiting on either is waiting on the same queue, and two counters on one nav
+  // item would say less, not more.
+  let pendingMergeCount = 0;
+  if (role === "admin") {
+    const [pendingMerges, allClaims] = await Promise.all([
+      getMergeRequests("pending"),
+      getAccountClaims(),
+    ]);
+    pendingMergeCount =
+      pendingMerges.length +
+      allClaims.filter((c) => c.status === "pending").length;
+  }
 
   return (
     <PortalShell

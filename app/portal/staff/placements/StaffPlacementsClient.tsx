@@ -164,6 +164,10 @@ export function StaffPlacementsClient({
               <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
                 <b className="text-sm font-semibold block select-none">Client Bids Register</b>
 
+                {/* Client names are long — one real account is "Saturn Fund
+                    Investments PTY LTD <saturn Unit Short A/c>" — so this table
+                    scrolls in its own box rather than pushing the page sideways. */}
+                <div className="overflow-x-auto -mx-1 px-1">
                 <table className="w-full border-collapse text-left text-xs font-medium">
                   <thead>
                     <tr className="border-b border-line text-mut select-none">
@@ -205,6 +209,7 @@ export function StaffPlacementsClient({
                     )}
                   </tbody>
                 </table>
+                </div>
 
                 {/* Book a bid for a client, in shares.
                     Quantity rather than dollars because that is how the desk is

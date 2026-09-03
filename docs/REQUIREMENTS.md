@@ -30,8 +30,13 @@ and the [production SQL schema](../db/schema.sql).
 - **Access control is enforced.** Route protection redirects unauthenticated `/portal` requests to `/login`
   (proxy + layout), a staff-area layout blocks non-admins, and **Postgres RLS** guarantees a client can only
   read/write their own rows (staff bypass via `app_metadata.role`) — see §5 and [the RLS migration](../supabase/migrations).
+- **The AI backend now exists, for one job.** The weekly per-security commentary (F10) calls **Claude** with the
+  web-search server tool through the Message Batches API, on a `pg_cron` schedule from the Friday close. It is the
+  first LLM call in the codebase and it establishes the pattern the rest of §4.6 needs: a validation gate between the
+  model and the client's screen, sources stored alongside every claim, and the whole feature off — not broken — when
+  `ANTHROPIC_API_KEY` is unset.
 - **Still cosmetic / missing:** the login **OTP screen is cosmetic** (no real TOTP 2FA yet), and there is
-  **no live market data and no AI/news backend** — prices, alerts, and Ask Vitti responses are seeded/keyword-based.
+  **no live market data** — prices and alerts are seeded, and Ask Vitti is still keyword-based.
 
 "Fully functional" is therefore the **prototype → production gap** described below. Persistence (F2), the
 server-side bidding/settlement lifecycle (F3), audit-log writes (F8), and **auth with route protection + RLS**
@@ -61,10 +66,12 @@ the Postgres our schema already targets. Only the market-data feed and Claude si
 | F3 | **Bidding lifecycle** | ✅ Done (single-user) | Server actions (`placeBid`/`scaleBids`/`settlePlacement`) with server-side settlement engine. *Still needed:* transactional/concurrency-safe scaling under contention |
 | F4 | **Market data** | ❌ Open | Seeded `securities.last_price` / `market_indices`. *Needed:* live (or delayed/EOD) feed on a schedule |
 | F5 | **Alerts engine** | ⏳ Partial | `alerts` rows are materialized (seeded) and read via `getAlerts`; ack is a server action. *Needed:* scheduled server job that rescans options/prices and pushes to clients |
-| F6 | **Ask Vitti AI** | ❌ Open | Keyword matching over DAL shapes. *Needed:* Claude API backend, grounded with the client's live portfolio context |
+| F6 | **Ask Vitti AI** | ❌ Open | Keyword matching over DAL shapes. *Needed:* Claude API backend, grounded with the client's live portfolio context. (The Claude API is now wired up for F10 — `@anthropic-ai/sdk`, `ANTHROPIC_API_KEY` — so this is a prompt and a grounding problem rather than an integration one) |
 | F7 | **Live news** | ❌ Open | Static seed list. *Needed:* news source (news API **or** Claude web-search tool) + Claude to write the "how to use this" note |
 | F8 | **Audit log** | ✅ Done | Every server action appends to the partitioned `audit_log` |
 | F9 | **BPAY / payments** | ⏳ Interim | `notifyBpayPayment` sets the `paid` flag. *Needed:* manual staff reconciliation workflow; PSP integration later |
+| F10 | **Weekly position commentary** | ✅ Done | Claude (`claude-opus-5`) with the web-search server tool, on the Batches API, scheduled by `pg_cron` from the Friday close through Sunday. One note per **held** security in two framings; served by the sign of the client's own P&L. Gated on `ANTHROPIC_API_KEY` and off without it. See LLD §8.36 |
+| F11 | **One login, several existing accounts** | ✅ Done | A client claims an account by its broker number; staff verify against the broker record; approval re-parents the account and everything denormalised against it in one `SECURITY DEFINER` transaction. See LLD §8.34 |
 
 ---
 

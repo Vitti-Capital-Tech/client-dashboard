@@ -175,6 +175,46 @@ test("holdings: re-running the same file converges, it does not accumulate", asy
   assert.equal(tables.positions.length, 3);
 });
 
+test("holdings: a re-parented account keeps its owner across the next import", async () => {
+  const { db, tables } = fakeDb();
+  await runHoldingsImport(db, HOLDINGS_CSV);
+
+  // What an approved account claim leaves behind: the account now belongs to a
+  // client other than the stub the broker ref created, and its holdings say so.
+  const acct = tables.accounts.find((a) => a.external_ref === "114716")!;
+  const stubClientId = acct.client_id;
+  acct.client_id = "c-claimed";
+  for (const p of tables.positions.filter((p) => p.account_id === acct.id)) {
+    p.client_id = "c-claimed";
+  }
+
+  await runHoldingsImport(db, HOLDINGS_CSV);
+
+  // The importer used to send `client_id` on every upsert, which handed the
+  // account straight back to the stub — an approved claim silently reversed by
+  // the next morning's snapshot, with the account vanishing from the client's
+  // switcher overnight.
+  assert.equal(
+    tables.accounts.find((a) => a.external_ref === "114716")!.client_id,
+    "c-claimed",
+    "ownership is set when the account is created and never rewritten after",
+  );
+  assert.notEqual(stubClientId, "c-claimed", "the fixture must actually change owner");
+
+  // Positions are re-inserted from the snapshot every run, so they have to pick
+  // up the owner the ACCOUNT now has rather than the one the ref implies.
+  const owners = new Set(
+    tables.positions.filter((p) => p.account_id === acct.id).map((p) => p.client_id),
+  );
+  assert.deepEqual([...owners], ["c-claimed"], "holdings follow the account's owner");
+
+  // Everything the broker really is the authority on still updates.
+  assert.equal(
+    tables.accounts.find((a) => a.external_ref === "114716")!.label,
+    "Smith John",
+  );
+});
+
 test("holdings: a file with no usable rows is refused, not applied", async () => {
   const { db } = fakeDb();
   const headerOnly = HOLDINGS_CSV.split("\n")[0] + "\n";

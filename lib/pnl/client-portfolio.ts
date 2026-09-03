@@ -70,6 +70,21 @@ export type ClientPortfolio = {
    * that says so — without being handed the desk's unresolved work.
    */
   outsideTotal: number;
+  /**
+   * How far each corrected row's P&L moved from what the engine computed, as
+   * `[ticker, delta]` pairs.
+   *
+   * Needed by the dated realised-P&L window, which is built by replaying the
+   * trade ledger rather than by reading these rows — so without the deltas a
+   * client's "realised between these dates" would ignore every correction their
+   * own P&L table already reflects, and the two figures on one screen would
+   * disagree. `realizedBetween` spreads each delta across that company's sales.
+   *
+   * Only the SIZE of the correction crosses over, never the fact that a row was
+   * corrected: that is the desk's working note, not a fact about the money (see
+   * the section above).
+   */
+  overrideDeltas: [string, number][];
 };
 
 export function clientPortfolio(
@@ -86,6 +101,12 @@ export function clientPortfolio(
   const total = grandTotal(summary);
   const outsideTotal = summary.filter((r) => r.excludedFromTotal).length;
 
+  // Half a cent of slack: these are two floating-point paths to the same
+  // figure, and a delta of 1e-13 is not a correction anybody made.
+  const overrideDeltas: [string, number][] = summary
+    .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
+    .map((r) => [r.ticker, r.pnl - r.computed.pnl]);
+
   const rows: ClientPortfolioRow[] = summary.map((r) => ({
     ticker: r.ticker,
     name: r.name,
@@ -99,7 +120,7 @@ export function clientPortfolio(
     type: r.type,
   }));
 
-  return { rows, total, outsideTotal };
+  return { rows, total, outsideTotal, overrideDeltas };
 }
 
 /** Is this row an option of either kind? The rollup says so in `type`. */

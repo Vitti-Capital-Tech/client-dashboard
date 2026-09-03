@@ -2,9 +2,18 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { AccountRow, MergeRequestRow } from "@/lib/data/queries";
+import type {
+  AccountRow,
+  MergeRequestRow,
+  ClaimRequestRow,
+} from "@/lib/data/queries";
 import { ACCOUNT_TYPES } from "@/lib/data/discovery";
-import { createAccount, requestAccountMerge } from "@/app/actions/accounts";
+import {
+  createAccount,
+  requestAccountMerge,
+  requestAccountClaim,
+} from "@/app/actions/accounts";
+import { accountNumberProblem } from "@/lib/accounts/account-number";
 
 function s708Label(iso: string | null): string {
   if (!iso) return "Verification pending";
@@ -24,9 +33,11 @@ const statusPill: Record<string, string> = {
 export function AccountsClient({
   accounts,
   requests,
+  claims,
 }: {
   accounts: AccountRow[];
   requests: MergeRequestRow[];
+  claims: ClaimRequestRow[];
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -35,6 +46,12 @@ export function AccountsClient({
   const [label, setLabel] = useState("");
   const [type, setType] = useState<string>(ACCOUNT_TYPES[0]);
   const [createErr, setCreateErr] = useState<string | null>(null);
+
+  // Claim form — add an account that already exists, by its broker number.
+  const [claimNumber, setClaimNumber] = useState("");
+  const [claimNote, setClaimNote] = useState("");
+  const [claimErr, setClaimErr] = useState<string | null>(null);
+  const [claimOk, setClaimOk] = useState<string | null>(null);
 
   // Merge form
   const [sourceId, setSourceId] = useState(accounts[0]?.id ?? "");
@@ -71,6 +88,25 @@ export function AccountsClient({
     }, setMergeErr);
   };
 
+  const handleClaim = (e: React.FormEvent) => {
+    e.preventDefault();
+    setClaimErr(null);
+    setClaimOk(null);
+    // Checked here only to save a round trip on an obviously empty box; the
+    // action re-checks, because a form is not a security boundary.
+    const problem = accountNumberProblem(claimNumber);
+    if (problem) {
+      setClaimErr(problem);
+      return;
+    }
+    run(async () => {
+      await requestAccountClaim(claimNumber, claimNote);
+      setClaimNumber("");
+      setClaimNote("");
+      setClaimOk("Sent to the Vitti desk. They will verify it against the broker record.");
+    }, setClaimErr);
+  };
+
   const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? "";
 
   return (
@@ -79,7 +115,8 @@ export function AccountsClient({
         <div className="font-mono text-xs tracking-wider uppercase text-mut">Account management</div>
         <h1 className="font-disp font-medium text-[26px] mt-0.5">Your accounts</h1>
         <p className="text-xs text-mut mt-1">
-          Open a new account, or request to merge two of your accounts (a merge needs Vitti desk approval).
+          Add an account you already hold, open a new one, or request to merge two of your
+          accounts. Adding and merging both need Vitti desk approval.
         </p>
       </div>
 
@@ -93,6 +130,9 @@ export function AccountsClient({
             <thead>
               <tr className="border-b border-line text-mut select-none">
                 <th className="px-4.5 py-2.5">Account</th>
+                {/* The number is what a client quotes to add another account,
+                    so it belongs on the screen where they do that. */}
+                <th className="px-4.5 py-2.5">Number</th>
                 <th className="px-4.5 py-2.5">Structure</th>
                 <th className="px-4.5 py-2.5 text-right">Cash</th>
                 <th className="px-4.5 py-2.5">s708 certificate</th>
@@ -102,8 +142,11 @@ export function AccountsClient({
               {accounts.map((a) => (
                 <tr key={a.id} className="hover:bg-[#faf9f5]">
                   <td className="px-4.5 py-3 font-semibold text-ink">{a.label}</td>
+                  <td className="px-4.5 py-3 font-mono text-mut whitespace-nowrap">
+                    {a.externalRef ?? "—"}
+                  </td>
                   <td className="px-4.5 py-3 text-mut">{a.accountType}</td>
-                  <td className="px-4.5 py-3 text-right font-mono">
+                  <td className="px-4.5 py-3 text-right font-mono whitespace-nowrap">
                     ${a.cash.toLocaleString("en-AU")} {a.currency}
                   </td>
                   <td className="px-4.5 py-3">
@@ -118,7 +161,65 @@ export function AccountsClient({
         </div>
       </div>
 
-      <div className="grid md:grid-cols-2 gap-5">
+      <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+        {/* Claim an existing account, by its broker number */}
+        <form
+          onSubmit={handleClaim}
+          className="card bg-white border border-line rounded-[14px] shadow-shadow p-5 space-y-4"
+        >
+          <b className="text-sm font-semibold text-ink block select-none">
+            Add an account you already hold
+          </b>
+          <div className="space-y-1">
+            <label htmlFor="claim-number" className="block text-xs font-semibold text-ink">
+              Account number
+            </label>
+            <input
+              id="claim-number"
+              value={claimNumber}
+              onChange={(e) => setClaimNumber(e.target.value)}
+              placeholder="e.g. 1102004"
+              // `inputMode` rather than `type="number"`: not every account
+              // number is numeric ('PLACEVITT'), and a number input would also
+              // add spinners and swallow a leading zero.
+              inputMode="text"
+              autoComplete="off"
+              required
+              className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2.5 text-sm font-mono focus:border-green focus:outline-none"
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="claim-note" className="block text-xs font-semibold text-ink">
+              Note to the desk (optional)
+            </label>
+            <textarea
+              id="claim-note"
+              value={claimNote}
+              onChange={(e) => setClaimNote(e.target.value)}
+              placeholder="e.g. this is our unit trust account"
+              className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs min-h-16 focus:border-green focus:outline-none"
+            />
+          </div>
+          <p className="text-[11.5px] text-mut leading-normal">
+            Use the account number on your broker statement. The desk verifies it against the
+            broker record before the account appears on your login — we never confirm or deny an
+            account number here.
+          </p>
+          {claimErr && (
+            <p className="text-[12px] font-semibold text-loss-d bg-loss-bg rounded-[8px] px-3 py-2">{claimErr}</p>
+          )}
+          {claimOk && (
+            <p className="text-[12px] font-semibold text-green-d bg-green-bg rounded-[8px] px-3 py-2">{claimOk}</p>
+          )}
+          <button
+            type="submit"
+            disabled={isPending}
+            className="w-full btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2.5 text-[13px] font-semibold cursor-pointer disabled:opacity-60"
+          >
+            Request access
+          </button>
+        </form>
+
         {/* Create account */}
         <form
           onSubmit={handleCreate}
@@ -221,6 +322,54 @@ export function AccountsClient({
             </>
           )}
         </form>
+      </div>
+
+      {/* Account requests (claims) history */}
+      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+        <div className="px-4.5 py-3.5 border-b border-line select-none">
+          <b className="text-sm font-semibold text-ink">Requests to add an account</b>
+        </div>
+        <div className="divide-y divide-line">
+          {claims.length === 0 ? (
+            <div className="text-center text-mut py-8 text-xs select-none">
+              No requests yet.
+            </div>
+          ) : (
+            claims.map((c) => (
+              <div
+                key={c.id}
+                className="p-4 flex justify-between items-start gap-4 text-xs"
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-ink font-mono">{c.accountNumber}</div>
+                  {c.note && <p className="text-mut text-[11.5px] mt-0.5">{c.note}</p>}
+                  <div className="text-[10.5px] font-mono text-mut mt-1">
+                    Requested{" "}
+                    {new Date(c.requestedAt).toLocaleDateString("en-AU", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                    {c.decidedBy && ` · ${c.status} by ${c.decidedBy}`}
+                  </div>
+                  {/* Only ever the desk's own words. A rejection reason the desk
+                      did not write would be this screen guessing on their
+                      behalf about somebody's account. */}
+                  {c.decisionNote && (
+                    <p className="text-mut text-[11.5px] mt-1 leading-normal">
+                      {c.decisionNote}
+                    </p>
+                  )}
+                </div>
+                <span
+                  className={`pill text-[10px] font-bold px-2.5 py-1 rounded-full capitalize flex-none ${statusPill[c.status] ?? "bg-paper-2 text-mut"}`}
+                >
+                  {c.status}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* Merge requests history */}

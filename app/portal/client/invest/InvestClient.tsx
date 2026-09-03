@@ -474,8 +474,8 @@ export function InvestClient({
 
       {/* Plan Builder Dialog Modal */}
       {showBuilder && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4">
+        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto">
             <h3 className="font-disp font-medium text-lg text-ink">Build my plan</h3>
             <p className="text-xs text-mut leading-normal">
               Tell us the brief. We’ll return 3–4 recommendations across timeframes, each with a target and date.
@@ -555,7 +555,7 @@ export function InvestClient({
 
       {/* Idea Detail Modal */}
       {showIdeaModal && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
+        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
           {(() => {
             const i = ideas.find(x => x.code === showIdeaModal)!;
             const up = i.target && i.last ? Math.round((i.target / i.last - 1) * 100) : null;
@@ -624,8 +624,8 @@ export function InvestClient({
 
       {/* Deploy Money Modal */}
       {showDeployModal && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5">
-          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <h3 className="font-disp font-medium text-lg text-ink">Invest in {showDeployModal.code}</h3>
             <p className="text-xs text-mut">
               Execute order with the Vitti desk

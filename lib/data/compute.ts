@@ -153,6 +153,40 @@ export function attributeSells(trades: TradeRow[]): SellAttribution[] {
   ).sells;
 }
 
+/**
+ * Fold the desk's per-ticker P&L corrections into dated sales.
+ *
+ * An override is a company-level figure with no date of its own, so its delta
+ * is spread across that company's sales **pro-rata by units sold** — which is
+ * exactly where the corrected cost would have landed had it been in the ledger.
+ * A company with no sales gets nothing: correcting an unsold position changes
+ * unrealised P&L, and nothing unrealised belongs on a realised figure.
+ *
+ * Shared by `realizedByMonth` and `realizedBetween` so a month on the chart and
+ * a date range on the client's own screen cannot apply corrections differently.
+ * It MUST run over the whole sale history before any date filter: the pro-rata
+ * weights are shares of a company's total units sold, and re-deriving them from
+ * a window would hand that window a share of the correction sized to the window
+ * rather than to the sale.
+ */
+function applyOverrideDeltas(
+  sells: SellAttribution[],
+  deltaByTicker: Map<string, number>,
+): SellAttribution[] {
+  if (deltaByTicker.size === 0) return sells;
+
+  const soldByTicker = new Map<string, number>();
+  for (const s of sells) {
+    soldByTicker.set(s.parent, (soldByTicker.get(s.parent) ?? 0) + s.units);
+  }
+  return sells.map((s) => {
+    const delta = deltaByTicker.get(s.parent);
+    const totalUnits = soldByTicker.get(s.parent) ?? 0;
+    if (!delta || totalUnits <= 0) return s;
+    return { ...s, realizedPl: s.realizedPl + delta * (s.units / totalUnits) };
+  });
+}
+
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function monthLabel(key: string): string {
@@ -187,18 +221,7 @@ export function realizedByMonth(
 ): RealizedPeriod[] {
   if (sells.length === 0) return [];
 
-  if (deltaByTicker.size > 0) {
-    const soldByTicker = new Map<string, number>();
-    for (const s of sells) {
-      soldByTicker.set(s.parent, (soldByTicker.get(s.parent) ?? 0) + s.units);
-    }
-    sells = sells.map((s) => {
-      const delta = deltaByTicker.get(s.parent);
-      const totalUnits = soldByTicker.get(s.parent) ?? 0;
-      if (!delta || totalUnits <= 0) return s;
-      return { ...s, realizedPl: s.realizedPl + delta * (s.units / totalUnits) };
-    });
-  }
+  sells = applyOverrideDeltas(sells, deltaByTicker);
 
   const byKey = new Map<string, RealizedPeriod>();
 
@@ -272,6 +295,145 @@ export function realizedByMonth(
   }
 
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Realized P&L over an arbitrary window ("from this date to that date")
+// ---------------------------------------------------------------------------
+
+/** What one company contributed to a window's realised P&L. */
+export type WindowContributor = {
+  parent: string;
+  realizedPl: number;
+  proceeds: number;
+  costOfSold: number;
+  units: number;
+  saleCount: number;
+  /** At least one of these sales drew on no cost basis. */
+  noCostBasis: boolean;
+};
+
+export type RealizedWindow = {
+  /** `YYYY-MM-DD`, inclusive both ends. */
+  from: string;
+  to: string;
+  realizedPl: number;
+  proceeds: number;
+  costOfSold: number;
+  saleCount: number;
+  /** Largest absolute result first. */
+  contributors: WindowContributor[];
+  /**
+   * Some of this window's profit has no cost behind it, so it is overstated.
+   *
+   * Worth surfacing rather than hiding: where the ledger never saw the buy, the
+   * "profit" on a sale is really the whole proceeds.
+   */
+  hasUncosted: boolean;
+};
+
+/**
+ * Realised P&L between two dates, inclusive.
+ *
+ * ── This is REALISED only, and that is not a shortcut ───────────────────────
+ * A date range can only ever describe realised money. Unrealised P&L is the
+ * difference between a cost base and a price today: it belongs to no date in
+ * particular, and there is no price history in this app to value a holding as
+ * at some earlier date. So "P&L between March and June" means the profit on
+ * what was SOLD in that window, and the UI has to say so — a figure captioned
+ * as the portfolio's return over a period, that silently covered only its
+ * sales, would be the wrong number with no way to tell.
+ *
+ * Bounds are compared as `YYYY-MM-DD` strings, which is safe because
+ * `trades.trade_date` is a DATE and the DAL hands it over in that form. No
+ * `new Date()` anywhere: parsing these to local time is how a trade on the 1st
+ * ends up in the previous month for anyone east of UTC.
+ */
+export function realizedBetween(
+  sells: SellAttribution[],
+  from: string,
+  to: string,
+  deltaByTicker: Map<string, number> = new Map(),
+): RealizedWindow {
+  // Swapped bounds are a slip, not a request for nothing. The alternative is a
+  // screen that reads "$0 realised" for a range that has plenty in it.
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+
+  // Corrections are spread over the FULL history first — see applyOverrideDeltas.
+  const inWindow = applyOverrideDeltas(sells, deltaByTicker).filter(
+    (s) => s.tradeDate >= lo && s.tradeDate <= hi,
+  );
+
+  const byParent = new Map<string, WindowContributor>();
+  let realizedPl = 0;
+  let proceeds = 0;
+  let costOfSold = 0;
+  let hasUncosted = false;
+
+  for (const s of inWindow) {
+    realizedPl += s.realizedPl;
+    proceeds += s.proceeds;
+    costOfSold += s.costOfSold;
+    hasUncosted = hasUncosted || s.noCostBasis;
+
+    const existing = byParent.get(s.parent);
+    if (existing) {
+      existing.realizedPl += s.realizedPl;
+      existing.proceeds += s.proceeds;
+      existing.costOfSold += s.costOfSold;
+      existing.units += s.units;
+      existing.saleCount += 1;
+      existing.noCostBasis = existing.noCostBasis || s.noCostBasis;
+    } else {
+      byParent.set(s.parent, {
+        parent: s.parent,
+        realizedPl: s.realizedPl,
+        proceeds: s.proceeds,
+        costOfSold: s.costOfSold,
+        units: s.units,
+        saleCount: 1,
+        noCostBasis: s.noCostBasis,
+      });
+    }
+  }
+
+  const contributors = [...byParent.values()]
+    .map((c) => ({
+      ...c,
+      realizedPl: money(c.realizedPl),
+      proceeds: money(c.proceeds),
+      costOfSold: money(c.costOfSold),
+    }))
+    .sort((a, b) => Math.abs(b.realizedPl) - Math.abs(a.realizedPl));
+
+  return {
+    from: lo,
+    to: hi,
+    realizedPl: money(realizedPl),
+    proceeds: money(proceeds),
+    costOfSold: money(costOfSold),
+    saleCount: inWindow.length,
+    contributors,
+    hasUncosted,
+  };
+}
+
+/**
+ * The window a "last N months" preset covers, ending on `today`.
+ *
+ * Built by arithmetic on the date parts rather than `setMonth`, which rolls a
+ * 31st into the following month (31 March minus one month is 3 March, not
+ * 28 February). Clamped to the last day of the target month instead.
+ */
+export function monthsBack(today: string, months: number): { from: string; to: string } {
+  const [y, m, d] = today.split("-").map(Number);
+  const targetMonthIndex = (y * 12 + (m - 1)) - months;
+  const ty = Math.floor(targetMonthIndex / 12);
+  const tm = (targetMonthIndex % 12) + 1;
+  const lastOfTarget = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+  const td = Math.min(d, lastOfTarget);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return { from: `${ty}-${pad(tm)}-${pad(td)}`, to: today };
 }
 
 /** Collapse account-grain rows to one entry per company. */
