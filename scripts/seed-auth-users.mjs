@@ -13,9 +13,15 @@
 //     auth.users (…_role_from_email_domain.sql). Anything passed here would be
 //     overwritten by it, so passing it would only describe the rule twice.
 //
-// This script IS the guest list: `signInWithOtp` runs with
-// `shouldCreateUser: false`, so an address that is not created here cannot log
-// in and cannot be created by typing it into the form.
+// This script is the guest list for CLIENTS. `signInWithOtp` runs with
+// `shouldCreateUser: false`, so a client address that is not created here cannot
+// log in and cannot be created by typing it into the form.
+//
+// Staff do not need it: `@vitti.capital` addresses provision themselves on their
+// first code request (see `ensureStaffAccount` in app/actions/session.ts), since
+// only somebody who can read mail on the firm's own domain can finish that
+// sign-in. Running this for a staff address is harmless — it just gets there
+// first.
 //
 // Only staff are seeded. Client logins now come from the broker import
 // (scripts/import-holdings.mjs), which creates clients WITHOUT an email —

@@ -267,8 +267,9 @@ export default function LoginPage() {
               </button>
 
               <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
-                Access is by invitation. If your address is not registered, speak
-                to your adviser at Vitti Capital.
+                Vitti Capital staff: sign in with your work address. Clients:
+                access is by invitation — if your address is not registered,
+                speak to your adviser.
               </p>
             </form>
           ) : (
