@@ -617,8 +617,16 @@ function toOption(
 }
 
 // Account-scoped (client portal shows one account at a time).
+//
+// An EMPTY id means "this client has no account", which `getActiveAccountId()`
+// returns for a newly registered client whose first account claim is still with
+// the desk. It is answered here with no rows rather than passed to PostgREST:
+// `account_id=eq.` makes Postgres cast '' to uuid, which fails as 22P02 and
+// surfaces as a 500 on the client dashboard. "No account" is a legitimate state
+// with an obvious answer, not a query error.
 export const getPositions = cache(
   async (accountId: string): Promise<Position[]> => {
+    if (!accountId) return [];
     const supabase = await createClient();
     const [{ data, error }, securityMap] = await Promise.all([
       supabase.from("positions").select("*").eq("account_id", accountId),
@@ -631,6 +639,7 @@ export const getPositions = cache(
 
 export const getOptions = cache(
   async (accountId: string): Promise<OptionRow[]> => {
+    if (!accountId) return [];   // see getPositions
     const supabase = await createClient();
     const [{ data, error }, securityMap] = await Promise.all([
       supabase
