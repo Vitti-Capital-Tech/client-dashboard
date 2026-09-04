@@ -1,121 +1,23 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
 /**
- * One sign-in for clients and staff alike.
+ * There is no landing page.
  *
- * The two cards below used to be buttons into `/login?role=client|admin`. They
- * are descriptions now: which workspace somebody lands in follows from their
- * email domain and is settled after the code is verified, so asking them to pick
- * first only offered a stranger two doors and a chance to guess wrong.
+ * `/` used to be a marketing splash — a headline, two descriptive cards, and a
+ * link to `/login`. It was removed deliberately: this is a portal for existing
+ * wholesale clients and the desk that runs their money, not a product anyone
+ * arrives at cold. Everybody who loads `/` is here to sign in, and the splash
+ * was one click between them and the form.
  *
- * No `"use client"` any more either — with the router gone this page is static.
+ * A redirect rather than rendering the login form at `/` as well: one page, one
+ * URL. Two routes serving the same form would mean two things to keep in step,
+ * and `/login` is the one the proxy already redirects unauthenticated portal
+ * traffic to.
+ *
+ * A signed-in visitor is not special-cased here — they land on `/login` and the
+ * proxy forwards them to their portal from there, which is the same logic in one
+ * place rather than two.
  */
 export default function Home() {
-  return (
-    <div className="relative min-h-screen bg-navy text-white overflow-hidden flex flex-col justify-between font-body">
-      {/* Radial grid background */}
-      <div 
-        className="absolute inset-0 pointer-events-none opacity-40"
-        style={{
-          backgroundImage: `
-            linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
-          `,
-          backgroundSize: "54px 54px",
-          maskImage: "radial-gradient(ellipse 80% 70% at 70% 0%, #000, transparent)",
-          WebkitMaskImage: "radial-gradient(ellipse 80% 70% at 70% 0%, #000, transparent)"
-        }}
-      />
-
-      {/* Header */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-6 md:px-10">
-        <Link href="/" className="inline-flex items-center gap-2 font-disp font-semibold text-xl tracking-wide decoration-0">
-          <span className="inline-flex gap-[2.5px] items-end h-[1em] text-xl">
-            <i className="block w-0.75 h-[0.5em] rounded-xs bg-green" />
-            <i className="block w-0.75 h-[0.72em] rounded-xs bg-green" />
-            <i className="block w-0.75 h-[0.95em] rounded-xs bg-green" />
-          </span>
-          Vitti
-          <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
-            Capital
-          </small>
-        </Link>
-      </header>
-
-      {/* Main Wrap */}
-      <main className="relative z-10 max-w-280 w-full mx-auto px-6 md:px-10 py-10 flex-1 flex flex-col justify-center">
-        <div className="max-w-190 mb-12">
-          <p className="font-mono text-xs tracking-[0.2em] uppercase text-green mb-5">
-            Client portal &amp; placement desk
-          </p>
-          <h1 className="font-disp font-medium text-4xl sm:text-5xl md:text-6xl leading-[1.05] tracking-tight">
-            Your capital,<br />
-            <em className="not-italic text-green font-serif">in perfect order.</em>
-          </h1>
-          <p className="mt-6 text-base sm:text-lg text-slate-300 max-w-[36em] leading-relaxed">
-            One platform for portfolios, placements, and the options whose exercise windows you cannot afford to miss — for Vitti Capital&apos;s wholesale clients and the team who looks after them.
-          </p>
-        </div>
-
-        {/* One way in. */}
-        <div className="max-w-205">
-          <Link
-            href="/login"
-            className="group inline-flex items-center gap-2.5 bg-green text-[#08130e] rounded-[12px] px-7 py-3.5 text-[14px] font-semibold transition-all hover:shadow-lg hover:shadow-green-bg"
-          >
-            Sign in
-            <span className="transition-transform group-hover:translate-x-1">&rarr;</span>
-          </Link>
-          <p className="text-[13px] text-[#7e8298] mt-3.5 leading-relaxed">
-            Enter your email and we will send you a one-time code — no password.
-            Your workspace is chosen for you once you are signed in.
-          </p>
-        </div>
-
-        {/* What each workspace holds. Descriptive, not a choice to make: the
-            domain on the address decides, after the code is verified. */}
-        <div className="grid md:grid-cols-2 gap-5 max-w-205 mt-11">
-          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
-              <svg
-                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
-              </svg>
-            </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For clients</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
-              Your portfolio, options, placements and alerts — your data only.
-            </p>
-          </div>
-
-          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
-              <svg
-                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="8" r="3.4" />
-                <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" />
-                <path d="M19 4.5l1.4 1.4M4.6 4.5 3.2 5.9" />
-              </svg>
-            </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For the desk</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
-              Consolidated book across all clients, bidding on their behalf,
-              allocations, alerts and audit.
-            </p>
-          </div>
-        </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="relative z-10 border-t border-navy-line mt-12 py-6 px-6 md:px-10 text-[11.5px] text-[#7e8298] max-w-280 w-full mx-auto leading-relaxed text-center md:text-left">
-        Vitti Capital Pty Ltd (ABN 13 670 030 145) is a Corporate Authorised Representative (001306367) of Point Capital Group Pty Ltd (ABN 41 625 931 900), holder of AFSL 518031. For wholesale clients (s761G / s761GA, Corporations Act 2001). Figures shown are illustrative prototype data. &copy; Vitti Capital 2026.
-      </footer>
-    </div>
-  );
+  redirect("/login");
 }

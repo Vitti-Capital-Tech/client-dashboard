@@ -18,9 +18,15 @@ and the [production SQL schema](../db/schema.sql).
 - The legacy **in-memory Zustand store** ([`store/useDatabaseStore.ts`](../store/useDatabaseStore.ts)) seeded
   from [`lib/db.ts`](../lib/db.ts) is off the data path — retained only as the reference implementation of the
   domain logic the schema/DAL/actions were ported from.
-- **Auth is real (email + password).** Login uses **Supabase Auth** (`signInWithPassword`); a root `proxy.ts`
-  refreshes the session and server code reads identity via `getUser()`, with the staff/client role in
-  `app_metadata.role`. Demo users are seeded by [`scripts/seed-auth-users.mjs`](../scripts/seed-auth-users.mjs).
+- **Auth is real, with two doors and two credentials.** **Clients** sign in at `/login` with a password
+  (`signInWithPassword`) **or** a one-time code (`signInWithOtp` → `verifyOtp`); **staff** sign in at
+  `/staff/login` with a code **only**, and hold no password at all — their accounts self-provision from the
+  email domain, and the only thing making that safe is that the code must be read at a firm mailbox. New
+  clients **register themselves** at `/signup` (3 steps: details → email verification → link a broker account,
+  the last being required). `/` redirects to `/login`; the marketing landing page was removed. A root
+  `proxy.ts` refreshes the session and redirects both ways, and server code reads identity via `getUser()`,
+  with the staff/client role in `app_metadata.role` — stamped from the email domain by a trigger on
+  `auth.users`, never decided by the page. See HLD §3.1b-2 and §4.7.
 - **Multi-account model.** A client (person/login) can hold **multiple investment accounts** (Personal, SMSF, …);
   holdings/cash/bids are account-scoped (`accounts` table + `account_id` FKs), a client sees only their own
   accounts, and staff see everyone's. Clients switch accounts via a topbar switcher; staff views aggregate
@@ -35,13 +41,16 @@ and the [production SQL schema](../db/schema.sql).
   first LLM call in the codebase and it establishes the pattern the rest of §4.6 needs: a validation gate between the
   model and the client's screen, sources stored alongside every claim, and the whole feature off — not broken — when
   `ANTHROPIC_API_KEY` is unset.
-- **Still cosmetic / missing:** the login **OTP screen is cosmetic** (no real TOTP 2FA yet), and there is
-  **no live market data** — prices and alerts are seeded, and Ask Vitti is still keyword-based.
+- **Still missing:** **real TOTP 2FA**. The emailed code is a genuine credential, not a decorative step — but
+  it is an *alternative* to the password rather than a second factor on top of one, and the codebase
+  deliberately does not pretend otherwise (a code after an accepted password guards nothing, since the session
+  already exists). True 2FA means Supabase MFA (`auth.mfa`). There is also **no live market data** — prices
+  and alerts are seeded, and Ask Vitti is still keyword-based.
 
 "Fully functional" is therefore the **prototype → production gap** described below. Persistence (F2), the
 server-side bidding/settlement lifecycle (F3), audit-log writes (F8), and **auth with route protection + RLS**
-(F1) are now **done**; the remaining gaps are TOTP 2FA, live data, scheduled jobs, realtime push, and the
-AI/news backend.
+(F1) are now **done**, including client self-registration and password reset; the remaining gaps are TOTP 2FA,
+live data, realtime push, and the wider AI/news backend.
 
 ---
 
@@ -61,7 +70,7 @@ the Postgres our schema already targets. Only the market-data feed and Claude si
 
 | # | Area | Status | Production requirement |
 |---|------|--------|------------------------|
-| F1 | **Auth & sessions** | ⏳ Partial | *Now:* **real Supabase Auth** (email + password), session refreshed by `proxy.ts`, identity via `getUser()`, role in `app_metadata.role`, **route protection** (proxy + layout redirects; staff-area role guard), and **RLS** (per-client enforcement — see F2/§5). *Still needed:* **TOTP 2FA** (login OTP screen is cosmetic) |
+| F1 | **Auth & sessions** | ⏳ Partial | *Now:* **real Supabase Auth** on two doors — clients at `/login` by password **or** emailed code, staff at `/staff/login` by code only (staff hold no password, enforced in four places incl. a DB trigger). Client **self-registration** at `/signup` and **password reset** at `/reset-password`. Session refreshed by `proxy.ts`, identity via `getUser()`, role in `app_metadata.role` stamped from the email domain, **route protection** both ways, and **RLS** (see F2/§5). *Still needed:* **TOTP 2FA** — the emailed code is a real credential but an alternative to the password, not a second factor on top of one; that means Supabase MFA (`auth.mfa`) |
 | F2 | **Persistence** | ✅ Done | `schema.sql` applied to Supabase; every read hits the DAL and every mutation hits the DB via server actions — now under **RLS** (client-own rows; `is_staff()` bypass) |
 | F3 | **Bidding lifecycle** | ✅ Done (single-user) | Server actions (`placeBid`/`scaleBids`/`settlePlacement`) with server-side settlement engine. *Still needed:* transactional/concurrency-safe scaling under contention |
 | F4 | **Market data** | ❌ Open | Seeded `securities.last_price` / `market_indices`. *Needed:* live (or delayed/EOD) feed on a schedule |
@@ -71,7 +80,9 @@ the Postgres our schema already targets. Only the market-data feed and Claude si
 | F8 | **Audit log** | ✅ Done | Every server action appends to the partitioned `audit_log` |
 | F9 | **BPAY / payments** | ⏳ Interim | `notifyBpayPayment` sets the `paid` flag. *Needed:* manual staff reconciliation workflow; PSP integration later |
 | F10 | **Weekly position commentary** | ✅ Done | Claude (`claude-opus-5`) with the web-search server tool, on the Batches API, scheduled by `pg_cron` from the Friday close through Sunday. One note per **held** security in two framings; served by the sign of the client's own P&L. Gated on `ANTHROPIC_API_KEY` and off without it. See LLD §8.36 |
-| F11 | **One login, several existing accounts** | ✅ Done | A client claims an account by its broker number; staff verify against the broker record; approval re-parents the account and everything denormalised against it in one `SECURITY DEFINER` transaction. See LLD §8.34 |
+| F11 | **One login, several existing accounts** | ✅ Done | A client claims an account by its broker number; staff verify against the broker record; approval re-parents the account and everything denormalised against it in one `SECURITY DEFINER` transaction. Now also the **last step of sign-up**, so a new login arrives with its first account attached. See LLD §8.34 |
+| F12 | **Client self-registration** | ✅ Done | 3 steps at `/signup` — details → emailed code → link a broker account (**required**). Runs on the service role so project-level signups stay OFF; the user is created **without a password** and it is set only after `verifyOtp` proves the mailbox. Step 3 is enforced by state: the portal layout returns any client with no accounts and no pending claim to `/signup`. See HLD §4.7 |
+| F13 | **Staff cannot hold a password** | ✅ Done | Staff accounts self-provision from the email domain, which is safe only because the code must be *read* at a firm mailbox; a password would work without one. Refused by `startSignUp`, by `requestPasswordResetCode` before mail is sent, by `signInWithPassword` (signs the session out), and by a `BEFORE INSERT` trigger on `auth.users`. The same migration closed a **live privilege escalation**: project signups were ON, so `POST /auth/v1/signup` + the role trigger handed out staff accounts on `@vitti.capital` addresses to anyone with the public anon key |
 
 ---
 
@@ -93,8 +104,14 @@ scheduled job updates `securities.last_price` and `market_indices`. Move to a li
 only at production launch, when the exchange-licensing budget exists.
 
 ### 4.2 Auth + 2FA (F1)
-**Decision: Supabase Auth** — email + **TOTP 2FA** built in, and it pairs naturally with Postgres
-Row-Level Security. Alternatives considered: Clerk (fastest, paid), Auth.js/NextAuth (free, more manual).
+**Decision: Supabase Auth** — email, password, one-time codes and **TOTP 2FA** built in, and it pairs
+naturally with Postgres Row-Level Security. Alternatives considered: Clerk (fastest, paid), Auth.js/NextAuth
+(free, more manual).
+
+*As built:* clients may use a password or an emailed code; staff use codes only. The role is decided by the
+**database** (a trigger on `auth.users` reading the email domain), never by which page someone opened — the
+two sign-in pages are a usability split, not a security boundary. TOTP is still to come and is the only thing
+that would make sign-in genuinely two-factor.
 
 ### 4.3 Database (F2)
 **Decision: Supabase Postgres** (Neon or AWS Aurora are drop-in alternatives — `schema.sql` runs on all
@@ -147,7 +164,7 @@ separate scope.
 ## 6. Suggested build order
 
 1. ✅ Stand up Supabase, apply [`db/schema.sql`](../db/schema.sql), add a data-access layer.
-2. Real auth + TOTP 2FA + Row-Level Security. *(✅ email+password auth, route protection, and RLS done; real TOTP 2FA pending)*
+2. Real auth + TOTP 2FA + Row-Level Security. *(✅ password **and** one-time-code auth, self-registration, password reset, route protection, and RLS done; real TOTP 2FA pending)*
 3. ✅ Port the `mutate*` functions to server actions that write to the DB (audit on every write).
 4. Market-data ingestion job + scheduled alert engine.
 5. Realtime push, then the Claude AI + news backend.
@@ -161,9 +178,13 @@ separate scope.
 
 ```mermaid
 flowchart TD
-    U([User]) --> Login["Login + 2FA (TOTP)"]
+    U([User]) --> Login["/login — client: password OR emailed code"]
+    U --> Staff["/staff/login — staff: emailed code only"]
+    U --> Signup["/signup — new client: details → code → link account"]
+    Signup --> Login
     Login -->|invalid| Login
-    Login -->|valid| Role{Role?}
+    Staff --> Role
+    Login -->|valid| Role{"Role? (from app_metadata, set by DB trigger)"}
 
     Role -->|client| CP["Client Portal"]
     Role -->|admin| SP["Staff Console"]
