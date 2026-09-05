@@ -13,6 +13,28 @@ import { isComingSoon } from "@/lib/nav/coming-soon";
 type AccountOption = { id: string; label: string; accountType: string };
 
 /**
+ * The nav icon's answer to being pointed at.
+ *
+ * `group-hover` rather than `hover`, so it reacts to the whole row: pointing at
+ * a nav item means pointing at the row, not at eighteen pixels of icon.
+ *
+ * Applied only to items that actually go somewhere. A disabled button still
+ * matches `group-hover` — the pointer is over it either way, only the click is
+ * stopped — so a coming-soon item would otherwise spring to meet the cursor
+ * and then refuse to open, which is the opposite of what the greyed-out row is
+ * there to say. Interpolated per item rather than expressed as a stacked
+ * `group-enabled:group-hover:` variant, which compiles to a selector wanting
+ * two separate ancestors and quietly never matches.
+ *
+ * 110%, 200ms, and nothing under `prefers-reduced-motion`. Big enough to feel
+ * deliberate on a row you are already pointing at, small enough not to shift
+ * the label beside it.
+ */
+const ICON_MOTION =
+  "transition-transform duration-200 ease-out group-hover:scale-110 " +
+  "motion-reduce:transition-none motion-reduce:group-hover:scale-100";
+
+/**
  * Interactive portal shell (client island). The layout Server Component fetches
  * session + alerts + badge counts and hands them here as props; this component
  * owns the drawer/menu state and calls server actions for ack / sign-out.
@@ -241,9 +263,11 @@ export function PortalShell({
           const isActive = pathname === it.path;
           const badgeVal = getBadgeValue(it.badge);
           const soon = isComingSoon(it.path);
+          // Only where a click will do something: see `iconMotion`.
+          const motion = soon ? "" : ICON_MOTION;
           const body = (
             <>
-              <svg className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
+              <svg className={`w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none ${motion}`} viewBox="0 0 24 24">
                 <path d={it.icon} />
               </svg>
               <span>{it.label}</span>
@@ -280,7 +304,7 @@ export function PortalShell({
             <Link
               key={it.k}
               href={it.path}
-              className={`flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] cursor-pointer transition-colors ${
+              className={`group flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] cursor-pointer transition-colors ${
                 isActive
                   ? "bg-navy-3 text-white"
                   : it.ai
@@ -484,13 +508,13 @@ export function PortalShell({
             onClick={() => router.push(it.path)}
             disabled={soon}
             title={soon ? `${it.label} is coming soon` : undefined}
-            className={`flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative ${
+            className={`group flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative ${
               soon
                 ? "text-mut-d/45 cursor-not-allowed"
                 : `cursor-pointer ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`
             }`}
           >
-            <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+            <svg className={`w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round ${soon ? "" : ICON_MOTION}`} viewBox="0 0 24 24">
               <path d={it.icon} />
             </svg>
             <span>{it.label}</span>
@@ -611,13 +635,13 @@ export function PortalShell({
                     router.push(it.path);
                   }}
                   disabled={soon}
-                  className={`flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors ${
+                  className={`group flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors ${
                     soon
                       ? "text-mut-d cursor-not-allowed"
                       : `hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`
                   }`}
                 >
-                  <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
+                  <svg className={`w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round ${soon ? "" : ICON_MOTION}`} viewBox="0 0 24 24">
                     <path d={it.icon} />
                   </svg>
                   <span>{it.label}</span>
