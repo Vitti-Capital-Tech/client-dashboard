@@ -1,4 +1,5 @@
 import React from "react";
+import { Wordmark } from "@/app/components/Wordmark";
 
 /**
  * The two-column frame every unauthenticated page sits in — sign in, sign up,
@@ -52,7 +53,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
         <div className="w-full max-w-98">
           {/* Mobile-only wordmark: the aside is hidden below md, and a bare form
               on a white page has nothing on it saying whose it is. */}
-          <Wordmark className="md:hidden text-lg text-ink mb-8" />
+          <Wordmark className="md:hidden text-lg text-ink mb-8" markSize={23} />
           {children}
         </div>
       </main>
@@ -60,31 +61,6 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-/**
- * The three rising bars and the name.
- *
- * Not a link any more. It used to point at `/`, which was the marketing page;
- * `/` now redirects to `/login`, so on the sign-in page the wordmark would have
- * been a link back to the page you are already on — and on the other two, a way
- * out of a half-finished sign-up that looks like a logo.
- */
-function Wordmark({ className = "" }: { className?: string }) {
-  return (
-    <div
-      className={`inline-flex items-center gap-2 font-disp font-semibold tracking-wide ${className}`}
-    >
-      <span className="inline-flex gap-[2.5px] items-end h-[1em]">
-        <i className="block w-0.75 h-[0.5em] rounded-xs bg-green" />
-        <i className="block w-0.75 h-[0.72em] rounded-xs bg-green" />
-        <i className="block w-0.75 h-[0.95em] rounded-xs bg-green" />
-      </span>
-      Vitti
-      <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
-        Capital
-      </small>
-    </div>
-  );
-}
 
 /** The one error presentation, shared so the three forms agree. */
 export function FormError({

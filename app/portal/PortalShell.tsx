@@ -7,6 +7,7 @@ import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
 import { signOut, setActiveAccount } from "@/app/actions/session";
 import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
+import { Wordmark } from "@/app/components/Wordmark";
 
 type AccountOption = { id: string; label: string; accountType: string };
 
@@ -190,16 +191,8 @@ export function PortalShell({
 
   const sidebar = (
     <aside className="hidden md:flex w-59 flex-none bg-navy text-[#c2c7d8] flex-col p-5 sticky top-0 h-screen z-40 select-none">
-      <Link href="/" className="inline-flex items-center gap-2.5 font-disp font-semibold text-xl tracking-wide text-white py-1 px-2 mb-2">
-        <span className="inline-flex gap-[2.5px] items-end h-[1em] text-xl">
-          <i className="block w-0.75 h-[0.5em] rounded-xs bg-green" />
-          <i className="block w-0.75 h-[0.72em] rounded-xs bg-green" />
-          <i className="block w-0.75 h-[0.95em] rounded-xs bg-green" />
-        </span>
-        Vitti
-        <small className="font-body text-[10.5px] font-semibold tracking-[0.16em] uppercase opacity-60 ml-0.5">
-          Capital
-        </small>
+      <Link href="/" className="inline-flex w-fit py-1 px-2 mb-2">
+        <Wordmark className="text-xl text-white" />
       </Link>
       <div className="mx-2 my-1.5 text-[11px] tracking-[0.12em] uppercase font-semibold text-green mb-4">
         {role === "admin" ? "Vitti staff console" : "Client portal"}
