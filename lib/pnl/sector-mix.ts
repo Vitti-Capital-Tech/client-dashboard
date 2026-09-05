@@ -46,6 +46,26 @@ export type SectorBucket = {
 
 export type SectorScope = "held" | "alltime";
 
+/** The label a holding gets when it has no sector, and the bucket the tiddlers
+ *  are swept into. One label, because to a reader they are the same statement:
+ *  "nothing here is worth its own slice". */
+export const OTHER = "Other";
+
+/**
+ * A slice smaller than this is folded into `Other`.
+ *
+ * A register of 140 names produces a long tail of sub-1% sectors, and drawn
+ * faithfully the chart becomes a ring of hairline wedges with a legend of 0%
+ * rows — every one of them true, none of them telling anybody anything. One
+ * percent is the point below which a slice cannot be seen in a pie of this
+ * size anyway.
+ *
+ * This is a PRESENTATION rule and it is applied last, after the real
+ * arithmetic: the folded bucket carries the summed P&L and cost of what went
+ * into it, so the totals are unchanged by the fold.
+ */
+const MIN_SLICE_SHARE = 0.01;
+
 export type SectorMix = {
   scope: SectorScope;
   buckets: SectorBucket[];
@@ -98,7 +118,7 @@ export function sectorMix(
     // options), and those are kept because their P&L is real.
     if (value <= 0 && r.pnl === 0) continue;
 
-    const label = sectorOf(r.ticker) ?? "Other";
+    const label = sectorOf(r.ticker) ?? OTHER;
     let bucket = byLabel.get(label);
     if (!bucket) {
       bucket = {
@@ -122,23 +142,73 @@ export function sectorMix(
     if (!bucket.tickers.includes(r.ticker)) bucket.tickers.push(r.ticker);
   }
 
-  const buckets = [...byLabel.values()]
-    .map((b) => ({
-      ...b,
-      // Free grants have a cost base of zero, so `pnl / cost` is Infinity and
-      // `0 / 0` is NaN. Both used to reach the screen elsewhere in this app as
-      // '+Infinity%' and '+NaN%'.
-      returnPct:
-        b.cost > 0 && Number.isFinite(b.pnl / b.cost) ? (b.pnl / b.cost) * 100 : null,
-      tickers: b.tickers.slice().sort(),
-    }))
-    .sort((a, b) => b.value - a.value);
+  const raw = [...byLabel.values()].sort((a, b) => b.value - a.value);
+  const total = raw.reduce((n, b) => n + b.value, 0);
+  const totalPnl = raw.reduce((n, b) => n + b.pnl, 0);
+
+  /**
+   * Whether ANYTHING is classified is a question about the data, so it is asked
+   * of the raw buckets and not of the folded ones below: a portfolio of twelve
+   * properly-classified sectors, all of them tiny, would otherwise fold down to
+   * a single `Other` and be reported as "nobody has classified this".
+   */
+  const unclassified = raw.length > 0 && raw.every((b) => b.label === OTHER);
 
   return {
     scope,
-    buckets,
-    total: buckets.reduce((n, b) => n + b.value, 0),
-    totalPnl: buckets.reduce((n, b) => n + b.pnl, 0),
-    unclassified: buckets.length > 0 && buckets.every((b) => b.label === "Other"),
+    buckets: withReturn(foldSmall(raw, total)),
+    total,
+    totalPnl,
+    unclassified,
   };
+}
+
+/**
+ * Sweep the sub-1% slices into `Other`.
+ *
+ * The largest bucket is never folded, whatever its share. Without that, a
+ * portfolio split across a hundred-odd sectors would have every slice below the
+ * threshold and collapse to one bucket labelled "Other 100%" — the exact chart
+ * this module already refuses to draw for unclassified data.
+ */
+function foldSmall(buckets: SectorBucket[], total: number): SectorBucket[] {
+  if (total <= 0 || buckets.length === 0) return buckets;
+
+  const kept: SectorBucket[] = [];
+  let other: SectorBucket | null = null;
+
+  const into = (b: SectorBucket) => {
+    if (!other) {
+      other = { ...b, label: OTHER, tickers: [...b.tickers] };
+      return;
+    }
+    other.value += b.value;
+    other.pnl += b.pnl;
+    other.cost += b.cost;
+    other.holdings += b.holdings;
+    for (const t of b.tickers) if (!other.tickers.includes(t)) other.tickers.push(t);
+  };
+
+  buckets.forEach((b, i) => {
+    const tiny = i > 0 && b.value / total < MIN_SLICE_SHARE;
+    if (b.label === OTHER || tiny) into(b);
+    else kept.push(b);
+  });
+
+  // `Other` sits last rather than in size order: it is a residual, and reading
+  // it as the third-biggest sector in the book would be reading it wrong.
+  return other ? [...kept, other] : kept;
+}
+
+/** The return each surviving bucket earned, once the folding has settled. */
+function withReturn(buckets: SectorBucket[]): SectorBucket[] {
+  return buckets.map((b) => ({
+    ...b,
+    // Free grants have a cost base of zero, so `pnl / cost` is Infinity and
+    // `0 / 0` is NaN. Both used to reach the screen elsewhere in this app as
+    // '+Infinity%' and '+NaN%'.
+    returnPct:
+      b.cost > 0 && Number.isFinite(b.pnl / b.cost) ? (b.pnl / b.cost) * 100 : null,
+    tickers: b.tickers.slice().sort(),
+  }));
 }

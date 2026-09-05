@@ -222,3 +222,87 @@ test("sector: percentages taken against the total add up", () => {
     100,
   );
 });
+
+/**
+ * Folding the long tail.
+ *
+ * The rule is a presentation one — sub-1% slices are swept into `Other` — so
+ * every test here also checks that the arithmetic it is applied to survives it.
+ */
+
+test("sector: a sub-1% slice is folded into Other", () => {
+  const rows = [
+    row({ ticker: "BM1", buyPrice: 99_000, sellOrCurrent: 99_000, pnl: 0 }),
+    row({ ticker: "LDX", buyPrice: 500, sellOrCurrent: 500, pnl: 0 }),
+  ];
+  const mix = sectorMix(rows, "alltime", sectorOf, noMarket);
+
+  assert.deepEqual(
+    mix.buckets.map((b) => b.label),
+    ["Materials", "Other"],
+  );
+  const other = mix.buckets.find((b) => b.label === "Other");
+  assert.equal(other?.value, 500);
+  assert.deepEqual(other?.tickers, ["LDX"]);
+  // The fold moves nothing: the total is still everything that went in.
+  assert.equal(mix.total, 99_500);
+});
+
+test("sector: a folded slice keeps its P&L, cost and holdings count", () => {
+  const rows = [
+    row({ ticker: "BM1", buyPrice: 99_000, sellOrCurrent: 99_000, pnl: 1_000 }),
+    row({ ticker: "LDX", buyPrice: 300, sellOrCurrent: 300, pnl: 120 }),
+    row({ ticker: "EOS", buyPrice: 200, sellOrCurrent: 200, pnl: -20 }),
+  ];
+  const mix = sectorMix(rows, "alltime", sectorOf, noMarket);
+
+  const other = mix.buckets.find((b) => b.label === "Other");
+  assert.equal(other?.pnl, 100, "both tails' P&L, summed");
+  assert.equal(other?.cost, 500);
+  assert.equal(other?.holdings, 2);
+  assert.deepEqual(other?.tickers, ["EOS", "LDX"]);
+  assert.equal(other?.returnPct, 20, "return on the folded cost base");
+  assert.equal(mix.totalPnl, 1_100);
+});
+
+test("sector: an unclassified holding folds in with the tail, under one label", () => {
+  const rows = [
+    row({ ticker: "BM1", buyPrice: 99_000, sellOrCurrent: 99_000, pnl: 0 }),
+    row({ ticker: "LDX", buyPrice: 400, sellOrCurrent: 400, pnl: 0 }),
+    row({ ticker: "ZZZ", buyPrice: 300, sellOrCurrent: 300, pnl: 0 }), // no sector
+  ];
+  const mix = sectorMix(rows, "alltime", sectorOf, noMarket);
+
+  assert.equal(mix.buckets.filter((b) => b.label === "Other").length, 1);
+  assert.equal(mix.buckets.find((b) => b.label === "Other")?.value, 700);
+});
+
+test("sector: Other sits last even when it outweighs a slice above it", () => {
+  const rows = [
+    row({ ticker: "BM1", buyPrice: 60_000, sellOrCurrent: 60_000, pnl: 0 }),
+    row({ ticker: "ZZZ", buyPrice: 30_000, sellOrCurrent: 30_000, pnl: 0 }), // no sector
+    row({ ticker: "LDX", buyPrice: 10_000, sellOrCurrent: 10_000, pnl: 0 }),
+  ];
+  const mix = sectorMix(rows, "alltime", sectorOf, noMarket);
+
+  assert.deepEqual(
+    mix.buckets.map((b) => b.label),
+    ["Materials", "Health Care", "Other"],
+  );
+});
+
+test("sector: the largest slice is never folded, however small its share", () => {
+  // Every sector is 1/3 of the book, which is above the threshold anyway; the
+  // guard matters for the degenerate case, so check it holds when there is only
+  // one bucket and it would otherwise be compared against itself.
+  const mix = sectorMix(
+    [row({ ticker: "BM1", buyPrice: 100, sellOrCurrent: 100, pnl: 0 })],
+    "alltime",
+    sectorOf,
+    noMarket,
+  );
+  assert.deepEqual(
+    mix.buckets.map((b) => b.label),
+    ["Materials"],
+  );
+});

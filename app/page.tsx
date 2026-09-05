@@ -3,12 +3,14 @@ import Link from "next/link";
 /**
  * One sign-in for clients and staff alike.
  *
- * The two cards below used to be buttons into `/login?role=client|admin`. They
- * are descriptions now: which workspace somebody lands in follows from their
- * email domain and is settled after the code is verified, so asking them to pick
- * first only offered a stranger two doors and a chance to guess wrong.
+ * There were once two cards here, "For clients" and "For the desk". They began
+ * as buttons into `/login?role=client|admin`, became descriptive when the role
+ * stopped being something you pick — it follows from the email domain and is
+ * settled after the code is verified — and are now gone entirely: a public page
+ * has no reason to describe the firm's internal console to whoever reads it,
+ * and the sign-in below is the only thing on this page anyone needs.
  *
- * No `"use client"` any more either — with the router gone this page is static.
+ * No `"use client"` either — with the router gone this page is static.
  */
 export default function Home() {
   return (
@@ -72,44 +74,6 @@ export default function Home() {
           </p>
         </div>
 
-        {/* What each workspace holds. Descriptive, not a choice to make: the
-            domain on the address decides, after the code is verified. */}
-        <div className="grid md:grid-cols-2 gap-5 max-w-205 mt-11">
-          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
-              <svg
-                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" />
-              </svg>
-            </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For clients</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
-              Your portfolio, options, placements and alerts — your data only.
-            </p>
-          </div>
-
-          <div className="bg-navy-2 border border-navy-line rounded-[18px] p-6.5">
-            <div className="w-11.5 h-11.5 rounded-xl bg-navy-3 flex items-center justify-center mb-4">
-              <svg
-                className="w-5.75 h-5.75 fill-none stroke-green stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="8" r="3.4" />
-                <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" />
-                <path d="M19 4.5l1.4 1.4M4.6 4.5 3.2 5.9" />
-              </svg>
-            </div>
-            <h3 className="font-disp font-medium text-2xl mb-1 text-white">For the desk</h3>
-            <p className="text-xs sm:text-[13.5px] text-[#aab0c2] leading-normal">
-              Consolidated book across all clients, bidding on their behalf,
-              allocations, alerts and audit.
-            </p>
-          </div>
-        </div>
       </main>
 
       {/* Footer */}

@@ -2,6 +2,7 @@ import "server-only";
 import { pagedSelect } from "./paged";
 import { cache } from "react";
 import { createClient } from "../supabase/server";
+import { canonicalSector } from "../pnl/sector-labels";
 import type { Database } from "../supabase/database.types";
 
 /**
@@ -320,7 +321,16 @@ export const getSecurities = cache(async (): Promise<Security[]> => {
   return data.map((r) => ({
     code: r.code,
     name: r.name,
-    sector: r.sector,
+    /**
+     * Canonicalised on the way out, not trusted as stored.
+     *
+     * The column has been written by two sources with different vocabularies
+     * (Yahoo's "Basic Materials" and the ASX's "Materials" are one sector), and
+     * doing this here means every reader — the sector chart, the staff views,
+     * the weekly commentary prompt — sees one name for one sector without
+     * waiting on a backfill re-run. See lib/pnl/sector-labels.ts.
+     */
+    sector: canonicalSector(r.sector),
     listed: r.listed,
     last: r.last_price,
     parent: r.parent_code,

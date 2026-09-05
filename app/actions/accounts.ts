@@ -14,6 +14,7 @@ import {
  *  - createAccount        — a client opens a new account (self-service).
  *  - requestAccountMerge  — a client requests merging one account into another.
  *  - decideAccountMerge   — STAFF approve/reject; approval executes the merge.
+ *  - checkAccountNumber   — resolve a number to the account NAME (Verify button).
  *  - requestAccountClaim  — a client says an EXISTING account number is theirs.
  *  - decideAccountClaim   — STAFF verify; approval re-parents that account.
  */
@@ -259,14 +260,69 @@ export async function decideAccountMerge(requestId: string, approve: boolean) {
   revalidatePath("/portal", "layout");
 }
 
+/** What the Verify button on the claim form gets back. */
+export type AccountCheck =
+  | { status: "found"; name: string; mine: boolean }
+  | { status: "none" }
+  | { status: "ambiguous" }
+  | { status: "error"; message: string };
+
+/**
+ * Resolve a broker account number to the account NAME, for the claim form.
+ *
+ * This reverses the rule the rest of this file was written under — that the
+ * form must never say whether a number exists — and it does so deliberately,
+ * because a mistyped digit was otherwise invisible until a human noticed days
+ * later that the claim matched nothing.
+ *
+ * The disclosure is real, so the limits that keep it from being an enumeration
+ * tool live in the database and not here: `lookup_account_for_claim` is
+ * rate-limited per client per hour, writes an audit row for every check
+ * including the misses, and never returns the owning client. See
+ * 20260905090000_account_number_lookup.sql.
+ *
+ * Returns a result rather than throwing, because "no account with that number"
+ * is an ANSWER — the one the button exists to give — and not a failure. Only a
+ * refusal (rate limit, no session) comes back as `error`, with the database's
+ * own message, which is written to be read.
+ */
+export async function checkAccountNumber(accountNumber: string): Promise<AccountCheck> {
+  const { clientId } = await getActor();
+  if (!clientId) return { status: "error", message: "No active client" };
+
+  const problem = accountNumberProblem(accountNumber);
+  if (problem) return { status: "error", message: problem };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("lookup_account_for_claim", {
+    p_number: normaliseAccountNumber(accountNumber),
+  });
+  if (error) return { status: "error", message: error.message };
+
+  const result = data as {
+    found: boolean;
+    ambiguous: boolean;
+    name: string | null;
+    mine: boolean;
+  };
+
+  if (result.ambiguous) return { status: "ambiguous" };
+  if (!result.found || !result.name) return { status: "none" };
+  return { status: "found", name: result.name, mine: result.mine };
+}
+
 /**
  * A client states that the account with this broker number is also theirs.
  *
  * Records the number and nothing more. It does NOT look the account up, and the
  * caller gets the same answer whether the number matches an account, a
- * different firm's, or nothing at all — otherwise the form is a way to
- * enumerate the firm's account numbers with a login and a loop. Verification is
- * a staff job (`decideAccountClaim`), against the broker record.
+ * different firm's, or nothing at all. Verification is a staff job
+ * (`decideAccountClaim`), against the broker record.
+ *
+ * The form's Verify button does resolve the number — see `checkAccountNumber`
+ * — but that is a separate, rate-limited and audited call. Submitting a claim
+ * stays unconditional: a client can claim a number this action never looked at,
+ * and the desk decides.
  */
 export async function requestAccountClaim(accountNumber: string, note?: string) {
   const { actor, role, clientId } = await getActor();

@@ -24,6 +24,13 @@ interface NavItem {
   tab: boolean;
   ai?: boolean;
   badge?: string;
+  /**
+   * Still being built. The entry stays in the nav — taking it out would read as
+   * "this product does not have that", which is not what is being said — but it
+   * does not navigate anywhere, because the page behind it is half-written.
+   * Rendered flat, unclickable and marked "Soon" in all three navs.
+   */
+  soon?: boolean;
 }
 
 export function PortalShell({
@@ -80,12 +87,12 @@ export function PortalShell({
   const navItems: { client: NavItem[]; admin: NavItem[] } = {
     client: [
       { k: "dashboard", label: "Home", path: "/portal/client", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
-      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true },
+      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true, soon: true },
       { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: "M4 19V5M4 19h16M8 15l3-4 3 2 4-6", tab: true },
       { k: "insights", label: "Insights", path: "/portal/client/insights", icon: "M3 3v18h18M7 13l3 3 4-6 4 4", tab: true },
-      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: "M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01", tab: true, ai: true },
-      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: "M3 3v18h18M7 14l3-4 3 3 5-7", tab: false },
-      { k: "placements", label: "All deals", path: "/portal/client/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: false },
+      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: "M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01", tab: true, ai: true, soon: true },
+      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: "M3 3v18h18M7 14l3-4 3 3 5-7", tab: false, soon: true },
+      { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: false },
       { k: "options", label: "Options", path: "/portal/client/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: false },
       { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: "m12 3 2.7 5.8 6.3.7-4.7 4.3 1.3 6.2L12 16.8 6.4 20l1.3-6.2L3 9.5l6.3-.7z", tab: false },
       { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: "M3 7h18v12H3zM3 10h18M7 15h4", tab: false },
@@ -168,6 +175,41 @@ export function PortalShell({
         {items.map((it) => {
           const isActive = pathname === it.path;
           const badgeVal = getBadgeValue(it.badge);
+          const body = (
+            <>
+              <svg className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
+                <path d={it.icon} />
+              </svg>
+              <span>{it.label}</span>
+              {it.soon ? (
+                <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-white/10 text-mut-d px-1.5 py-0.5 rounded-[5px]">SOON</span>
+              ) : (
+                it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>
+              )}
+              {badgeVal !== null && (
+                <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
+                  {badgeVal}
+                </span>
+              )}
+            </>
+          );
+
+          // A `soon` item is a div, not a disabled link: an <a href> that does
+          // nothing is still focusable, still middle-clickable and still shows
+          // its target in the status bar.
+          if (it.soon) {
+            return (
+              <div
+                key={it.k}
+                aria-disabled="true"
+                title={`${it.label} is coming soon`}
+                className="flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] text-mut-d/45 cursor-not-allowed select-none"
+              >
+                {body}
+              </div>
+            );
+          }
+
           return (
             <Link
               key={it.k}
@@ -180,16 +222,7 @@ export function PortalShell({
                   : "text-mut-d hover:text-white hover:bg-white/5"
               }`}
             >
-              <svg className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
-                <path d={it.icon} />
-              </svg>
-              <span>{it.label}</span>
-              {it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>}
-              {badgeVal !== null && (
-                <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
-                  {badgeVal}
-                </span>
-              )}
+              {body}
             </Link>
           );
         })}
@@ -307,7 +340,13 @@ export function PortalShell({
           <button
             key={it.k}
             onClick={() => router.push(it.path)}
-            className={`flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold cursor-pointer relative ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`}
+            disabled={it.soon}
+            title={it.soon ? `${it.label} is coming soon` : undefined}
+            className={`flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative ${
+              it.soon
+                ? "text-mut-d/45 cursor-not-allowed"
+                : `cursor-pointer ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`
+            }`}
           >
             <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
               <path d={it.icon} />
@@ -428,12 +467,20 @@ export function PortalShell({
                     setIsMoreOpen(false);
                     router.push(it.path);
                   }}
-                  className={`flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`}
+                  disabled={it.soon}
+                  className={`flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors ${
+                    it.soon
+                      ? "text-mut-d cursor-not-allowed"
+                      : `hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`
+                  }`}
                 >
                   <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
                     <path d={it.icon} />
                   </svg>
                   <span>{it.label}</span>
+                  {it.soon && (
+                    <span className="ml-auto text-[9px] font-bold tracking-wider bg-paper-2 text-mut px-1.5 py-0.5 rounded-[5px]">SOON</span>
+                  )}
                   {badgeVal !== null && (
                     <span className="ml-auto bg-loss text-white text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center">
                       {badgeVal}
