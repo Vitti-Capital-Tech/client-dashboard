@@ -12,6 +12,8 @@ import {
   createAccount,
   requestAccountMerge,
   requestAccountClaim,
+  checkAccountNumber,
+  type AccountCheck,
 } from "@/app/actions/accounts";
 import { accountNumberProblem } from "@/lib/accounts/account-number";
 
@@ -53,6 +55,17 @@ export function AccountsClient({
   const [claimErr, setClaimErr] = useState<string | null>(null);
   const [claimOk, setClaimOk] = useState<string | null>(null);
 
+  /**
+   * The answer to the last Verify, and the number it was an answer ABOUT.
+   *
+   * Both, because the second is what keeps the first honest: the moment the box
+   * changes, "1102004 — Chegito Pty Ltd" is a statement about a number that is
+   * no longer in the form, so it is cleared rather than left sitting under a
+   * different number for the client to read as confirmation.
+   */
+  const [checked, setChecked] = useState<{ number: string; result: AccountCheck } | null>(null);
+  const [checking, setChecking] = useState(false);
+
   // Merge form
   const [sourceId, setSourceId] = useState(accounts[0]?.id ?? "");
   const [targetId, setTargetId] = useState(accounts[1]?.id ?? "");
@@ -88,6 +101,43 @@ export function AccountsClient({
     }, setMergeErr);
   };
 
+  /**
+   * Verify: name the account behind the number, before anyone waits on the desk.
+   *
+   * Not part of submitting. A client can send a claim without ever pressing it
+   * (the desk still verifies against the broker record), and a number that
+   * comes back unmatched can still be sent — it might be a typo, and it might
+   * be an account the register has under a different ref.
+   */
+  const handleVerify = () => {
+    setClaimErr(null);
+    setClaimOk(null);
+    const problem = accountNumberProblem(claimNumber);
+    if (problem) {
+      setChecked(null);
+      setClaimErr(problem);
+      return;
+    }
+    const asked = claimNumber;
+    setChecking(true);
+    startTransition(async () => {
+      try {
+        const result = await checkAccountNumber(asked);
+        setChecked({ number: asked, result });
+      } catch (e) {
+        setChecked({
+          number: asked,
+          result: {
+            status: "error",
+            message: e instanceof Error ? e.message : "Could not check that number",
+          },
+        });
+      } finally {
+        setChecking(false);
+      }
+    });
+  };
+
   const handleClaim = (e: React.FormEvent) => {
     e.preventDefault();
     setClaimErr(null);
@@ -103,11 +153,15 @@ export function AccountsClient({
       await requestAccountClaim(claimNumber, claimNote);
       setClaimNumber("");
       setClaimNote("");
+      setChecked(null);
       setClaimOk("Sent to the Vitti desk. They will verify it against the broker record.");
     }, setClaimErr);
   };
 
   const labelOf = (id: string) => accounts.find((a) => a.id === id)?.label ?? "";
+
+  /** The verify result, but only while it is still about what is in the box. */
+  const verified = checked && checked.number === claimNumber ? checked.result : null;
 
   return (
     <div className="space-y-5 text-ink font-body">
@@ -174,19 +228,65 @@ export function AccountsClient({
             <label htmlFor="claim-number" className="block text-xs font-semibold text-ink">
               Account number
             </label>
-            <input
-              id="claim-number"
-              value={claimNumber}
-              onChange={(e) => setClaimNumber(e.target.value)}
-              placeholder="e.g. 1102004"
-              // `inputMode` rather than `type="number"`: not every account
-              // number is numeric ('PLACEVITT'), and a number input would also
-              // add spinners and swallow a leading zero.
-              inputMode="text"
-              autoComplete="off"
-              required
-              className="w-full border border-line-2 bg-white rounded-[9px] px-3 py-2.5 text-sm font-mono focus:border-green focus:outline-none"
-            />
+            <div className="flex gap-2">
+              <input
+                id="claim-number"
+                value={claimNumber}
+                onChange={(e) => {
+                  setClaimNumber(e.target.value);
+                  // The old answer was about the old number. See `checked`.
+                  setChecked(null);
+                }}
+                placeholder="e.g. 1102004"
+                // `inputMode` rather than `type="number"`: not every account
+                // number is numeric ('PLACEVITT'), and a number input would also
+                // add spinners and swallow a leading zero.
+                inputMode="text"
+                autoComplete="off"
+                required
+                aria-describedby={verified ? "claim-verified" : undefined}
+                className="flex-1 min-w-0 border border-line-2 bg-white rounded-[9px] px-3 py-2.5 text-sm font-mono focus:border-green focus:outline-none"
+              />
+              {/* Only once there is something to verify — an empty box has no
+                  question in it, and a button that can only scold is noise. */}
+              {claimNumber.trim() !== "" && (
+                <button
+                  type="button"
+                  onClick={handleVerify}
+                  disabled={checking || isPending}
+                  className="flex-none border border-line-2 bg-paper-2 hover:border-green hover:text-green-d rounded-[9px] px-3.5 text-[12.5px] font-semibold text-ink cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  {checking ? "Checking…" : "Verify"}
+                </button>
+              )}
+            </div>
+
+            {verified && (
+              <div id="claim-verified" role="status" className="pt-0.5">
+                {verified.status === "found" ? (
+                  <p className="text-[12px] text-green-d bg-green-bg rounded-[8px] px-3 py-2 leading-normal">
+                    <span className="font-semibold">{verified.name}</span>
+                    {verified.mine
+                      ? " — already on your login."
+                      : " — send the request and the desk will confirm it is yours."}
+                  </p>
+                ) : verified.status === "none" ? (
+                  <p className="text-[12px] text-amber-d bg-amber-bg rounded-[8px] px-3 py-2 leading-normal">
+                    No account with that number. Check it against your broker statement — you
+                    can still send it to the desk if you believe it is right.
+                  </p>
+                ) : verified.status === "ambiguous" ? (
+                  <p className="text-[12px] text-amber-d bg-amber-bg rounded-[8px] px-3 py-2 leading-normal">
+                    That number matches more than one account. Send it to the desk with a note
+                    and they will resolve it against the broker record.
+                  </p>
+                ) : (
+                  <p className="text-[12px] font-semibold text-loss-d bg-loss-bg rounded-[8px] px-3 py-2 leading-normal">
+                    {verified.message}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <div className="space-y-1">
             <label htmlFor="claim-note" className="block text-xs font-semibold text-ink">
@@ -201,9 +301,9 @@ export function AccountsClient({
             />
           </div>
           <p className="text-[11.5px] text-mut leading-normal">
-            Use the account number on your broker statement. The desk verifies it against the
-            broker record before the account appears on your login — we never confirm or deny an
-            account number here.
+            Use the account number on your broker statement. Verify names the account so you can
+            see you have typed it right; the desk still checks it against the broker record
+            before it appears on your login.
           </p>
           {claimErr && (
             <p className="text-[12px] font-semibold text-loss-d bg-loss-bg rounded-[8px] px-3 py-2">{claimErr}</p>

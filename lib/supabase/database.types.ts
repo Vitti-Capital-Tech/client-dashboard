@@ -1832,6 +1832,7 @@ export type Database = {
       }
       current_client_id: { Args: never; Returns: string }
       is_staff: { Args: never; Returns: boolean }
+      lookup_account_for_claim: { Args: { p_number: string }; Returns: Json }
       normalise_account_number: { Args: { raw: string }; Returns: string }
       role_from_email_domain: { Args: { addr: string }; Returns: string }
     }

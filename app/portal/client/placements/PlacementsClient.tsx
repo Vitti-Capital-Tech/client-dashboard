@@ -538,7 +538,7 @@ export function PlacementsClient({
       {/* Page Header */}
       <div>
         <div className="font-mono text-xs tracking-wider uppercase text-mut">Capital raises</div>
-        <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink">Placements</h1>
+        <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink">Placement Bidder</h1>
       </div>
 
       {/* Open & Upcoming raises */}
