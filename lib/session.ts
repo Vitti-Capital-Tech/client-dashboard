@@ -22,7 +22,13 @@ import { getAccounts } from "@/lib/data/queries";
  */
 
 export type Role = "client" | "admin";
-export type Session = { role: Role; clientId: string; viewClient: string };
+export type Session = {
+  role: Role;
+  clientId: string;
+  viewClient: string;
+  /** The address the session is signed in as — shown in the profile menu. */
+  email: string;
+};
 
 /** Cookie holding the client a staff member is inspecting (UI state only). */
 export const VIEW_COOKIE = "vitti_view";
@@ -126,7 +132,7 @@ export async function getSession(): Promise<Session | null> {
   if (!email) return null;
   const clientId = await getActiveClientId();
   const viewClient = (await viewCookie()) ?? clientId;
-  return { role, clientId, viewClient };
+  return { role, clientId, viewClient, email };
 }
 
 /**

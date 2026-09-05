@@ -19,6 +19,7 @@ import {
   isITM,
 } from "@/lib/data/compute";
 import { ackAlert } from "@/app/actions/alerts";
+import { isComingSoon } from "@/lib/nav/coming-soon";
 
 export function DashboardClient({
   clientId,
@@ -105,6 +106,12 @@ export function DashboardClient({
 
   // Build marquee ticker content
   const renderTicker = () => {
+    // `market_indices` is empty in this database, and a marquee with nothing in
+    // it still drew its full-width navy bar: a black band under the greeting
+    // that looked like a component that had failed to load. No indices, no
+    // ticker — the row is worth its space only when it is carrying prices.
+    if (indices.length === 0) return null;
+
     const tickerItems = indices.map(x => {
       const isUp = x.chg >= 0;
       const valStr = x.last.toLocaleString("en-AU", {
@@ -142,7 +149,7 @@ export function DashboardClient({
         icon: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
         title: `Put $${cash.toLocaleString("en-AU")} cash to work`,
         sub: "Build a plan across timeframes",
-        action: () => router.push("/portal/client/invest")
+        path: "/portal/client/invest"
       });
     }
 
@@ -154,7 +161,7 @@ export function DashboardClient({
         icon: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
         title: `Act on ${urgentOpt.code} — ${urgentOpt.dte}d left`,
         sub: "Unlisted, in the money, window closing",
-        action: () => router.push("/portal/client/options")
+        path: "/portal/client/options"
       });
     }
 
@@ -170,7 +177,7 @@ export function DashboardClient({
         icon: "M4 19V5M4 19h16M8 11l3 3 4-6",
         title: `${sig.action} ${trimHolding.code}`,
         sub: sig.headline,
-        action: () => router.push(`/portal/client/positions`)
+        path: "/portal/client/positions"
       });
     }
 
@@ -181,11 +188,14 @@ export function DashboardClient({
         icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z",
         title: "See this week's idea",
         sub: "Curated, with target and timeframe",
-        action: () => router.push("/portal/client/invest")
+        path: "/portal/client/invest"
       });
     }
 
-    return list.slice(0, 3);
+    // A suggestion is an invitation to go somewhere. Two of these lead to
+    // Invest, which is not finished — offering them would be the dashboard
+    // walking a client into the page the nav has just told them is not ready.
+    return list.filter((s) => !isComingSoon(s.path)).slice(0, 3);
   };
 
   const suggestions = getSuggestions();
@@ -273,7 +283,7 @@ export function DashboardClient({
             {suggestions.map((s, idx) => (
               <div
                 key={idx}
-                onClick={s.action}
+                onClick={() => router.push(s.path)}
                 className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow flex items-center gap-3.5 hover:-translate-y-0.5 transition-transform cursor-pointer select-none"
               >
                 <div className={`w-9.5 h-9.5 rounded-[10px] flex-none flex items-center justify-center ${getSuggIconColor(s.tone)}`}>
@@ -460,24 +470,27 @@ export function DashboardClient({
               Ask about your holdings, your options and their exercise windows, or
               anything in your book.
             </p>
+            {/* Disabled for the same reason the nav entry is: the page behind
+                it is still being built. A card that describes the feature and
+                then refuses to open it is honest; one that opens a half-written
+                page is not. */}
             <button
-              onClick={() => router.push("/portal/client/askvitti")}
-              className="w-full btn bg-navy text-white hover:bg-slate-800 font-semibold py-2 rounded-lg text-xs cursor-pointer select-none transition-colors mt-2"
+              disabled
+              title="Vitti Intelligence is coming soon"
+              className="w-full btn bg-navy/45 text-white/80 font-semibold py-2 rounded-lg text-xs cursor-not-allowed select-none mt-2"
             >
-              Open Vitti Intelligence &rarr;
+              Vitti Intelligence &middot; coming soon
             </button>
           </div>
 
-          {/* Markets indices */}
+          {/* Markets indices. Absent entirely when there are no indices: the
+              card is a 2×2 grid of numbers, and with none it drew a heading, a
+              link and a hole. The "Briefing" link is gone with the rest — it
+              pointed at Markets, which is still being built. */}
+          {indices.length > 0 && (
           <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
             <div className="flex justify-between items-center text-xs">
               <b className="text-ink text-sm font-semibold">Markets</b>
-              <button
-                onClick={() => router.push("/portal/client/markets")}
-                className="text-green-d font-semibold text-xs underline underline-offset-2 hover:opacity-85 cursor-pointer"
-              >
-                Briefing
-              </button>
             </div>
             <div className="grid grid-cols-2 gap-3.5">
               {indices.slice(0, 4).map(x => {
@@ -499,6 +512,7 @@ export function DashboardClient({
               })}
             </div>
           </div>
+          )}
 
           {/* Alerts preview */}
           <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">

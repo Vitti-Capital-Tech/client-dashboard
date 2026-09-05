@@ -8,6 +8,7 @@ import { ackAlert } from "@/app/actions/alerts";
 import { signOut, setActiveAccount } from "@/app/actions/session";
 import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 import { Wordmark } from "@/app/components/Wordmark";
+import { isComingSoon } from "@/lib/nav/coming-soon";
 
 type AccountOption = { id: string; label: string; accountType: string };
 
@@ -25,19 +26,23 @@ interface NavItem {
   tab: boolean;
   ai?: boolean;
   badge?: string;
-  /**
-   * Still being built. The entry stays in the nav — taking it out would read as
-   * "this product does not have that", which is not what is being said — but it
-   * does not navigate anywhere, because the page behind it is half-written.
-   * Rendered flat, unclickable and marked "Soon" in all three navs.
-   */
-  soon?: boolean;
 }
+
+/**
+ * Still being built? The entry stays in the nav — taking it out would read as
+ * "this product does not have that", which is not what is being said — but it
+ * does not navigate anywhere, because the page behind it is half-written.
+ * Rendered flat, unclickable and marked SOON in all three navs.
+ *
+ * Read from the shared list rather than flagged on each item, so the nav and
+ * the dashboard's links into the same pages cannot disagree.
+ */
 
 export function PortalShell({
   role,
   clientName,
   clientAv,
+  userEmail,
   alerts,
   clientLabels,
   pendingAllocCount,
@@ -49,6 +54,8 @@ export function PortalShell({
   role: "client" | "admin";
   clientName: string;
   clientAv: string;
+  /** The address this session is signed in as. Null if it could not be read. */
+  userEmail: string | null;
   alerts: AlertRow[];
   clientLabels: Record<string, string>;
   pendingAllocCount: number;
@@ -72,6 +79,34 @@ export function PortalShell({
   const [isSignOutOpen, setIsSignOutOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  // The profile menu under the avatar.
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement | null>(null);
+
+  // A menu opened by a click has to close on one too, anywhere outside it —
+  // and on Escape. Without that it survives navigation and sits over the next
+  // page. `mousedown` rather than `click` so it closes on the way down, before
+  // whatever was clicked underneath reacts to it.
+  useEffect(() => {
+    if (!isProfileOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!profileRef.current?.contains(e.target as Node)) setIsProfileOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsProfileOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [isProfileOpen]);
+
+  // Navigating closes it as well, and needs no effect of its own: every nav
+  // link is outside the menu, so the mousedown above has already fired by the
+  // time the route changes.
 
   // Focus lands on CANCEL, not on the confirming action. A dialog that opens
   // with the destructive button focused turns a stray Enter — the one that may
@@ -122,16 +157,19 @@ export function PortalShell({
   const navItems: { client: NavItem[]; admin: NavItem[] } = {
     client: [
       { k: "dashboard", label: "Home", path: "/portal/client", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
-      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true, soon: true },
+      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true },
       { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: "M4 19V5M4 19h16M8 15l3-4 3 2 4-6", tab: true },
       { k: "insights", label: "Insights", path: "/portal/client/insights", icon: "M3 3v18h18M7 13l3 3 4-6 4 4", tab: true },
-      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: "M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01", tab: true, ai: true, soon: true },
-      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: "M3 3v18h18M7 14l3-4 3 3 5-7", tab: false, soon: true },
+      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: "M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01", tab: true, ai: true },
+      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: "M3 3v18h18M7 14l3-4 3 3 5-7", tab: false },
       { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: false },
       { k: "options", label: "Options", path: "/portal/client/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: false },
       { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: "m12 3 2.7 5.8 6.3.7-4.7 4.3 1.3 6.2L12 16.8 6.4 20l1.3-6.2L3 9.5l6.3-.7z", tab: false },
-      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: "M3 7h18v12H3zM3 10h18M7 15h4", tab: false },
-      { k: "alerts", label: "Alerts", path: "/portal/client/alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0", tab: false, badge: "alerts" }
+      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: "M3 7h18v12H3zM3 10h18M7 15h4", tab: false }
+      // No "Alerts" entry: the bell in the top bar opens the same list, from
+      // every page, with the same unread count on it. Two doors to one drawer
+      // is one door too many, and the nav one was the slower of the two.
+      // `/portal/client/alerts` still exists and still renders.
     ],
     admin: [
       { k: "overview", label: "Overview", path: "/portal/staff", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
@@ -202,13 +240,14 @@ export function PortalShell({
         {items.map((it) => {
           const isActive = pathname === it.path;
           const badgeVal = getBadgeValue(it.badge);
+          const soon = isComingSoon(it.path);
           const body = (
             <>
               <svg className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none" viewBox="0 0 24 24">
                 <path d={it.icon} />
               </svg>
               <span>{it.label}</span>
-              {it.soon ? (
+              {soon ? (
                 <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-white/10 text-mut-d px-1.5 py-0.5 rounded-[5px]">SOON</span>
               ) : (
                 it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>
@@ -224,7 +263,7 @@ export function PortalShell({
           // A `soon` item is a div, not a disabled link: an <a href> that does
           // nothing is still focusable, still middle-clickable and still shows
           // its target in the status bar.
-          if (it.soon) {
+          if (soon) {
             return (
               <div
                 key={it.k}
@@ -255,26 +294,10 @@ export function PortalShell({
         })}
       </nav>
 
-      <div className="mt-auto border-t border-navy-line pt-3.5 space-y-1">
-        <div className="flex items-center gap-2.5 py-1.5 px-2">
-          <div className="w-8 h-8 rounded-full bg-green text-[#08130e] font-bold text-xs flex items-center justify-center flex-none">
-            {role === "admin" ? "SG" : clientAv}
-          </div>
-          <div className="leading-tight">
-            <div className="text-[12.5px] font-semibold text-white truncate max-w-35">{role === "admin" ? "S. Goyal" : clientName}</div>
-            <div className="text-[10.5px] text-mut-d truncate max-w-35">{role === "admin" ? "Director · admin" : "Wholesale client"}</div>
-          </div>
-        </div>
-        <button
-          onClick={() => setIsSignOutOpen(true)}
-          className="flex items-center gap-2 text-xs text-mut-d hover:text-white hover:bg-white/5 p-2 w-full rounded-lg transition-colors cursor-pointer"
-        >
-          <svg className="w-3.75 h-3.75 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-          </svg>
-          <span>Sign out</span>
-        </button>
-      </div>
+      {/* Who you are and how to leave both live under the avatar in the top bar
+          now — see `profileMenu`. They were here as well, which meant the same
+          two facts in two places on desktop and only one of them on mobile,
+          where this sidebar does not exist at all. */}
     </aside>
   );
 
@@ -352,8 +375,72 @@ export function PortalShell({
         )}
       </button>
 
-      <div className="w-7.75 h-7.75 rounded-full bg-navy text-white font-semibold text-[11px] flex items-center justify-center flex-none">
-        {role === "admin" ? "SG" : clientAv}
+      {/* Profile: identity, and the way out. `relative` so the panel hangs off
+          the avatar rather than off the header. */}
+      <div className="relative flex-none" ref={profileRef}>
+        <button
+          onClick={() => setIsProfileOpen((open) => !open)}
+          aria-haspopup="menu"
+          aria-expanded={isProfileOpen}
+          aria-label="Your profile"
+          className={`w-7.75 h-7.75 rounded-full bg-navy text-white font-semibold text-[11px] flex items-center justify-center cursor-pointer transition-shadow ${
+            isProfileOpen ? "ring-2 ring-green ring-offset-1" : "hover:opacity-90"
+          }`}
+        >
+          {role === "admin" ? "SG" : clientAv}
+        </button>
+
+        {isProfileOpen && (
+          <div
+            role="menu"
+            className="absolute right-0 top-full mt-2 w-64 bg-white border border-line rounded-[12px] shadow-shadow-lg p-1.5 z-40"
+          >
+            <div className="flex items-center gap-2.5 p-2.5">
+              <div className="w-9 h-9 rounded-full bg-navy text-white font-semibold text-xs flex items-center justify-center flex-none">
+                {role === "admin" ? "SG" : clientAv}
+              </div>
+              <div className="min-w-0 leading-tight">
+                <div className="text-[13px] font-semibold text-ink truncate">
+                  {role === "admin" ? "S. Goyal" : clientName}
+                </div>
+                <div className="text-[11px] text-mut truncate">
+                  {role === "admin" ? "Director · admin" : "Wholesale client"}
+                </div>
+              </div>
+            </div>
+
+            {/* The address is the one identifying thing a person can check at a
+                glance — on a shared machine it answers "whose session is this"
+                faster than a name two people might share. */}
+            {userEmail && (
+              <div className="px-2.5 pb-2 text-[11px] text-mut break-all">{userEmail}</div>
+            )}
+
+            {/* Which account the figures on screen belong to. A client with one
+                account is told nothing they cannot already see in the header. */}
+            {role === "client" && accounts.length > 1 && activeAccount && (
+              <div className="px-2.5 pb-2 text-[11px] text-mut">
+                Viewing <span className="font-semibold text-ink">{activeAccount.label}</span>
+              </div>
+            )}
+
+            <div className="border-t border-line my-1" />
+
+            <button
+              role="menuitem"
+              onClick={() => {
+                setIsProfileOpen(false);
+                setIsSignOutOpen(true);
+              }}
+              className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
+            >
+              <svg className="w-4 h-4 stroke-current fill-none stroke-[1.7] flex-none" viewBox="0 0 24 24">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+              </svg>
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
 
       {/*
@@ -390,14 +477,15 @@ export function PortalShell({
       {items.filter(it => it.tab).map(it => {
         const isActive = pathname === it.path;
         const badgeVal = getBadgeValue(it.badge);
+        const soon = isComingSoon(it.path);
         return (
           <button
             key={it.k}
             onClick={() => router.push(it.path)}
-            disabled={it.soon}
-            title={it.soon ? `${it.label} is coming soon` : undefined}
+            disabled={soon}
+            title={soon ? `${it.label} is coming soon` : undefined}
             className={`flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative ${
-              it.soon
+              soon
                 ? "text-mut-d/45 cursor-not-allowed"
                 : `cursor-pointer ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`
             }`}
@@ -514,6 +602,7 @@ export function PortalShell({
             {items.filter(it => !it.tab).map(it => {
               const isActive = pathname === it.path;
               const badgeVal = getBadgeValue(it.badge);
+              const soon = isComingSoon(it.path);
               return (
                 <button
                   key={it.k}
@@ -521,9 +610,9 @@ export function PortalShell({
                     setIsMoreOpen(false);
                     router.push(it.path);
                   }}
-                  disabled={it.soon}
+                  disabled={soon}
                   className={`flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors ${
-                    it.soon
+                    soon
                       ? "text-mut-d cursor-not-allowed"
                       : `hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`
                   }`}
@@ -532,7 +621,7 @@ export function PortalShell({
                     <path d={it.icon} />
                   </svg>
                   <span>{it.label}</span>
-                  {it.soon && (
+                  {soon && (
                     <span className="ml-auto text-[9px] font-bold tracking-wider bg-paper-2 text-mut px-1.5 py-0.5 rounded-[5px]">SOON</span>
                   )}
                   {badgeVal !== null && (

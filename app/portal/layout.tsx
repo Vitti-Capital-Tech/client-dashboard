@@ -135,6 +135,10 @@ export default async function PortalLayout({
       role={role}
       clientName={client?.name ?? "Client"}
       clientAv={client?.initials ?? "—"}
+      // The signed-in address, not the inspected client's: on the staff console
+      // `client` is whoever is being looked at, which is exactly not the answer
+      // to "whose session is this".
+      userEmail={session.email}
       alerts={alerts}
       clientLabels={clientLabels}
       pendingAllocCount={pendingAllocCount}
