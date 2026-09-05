@@ -314,15 +314,21 @@ export async function checkAccountNumber(accountNumber: string): Promise<Account
 /**
  * A client states that the account with this broker number is also theirs.
  *
- * Records the number and nothing more. It does NOT look the account up, and the
- * caller gets the same answer whether the number matches an account, a
- * different firm's, or nothing at all. Verification is a staff job
- * (`decideAccountClaim`), against the broker record.
+ * The number has to resolve to exactly one account before this will record
+ * anything — the desk asked for that, so a mistyped digit is refused at the
+ * form instead of sitting in the queue for days before a human rejects it.
  *
- * The form's Verify button does resolve the number — see `checkAccountNumber`
- * — but that is a separate, rate-limited and audited call. Submitting a claim
- * stays unconditional: a client can claim a number this action never looked at,
- * and the desk decides.
+ * This reverses what the original claim migration set out to do (it recorded
+ * the string and looked nothing up, so the form could not be used to enumerate
+ * account numbers). The enumeration risk is unchanged, so the disclosure stays
+ * behind `lookup_account_for_claim`: ten checks per client per hour, every one
+ * of them audited, and never a word about who owns the account. See
+ * 20260905093000_account_number_lookup.sql.
+ *
+ * What it still does NOT do is decide anything. A resolved number means the
+ * request can be raised, not that the account is theirs; approval remains a
+ * staff job (`decideAccountClaim`) against the broker record, and it has its
+ * own refusal for an account whose owner can log in.
  */
 export async function requestAccountClaim(accountNumber: string, note?: string) {
   const { actor, role, clientId } = await getActor();
@@ -332,10 +338,40 @@ export async function requestAccountClaim(accountNumber: string, note?: string) 
   if (problem) throw new Error(problem);
   const normalised = normaliseAccountNumber(accountNumber);
 
+  /**
+   * The number must RESOLVE before a request can be raised.
+   *
+   * The form disables its button until Verify succeeds; this is the same rule
+   * where it counts, because a disabled button stops nobody who can call a
+   * server action. It costs one more rate-limited lookup per submitted claim
+   * (`checkAccountNumber` burned one already), which is inside the hourly
+   * allowance several times over.
+   *
+   * The refusals are worded for the person reading them, not the desk: an
+   * unmatched number is nearly always a typed digit, and an ambiguous one needs
+   * a human with the broker record rather than a queued request that can only
+   * be rejected.
+   */
+  const check = await checkAccountNumber(normalised);
+  if (check.status === "error") throw new Error(check.message);
+  if (check.status === "none") {
+    throw new Error(
+      "No account with that number. Check it against your broker statement, or call the desk.",
+    );
+  }
+  if (check.status === "ambiguous") {
+    throw new Error(
+      "That number matches more than one account. Call the desk — they will resolve it against the broker record.",
+    );
+  }
+  if (check.mine) throw new Error("That account is already on your login.");
+
   const supabase = await createClient();
 
   // A number the client already holds is a no-op worth naming, rather than a
-  // request for staff to work out and reject.
+  // request for staff to work out and reject. Checked again against the
+  // client's OWN accounts as well as through the lookup above: `mine` is the
+  // register's answer, and this is the login's.
   const { data: own, error: ownErr } = await supabase
     .from("accounts")
     .select("external_ref")

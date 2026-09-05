@@ -19,8 +19,9 @@
 -- Kept, because the enumeration risk is real and unchanged:
 --
 --   • a HARD RATE LIMIT — LOOKUP_LIMIT checks per client per hour. A person
---     confirming the number on their statement needs one or two. A loop over
---     the number space needs hundreds of thousands, and gets ten an hour.
+--     confirming the number on their statement needs one or two, and a few more
+--     if they fat-finger it; a loop over the number space needs hundreds of
+--     thousands and gets twenty an hour, which is centuries of walking.
 --   • an AUDIT ROW PER CHECK, written before the answer is returned, so a
 --     scrape is visible in the log rather than inferred afterwards. It is
 --     written for hits and misses alike: only logging the hits would leave the
@@ -28,9 +29,11 @@
 --   • nothing about the OWNER. The account's own name is returned and the
 --     client who currently holds it is not — that would turn one number into a
 --     name, an entity and a relationship.
---   • the claim itself is unchanged. This function only reads; approving still
---     goes through `approve_account_claim` under staff authority, with its own
---     refusal for an account whose owner can log in.
+--   • this function only READS. It is now also the gate on raising a claim at
+--     all — `requestAccountClaim` refuses a number that does not resolve — but
+--     resolving a number still decides nothing: approval goes through
+--     `approve_account_claim` under staff authority, with its own refusal for
+--     an account whose owner can log in.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.lookup_account_for_claim(p_number text)
@@ -39,9 +42,12 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  -- One check is a person reading a statement; ten in an hour is already
-  -- generous for that, and is nowhere near enough to walk the number space.
-  LOOKUP_LIMIT constant integer := 10;
+  -- Set against the WORST honest case rather than the typical one: raising a
+  -- claim now costs two checks (the Verify, then `requestAccountClaim` proving
+  -- it again server-side), and a client working through a couple of mistyped
+  -- numbers must not be locked out before they get to the right one — there is
+  -- no "send it anyway" path left for them to fall back to.
+  LOOKUP_LIMIT constant integer := 20;
 
   caller     uuid;
   normalised text;
@@ -68,8 +74,10 @@ BEGIN
      AND ts > now() - interval '1 hour';
 
   IF recent >= LOOKUP_LIMIT THEN
+    -- Not "use the form instead": the form is gated on this function now, so
+    -- the only thing left is a human. Saying so beats sending them in a circle.
     RAISE EXCEPTION
-      'Too many account checks in the last hour. Send the number to the desk with the form instead.';
+      'Too many account checks in the last hour. Try again later, or call the Vitti desk.';
   END IF;
 
   -- Ambiguity is possible and must not be guessed at: `external_ref` is unique
@@ -121,6 +129,6 @@ GRANT EXECUTE ON FUNCTION public.lookup_account_for_claim(text) TO authenticated
 -- The rate limit reads the log by (client_id, action, ts) on every check, and
 -- `idx_audit_client` alone makes that a scan of everything that client has ever
 -- done. Partial, because this is the only action it is ever asked about.
-CREATE INDEX idx_audit_account_checks
+CREATE INDEX IF NOT EXISTS idx_audit_account_checks
   ON audit_log (client_id, ts DESC)
   WHERE action = 'Checked account number';

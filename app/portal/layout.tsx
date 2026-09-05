@@ -31,13 +31,41 @@ export default async function PortalLayout({
   const role = session.role;
   const activeClientId = await getActiveClientId();
 
-  const [client, clients, alerts, placements] = await Promise.all([
-    getClient(activeClientId),
-    getClients(),
-    // Admin sees firm-wide alerts; a client sees only their own.
-    getAlerts(role === "admin" ? undefined : activeClientId),
-    getPlacements(),
-  ]);
+  /**
+   * Everything the shell needs, in ONE round of queries — and nothing a client
+   * will not use.
+   *
+   * This layout runs on every portal request, and each Supabase call is a
+   * network round trip of a couple of hundred milliseconds, so what is asked
+   * for here is felt on every page. Two of the four fetches it used to make
+   * were for staff only:
+   *
+   *   • `getPlacements()` — two queries, one of them EVERY bid in the firm —
+   *     feeds `pendingAllocCount`, which is the badge on the staff Placements
+   *     nav item. A client's nav has no such item.
+   *   • `getClients()` feeds `clientLabels`, read only by the `role === "admin"`
+   *     branch of the alerts drawer.
+   *
+   * A client paid for both on every navigation and could never see either.
+   * `getClient` still resolves through `getClients`, so this drops queries
+   * rather than the client's own name — and `cache()` means the staff console
+   * pays for placements once per request, not twice.
+   */
+  const isAdmin = role === "admin";
+
+  const [client, clients, alerts, placements, accountRows, activeAccountId] =
+    await Promise.all([
+      getClient(activeClientId),
+      isAdmin ? getClients() : Promise.resolve([]),
+      // Admin sees firm-wide alerts; a client sees only their own.
+      getAlerts(isAdmin ? undefined : activeClientId),
+      isAdmin ? getPlacements() : Promise.resolve([]),
+      // Both of these resolve through the one cached `accounts` fetch, so the
+      // switcher's list and the account the pages are scoped to cost one round
+      // trip between them — and cannot disagree about which account is first.
+      isAdmin ? Promise.resolve([]) : getAccounts(activeClientId),
+      isAdmin ? Promise.resolve("") : getActiveAccountId(),
+    ]);
 
   const clientLabels: Record<string, string> = Object.fromEntries(
     clients.map((c) => [c.id, c.ref ?? c.initials ?? ""]),
@@ -52,10 +80,6 @@ export default async function PortalLayout({
   );
 
   // Client account switcher (admins use the client-view flow, not this).
-  const [activeAccountId, accountRows] =
-    role === "admin"
-      ? ["", []]
-      : await Promise.all([getActiveAccountId(), getAccounts(activeClientId)]);
   const accounts = accountRows.map((a) => ({
     id: a.id,
     label: a.label,

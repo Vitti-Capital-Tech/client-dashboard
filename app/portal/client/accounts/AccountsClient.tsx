@@ -102,12 +102,11 @@ export function AccountsClient({
   };
 
   /**
-   * Verify: name the account behind the number, before anyone waits on the desk.
+   * Verify: name the account behind the number, and unlock the request.
    *
-   * Not part of submitting. A client can send a claim without ever pressing it
-   * (the desk still verifies against the broker record), and a number that
-   * comes back unmatched can still be sent — it might be a typo, and it might
-   * be an account the register has under a different ref.
+   * This is the only way to enable "Request access" — see `claimable`. The
+   * server enforces the same rule on submit, because a disabled button is a
+   * convenience and not a boundary.
    */
   const handleVerify = () => {
     setClaimErr(null);
@@ -162,6 +161,20 @@ export function AccountsClient({
 
   /** The verify result, but only while it is still about what is in the box. */
   const verified = checked && checked.number === claimNumber ? checked.result : null;
+
+  /**
+   * Verification GATES the request — nothing can be sent to the desk until the
+   * number has been resolved to exactly one account that is not already on this
+   * login.
+   *
+   * The cost of this is a real one and worth naming: a client whose account is
+   * genuinely missing from the register can no longer raise the claim that
+   * would have told the desk about it. They are left with the phone. The trade
+   * was made deliberately — nearly every unmatched number is a typo, and a
+   * queue of claims that can only be rejected helps nobody — but if the desk
+   * starts hearing about accounts this form refuses, that is the reason.
+   */
+  const claimable = verified?.status === "found" && !verified.mine;
 
   return (
     <div className="space-y-5 text-ink font-body">
@@ -267,18 +280,18 @@ export function AccountsClient({
                   <p className="text-[12px] text-green-d bg-green-bg rounded-[8px] px-3 py-2 leading-normal">
                     <span className="font-semibold">{verified.name}</span>
                     {verified.mine
-                      ? " — already on your login."
-                      : " — send the request and the desk will confirm it is yours."}
+                      ? " — already on your login, so there is nothing to request."
+                      : " — you can send the request; the desk will confirm it is yours."}
                   </p>
                 ) : verified.status === "none" ? (
                   <p className="text-[12px] text-amber-d bg-amber-bg rounded-[8px] px-3 py-2 leading-normal">
-                    No account with that number. Check it against your broker statement — you
-                    can still send it to the desk if you believe it is right.
+                    No account with that number. Check it against your broker statement — if it
+                    is right and this keeps saying no, call the desk.
                   </p>
                 ) : verified.status === "ambiguous" ? (
                   <p className="text-[12px] text-amber-d bg-amber-bg rounded-[8px] px-3 py-2 leading-normal">
-                    That number matches more than one account. Send it to the desk with a note
-                    and they will resolve it against the broker record.
+                    That number matches more than one account. The desk has to resolve that
+                    against the broker record — call them rather than sending a request.
                   </p>
                 ) : (
                   <p className="text-[12px] font-semibold text-loss-d bg-loss-bg rounded-[8px] px-3 py-2 leading-normal">
@@ -301,9 +314,9 @@ export function AccountsClient({
             />
           </div>
           <p className="text-[11.5px] text-mut leading-normal">
-            Use the account number on your broker statement. Verify names the account so you can
-            see you have typed it right; the desk still checks it against the broker record
-            before it appears on your login.
+            Use the account number on your broker statement, then Verify. A request can only be
+            sent for a number that resolves to an account — the desk still checks it against the
+            broker record before it appears on your login.
           </p>
           {claimErr && (
             <p className="text-[12px] font-semibold text-loss-d bg-loss-bg rounded-[8px] px-3 py-2">{claimErr}</p>
@@ -313,10 +326,11 @@ export function AccountsClient({
           )}
           <button
             type="submit"
-            disabled={isPending}
-            className="w-full btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2.5 text-[13px] font-semibold cursor-pointer disabled:opacity-60"
+            disabled={isPending || !claimable}
+            title={claimable ? undefined : "Verify the account number first"}
+            className="w-full btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2.5 text-[13px] font-semibold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none"
           >
-            Request access
+            {claimable ? "Request access" : "Verify to request access"}
           </button>
         </form>
 

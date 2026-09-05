@@ -2,6 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import { getAccounts } from "@/lib/data/queries";
 
 /**
  * Session bridge — now backed by REAL Supabase Auth (Stage 7).
@@ -100,13 +101,18 @@ export async function getActiveAccountId(): Promise<string> {
   const clientId = await getActiveClientId();
   if (!clientId) return "";
 
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("accounts")
-    .select("id")
-    .eq("client_id", clientId)
-    .order("ref");
-  const accounts = data ?? [];
+  // Through the DAL rather than a query of its own. It used to run its own
+  // `accounts` select, which meant every portal request resolved the active
+  // account in one round trip and listed the switcher's accounts in another —
+  // for the same rows. `getAccounts` is `cache()`d, so on a request that has
+  // already asked for them this costs nothing.
+  //
+  // It also settles a disagreement that was waiting to happen: this ordered by
+  // `ref` alone and `getAccounts` orders by ref-then-label, so for a client
+  // whose accounts have no legacy ref — every imported broker account — "the
+  // first one" could mean two different accounts. The switcher would have shown
+  // one as active while the pages fetched the other.
+  const accounts = await getAccounts(clientId);
   if (accounts.length === 0) return "";
 
   const cookieId = (await cookies()).get(ACCOUNT_COOKIE)?.value;
