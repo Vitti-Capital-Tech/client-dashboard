@@ -393,34 +393,48 @@ export const getClient = cache(
   },
 );
 
-// Investment accounts, optionally scoped to one client (owner).
+/**
+ * Every account this request is allowed to see, fetched once.
+ *
+ * The scoping is left to `getAccounts` below and to RLS, deliberately: a
+ * client's policy already limits this to their own rows, and a staff member is
+ * entitled to all 54, so there is one query per request either way. It used to
+ * be up to three — `getAccounts(clientId)`, `getAccounts()` behind
+ * `getAccount(id)`, and the accounts query inside `getActiveAccountId()` — each
+ * a separate cache key and so a separate round trip, for the same rows.
+ */
+const allAccounts = cache(async (): Promise<AccountRow[]> => {
+  const supabase = await createClient();
+  // Imported broker accounts have no legacy `ref`, so fall back to the label
+  // to keep the order stable rather than arbitrary.
+  const { data, error } = await supabase
+    .from("accounts")
+    .select("*")
+    .order("ref", { nullsFirst: false })
+    .order("label");
+  if (error) throw error;
+  return data.map((a) => ({
+    id: a.id,
+    ref: a.ref,
+    externalRef: a.external_ref,
+    clientId: a.client_id,
+    label: a.label,
+    accountType: a.account_type,
+    s708Expiry: a.s708_expiry,
+    cash: a.cash_balance,
+    currency: a.currency,
+    adviserCode: a.adviser_code,
+    adviserName: a.adviser_name,
+    status: a.status,
+  }));
+});
+
+// Investment accounts, optionally scoped to one client (owner). Filtered from
+// the one fetch above rather than re-queried — see `allAccounts`.
 export const getAccounts = cache(
   async (clientId?: string): Promise<AccountRow[]> => {
-    const supabase = await createClient();
-    // Imported broker accounts have no legacy `ref`, so fall back to the label
-    // to keep the order stable rather than arbitrary.
-    let query = supabase
-      .from("accounts")
-      .select("*")
-      .order("ref", { nullsFirst: false })
-      .order("label");
-    if (clientId) query = query.eq("client_id", clientId);
-    const { data, error } = await query;
-    if (error) throw error;
-    return data.map((a) => ({
-      id: a.id,
-      ref: a.ref,
-      externalRef: a.external_ref,
-      clientId: a.client_id,
-      label: a.label,
-      accountType: a.account_type,
-      s708Expiry: a.s708_expiry,
-      cash: a.cash_balance,
-      currency: a.currency,
-      adviserCode: a.adviser_code,
-      adviserName: a.adviser_name,
-      status: a.status,
-    }));
+    const rows = await allAccounts();
+    return clientId ? rows.filter((a) => a.clientId === clientId) : rows;
   },
 );
 
