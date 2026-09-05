@@ -13,14 +13,23 @@ The objectives of the platform are:
 
 ## 2. Architecture Layout
 
-The migration from the in-memory prototype to a Supabase backend is **complete**: every portal route is now a Server Component that reads the data-access layer (DAL → Supabase), and all state changes go through **server actions** that write to Supabase and append to `audit_log`. The legacy Zustand store (`lib/db.ts` + `store/useDatabaseStore.ts`) is no longer on any read path — it survives only as a vestigial write in the login page (§3.1) and remains checked in as the reference implementation of the domain logic the schema and DAL were derived from.
+The migration from the in-memory prototype to a Supabase backend is **complete**: every portal route is now a Server Component that reads the data-access layer (DAL → Supabase), and all state changes go through **server actions** that write to Supabase and append to `audit_log`. The legacy Zustand store (`lib/db.ts` + `store/useDatabaseStore.ts`) is no longer on any read path, and no longer on any write path either — the login page was its last caller and was rewritten when passwords and self-registration arrived (§3.1). It remains checked in as the reference implementation of the domain logic the schema and DAL were derived from.
 
 ```mermaid
 graph TD
-    Root["Root Layout (app/layout.tsx)"] --> Landing["Landing / role selector (app/page.tsx)"]
-    Landing --> Login["Login (app/login/page.tsx)"]
-    Login -->|"signInWithPassword() → Supabase Auth"| Auth["Supabase Auth · session cookie (refreshed by proxy.ts)"]
-    Login --> E["Portal Shell (app/portal/layout.tsx → PortalShell island)"]
+    Root["Root Layout (app/layout.tsx)"] --> Slash["/ (app/page.tsx) — redirect only"]
+    Slash --> Login["Client sign-in (app/login/page.tsx)"]
+
+    Login -->|"password OR one-time code"| Auth["Supabase Auth · session cookie (refreshed by proxy.ts)"]
+    Login -.->|"@vitti.capital → refused, linked across"| Staff["Staff sign-in (app/staff/login/page.tsx)"]
+    Staff -->|"one-time code ONLY — staff hold no password"| Auth
+    Login -.->|"new client"| Signup["Sign-up (app/signup) — 3 steps"]
+    Signup -->|"1. details → service-role createUser (no password yet)"| Auth
+    Signup -->|"2. verifyOtp → set password + create clients row"| Auth
+    Signup -->|"3. link a broker account (REQUIRED)"| Claim["account_claim_requests · desk approves (§4.6)"]
+
+    Auth --> E["Portal Shell (app/portal/layout.tsx → PortalShell island)"]
+    E -.->|"client with no account and no pending claim"| Signup
 
     E --> F["Client Views (/portal/client)"]
     E --> G["Staff Views (/portal/staff)"]
@@ -32,7 +41,7 @@ graph TD
     end
 
     subgraph "Writes"
-        Actions["Server actions · app/actions/{placements,alerts,session}.ts"]
+        Actions["Server actions · app/actions/{placements,alerts,session,signup,accounts}.ts"]
         Actions -->|"insert/update + audit_log + revalidatePath"| Supa
     end
 
@@ -82,7 +91,7 @@ graph TD
 ### 3.1 Reactive State Store (`store/useDatabaseStore.ts`) — legacy, off the data path
 > Not the only Zustand store: `store/usePnlCalculatorStore.ts` is current and on the live path, holding the P&L Calculator's session state so it survives tab navigation. This section is only about the legacy one.
 
-This store powered the original prototype. It is **no longer read or written by any portal route** — all reads go through the DAL (§3.1b) and all writes through server actions (§3.1c). Its one surviving caller is `app/login/page.tsx`, which still calls `setRole`/`setClientId` alongside the real `signIn` server action; this is a harmless leftover that can be deleted once verified. The store and `lib/db.ts` stay in the tree as the canonical reference implementation of the domain logic (mutation semantics, alert engine, financial helpers) that the SQL schema, DAL, and server actions were ported from. This section documents that legacy path:
+This store powered the original prototype. It is **no longer read or written by any portal route** — all reads go through the DAL (§3.1b) and all writes through server actions (§3.1c). It now has **no callers at all**: the login page was the last one, and rewriting it for password sign-in and self-registration removed the vestigial `setRole`/`setClientId` writes. The store and `lib/db.ts` stay in the tree as the canonical reference implementation of the domain logic (mutation semantics, alert engine, financial helpers) that the SQL schema, DAL, and server actions were ported from. This section documents that legacy path:
 - An initial database object (`INITIAL_DATABASE`) is loaded from `lib/db.ts`. At store-init the alerts engine (`scanAlerts`) and audit seeder (`seedAudits`) run once to populate `db.alerts` and `db.audit`.
 - The database is managed globally using a **Zustand** store (`useDatabaseStore`), which also tracks session context: `role` (`client | admin`), `clientId`, `viewClient` (the client a staff member is inspecting), and a derived `currentUserLabel` getter used to stamp audit entries.
 - Mutators (`mutatePlaceBid`, `mutateWithdrawBid`, `mutateScaleBids`, `mutateUpdatePlacementStage`, `mutateAckAlert`, `mutateAddCustomAlert`, `mutateClientBpayPayment`) copy the database and return updated versions with mutations (e.g., bid increments, allocation scales, custom price alerts, BPAY payment flags).
@@ -98,9 +107,28 @@ Migrated routes never touch Zustand — they read Supabase through a server-only
 - **Multi-account (LLD §8.12):** a client (person) can hold several **accounts**; holdings/cash/bids are account-scoped (`positions`/`option_holdings`/`bids` carry `account_id`). Client holdings reads are account-scoped (`getPositions(accountId)`), staff reads aggregate across a client's accounts (`getClientPositions(clientId)`), and `getActiveAccountId()` picks the active account (a topbar **account switcher** lets clients change it).
 - **Compute (`lib/data/compute.ts`):** pure financial math (`posValue`, `posPL`, `portfolioValue`, `isITM`, `unlistedValue`) over DAL shapes; client-safe (type-only imports), so islands reuse it.
 - **Supabase clients (`lib/supabase/`):** a browser client and an **async** server client (this Next.js version's `cookies()` is async); types generated into `database.types.ts`.
-- **Session bridge (`lib/session.ts` + `app/actions/session.ts`):** backed by **real Supabase Auth**, signing in with a **one-time code emailed to the address — there is no password** (a code sent alongside one is not a second factor: `signInWithPassword` returns a valid session the moment the password is accepted). `requestLoginCode` → `verifyLoginCode`; a root `proxy.ts` refreshes the session cookie on each request; server components read identity via `supabase.auth.getUser()` (`getActiveClientId`, `getActor`), with `role` from `app_metadata.role` — stamped from the **email domain** by a trigger on `auth.users`, so `@vitti.capital` is staff and everything else is a client. The only cookie left is `vitti_view` (which client a staff member is inspecting — UI state). LLD §8.32.
-- **Authorization:** enforced at two layers — **route protection** (`proxy.ts` + portal layout redirect unauthenticated → `/login`; `staff/layout.tsx` blocks non-admins from the staff area) and **Postgres RLS** (LLD §8.11): every DAL read and server-action write runs under the user session, so the database itself guarantees a client only ever touches their own rows while staff (`is_staff()`) see all.
+- **Session bridge (`lib/session.ts` + `app/actions/session.ts` + `app/actions/signup.ts`):** backed by **real Supabase Auth**, with **two doors and two credentials** (§3.1e). Clients sign in at `/login` by password (`signInWithPassword`) or by emailed code (`requestLoginCode` → `verifyLoginCode`); staff sign in at `/staff/login` by code only. A root `proxy.ts` refreshes the session cookie on each request and redirects in both directions; server components read identity via `supabase.auth.getUser()` (`getActiveClientId`, `getActor`), with `role` from `app_metadata.role` — stamped from the **email domain** by a trigger on `auth.users`, so `@vitti.capital` is staff and everything else is a client. Cookies hold only UI state: `vitti_view` (which client a staff member is inspecting) and `vitti_account` (which of their accounts a client is looking at). LLD §8.32.
+- **Authorization:** enforced at two layers — **route protection** (`proxy.ts` + portal layout redirect unauthenticated → `/login`, and authenticated users off the sign-in pages into their own portal; `staff/layout.tsx` blocks non-admins from the staff area) and **Postgres RLS** (LLD §8.11): every DAL read and server-action write runs under the user session, so the database itself guarantees a client only ever touches their own rows while staff (`is_staff()`) see all.
 - **One source per figure, for both audiences (LLD §8.33):** the client portal reads the **stored P&L** the staff console reads, through the same rollup and with the same corrections applied. It previously computed its own from the current holdings snapshot, which knows nothing about parcels already sold — so a client's realised profit did not appear on their own screen, and their adviser was reading a different number for the same holding. The Options register goes further and shares the **columns** as well as the derivation, minus the Account column. The desk's working notes are not carried across, and figures the app cannot stand behind — invented month/year-to-date returns, a modelled "daily" move, a hardcoded growth curve, canned assistant answers quoting a price target — were removed rather than restyled.
+
+### 3.1b-2 Authentication surface (four pages, two credentials)
+
+`/` is a redirect to `/login`; the marketing landing page was removed, because everyone who loads this app is here to sign in.
+
+| Route | Who | Credential | Offers |
+| --- | --- | --- | --- |
+| `/login` | clients | password **or** emailed code | reset, sign-up, link to the staff door |
+| `/staff/login` | staff | emailed code **only** | link to the client door |
+| `/signup` | new clients | — (creates one) | 3 steps, §4.7 |
+| `/reset-password` | clients | emailed code | sets a new password, then signs in |
+
+**Two pages, not two permissions.** An earlier version split sign-in by `?role=` and it was rightly removed: it asked people to categorise themselves before proving anything, and the role never came from the page. That is still true — the role is stamped on `auth.users` from the email domain and enforced by RLS, so a client who loads `/staff/login` gains nothing at all. What justifies two pages now is that `/login` stopped being only a sign-in form: it offers a password, a reset, and registration of a new client account, none of which apply to staff and one of which refuses their addresses outright. The choice was a client page carrying a paragraph of exceptions, or staff getting the form that is actually theirs. Each page therefore **refuses the addresses it is not for** (the `audience` argument to `requestLoginCode`) and links across, rather than quietly mailing a code and landing somebody somewhere the page never described. The domain rule is read from the database (`role_from_email_domain`), never re-tested in TypeScript, so there is one copy of it.
+
+**Password and code are alternatives, never stacked.** A code emailed *on top of* a password looks like a second factor and is not one: `signInWithPassword` returns a valid session the moment the password is accepted, so anything after it is decoration a caller can skip by using the token from the first step. Real 2FA is Supabase MFA (`auth.mfa`), which gates the session at the token level.
+
+**Staff hold no password and cannot acquire one.** Staff accounts self-provision from the email domain alone, and the only thing that makes that safe is that the code has to be *read* at a vitti.capital mailbox — a password works without one. Enforced at four points: `startSignUp` refuses staff addresses; `requestPasswordResetCode` refuses them before mail is sent; `signInWithPassword` signs the session **out** and refuses if a staff password somehow exists (checked on the verified role, not the address); and `block_self_registered_staff`, a `BEFORE INSERT` trigger on `auth.users`, refuses the row at the database.
+
+> **A live privilege escalation was closed here.** `supabase/config.toml` shipped `enable_signup = true` with `enable_confirmations = false`. `POST /auth/v1/signup` needs only the public anon key from the browser bundle, and the role trigger stamps `admin` on any `@vitti.capital` address — so registering `ceo@vitti.capital` with a chosen password yielded a staff session over every client's positions, with no mailbox involved. Registration does not need that setting (`startSignUp` uses the admin API, which it does not govern), so it is off in local config and must be set off in the hosted dashboard separately. The trigger is the backstop, because a setting gets flipped back by somebody who reads "Allow new users to sign up" and sees no reason not to.
 
 ### 3.1c Server Actions (`app/actions/`) — the write path
 All mutations are `"use server"` functions that resolve the actor via `getActor()`, write directly to Supabase, insert an `audit_log` row, and call `revalidatePath("/portal", "layout")` so every open surface re-renders with fresh data. They replace the legacy Zustand `mutate*` functions one-for-one (see the LLD §8.8 mapping):
@@ -295,3 +323,14 @@ Content-level breakpoints were already in place and are unchanged: the wider tab
 3. **Execution (on approve):** `approve_account_claim`, a `SECURITY DEFINER` RPC, resolves `accounts.external_ref`, then moves the account and rewrites `client_id` on `positions`, `option_holdings`, `bids`, `trades`, `realized_pnl`, `pnl_overrides`, `pnl_summary` and `pnl_runs` — in one transaction, because half a re-parent is a client reading someone else's figures. The emptied broker-created client row is marked `merged_into` rather than deleted. The account appears in the client's topbar switcher.
 4. **The rail:** an account whose current owner **has an email** is refused outright — that account is on somebody's screen, and moving it on the strength of a typed number is not a claim decision. The desk is told to confirm the relationship and use a merge instead. Rejection records the decision and an optional note the client sees. (See LLD §8.34.)
 
+### 4.7 Client Self-Registration Lifecycle (`/signup`)
+
+1. **Details** — full name, email, password, confirm. `startSignUp` validates all of it, refuses `@vitti.capital` (reading the rule from the database), then creates the `auth.users` row with the **service role** and **no password**, and emails a code. The service role is what lets project-level signups stay off; see §3.1b-2. Full name is required because `clients.display_name` is `NOT NULL` and step 3 needs that row.
+2. **Verify** — the 6-digit code. `completeSignUp` calls `verifyOtp`; only after it succeeds does it set the password (`updateUser`) and create the `clients` row (service role — `clients` has a SELECT policy and deliberately no INSERT policy, and "any authenticated user may insert" would be a wider grant than one fully-specified row here). The ordering is the security argument: nothing granting access happens before the mailbox is proved, so abandoning here leaves no password, no client row and no portal.
+3. **Link an account** — the broker account number, fed straight into the claim flow of §4.6. **Required, with no skip:** a login with no account reaches the portal and sees an empty dashboard, which reads as the product being broken rather than the sign-up being unfinished.
+
+**"Required" is enforced by state, not by a missing button.** Step 2 mints a real session, so from that moment the portal is reachable. `app/signup/page.tsx` therefore derives the step from what the person actually owns rather than from browser state, and `app/portal/layout.tsx` returns any client with **no accounts and no pending claim** to `/signup`. A pending claim counts as linked — the number is with the desk and there is nothing further for the client to do; asking again would give staff a second row to reconcile against the first. This is also why the proxy does **not** bounce signed-in users off `/signup` as it does off `/login`: the page is reached signed-in by design, and bouncing it would both make step 3 unreachable and loop against the portal's own gate.
+
+**Two deliberate non-disclosures.** An address that is already registered gets the identical answer and a code all the same — saying "that email already has an account" would make the form a test for whether a given person banks here, the enumeration problem the login page is written around. Someone who owns the mailbox completes the flow and has effectively reset their own password; someone who does not owns nothing. And the account number is recorded, never resolved (§4.6).
+
+**The password is never at rest between steps.** It lives in the browser's step state and is sent again with the code, rather than being stashed in a cookie or a table for the minute it takes somebody to read their email.

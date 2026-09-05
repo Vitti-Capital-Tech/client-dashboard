@@ -13,8 +13,10 @@ import {
   getPlacements,
   getMergeRequests,
   getAccountClaims,
+  type ClaimRequestRow,
 } from "@/lib/data/queries";
 import { PortalShell } from "./PortalShell";
+import { AwaitingAccount } from "./AwaitingAccount";
 
 // Server Component: resolves the session + badge data from the DAL, then hands
 // the interactive shell (nav, alerts drawer, sign-out) its props.
@@ -60,6 +62,35 @@ export default async function PortalLayout({
     accountType: a.accountType,
   }));
 
+  // ── A client with no accounts ────────────────────────────────────────────
+  // Registration requires linking an account (app/signup/SignUpClient.tsx), but
+  // "required" only means something if closing the tab between step 2 and step 3
+  // does not get you past it. It would otherwise: step 2 mints a real session, so
+  // the portal is reachable from that moment. Two different states end up here
+  // and they need opposite answers:
+  //
+  //   • no claim yet  → the sign-up is genuinely unfinished. Back to step 3.
+  //   • claim pending → the sign-up is DONE and the client is waiting on us.
+  //     Sending them back would ask for a number they already gave and hand the
+  //     desk a second request to reconcile against the first.
+  //
+  // The second case is why `children` is replaced rather than rendered. The whole
+  // portal is account-scoped — `getActiveAccountId()` returns "" here, and six
+  // client pages pass that to the DAL — so this is the one place that has to know
+  // about the state. It is also the honest answer: a dashboard of zeros tells a
+  // client their portfolio is worth nothing, which is a claim about their money
+  // rather than about our data.
+  //
+  // Staff are exempt by construction: an admin inspecting a client through the
+  // view cookie must not be thrown out of the console because that client has no
+  // accounts yet.
+  let awaitingClaim: ClaimRequestRow | null = null;
+  if (role !== "admin" && accountRows.length === 0) {
+    const claims = await getAccountClaims(activeClientId);
+    awaitingClaim = claims.find((c) => c.status === "pending") ?? null;
+    if (!awaitingClaim) redirect("/signup");
+  }
+
   // Staff badge: everything on the Account requests page awaiting a decision.
   // Claims and merges share one badge because they share one page — a client
   // waiting on either is waiting on the same queue, and two counters on one nav
@@ -87,7 +118,7 @@ export default async function PortalLayout({
       accounts={accounts}
       activeAccountId={activeAccountId}
     >
-      {children}
+      {awaitingClaim ? <AwaitingAccount claim={awaitingClaim} /> : children}
     </PortalShell>
   );
 }

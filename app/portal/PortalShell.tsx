@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useTransition } from "react";
+import React, { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { AlertRow } from "@/lib/data/queries";
@@ -62,14 +62,48 @@ export function PortalShell({
   const [isMoreOpen, setIsMoreOpen] = useState(false);
   const [isSwitching, startTransition] = useTransition();
 
+  // Sign-out asks first. It is one click from the nav, it ends the session for
+  // whoever is at the keyboard, and on the staff console it also drops the
+  // client being inspected and anything unsaved in the P&L Calculator — none of
+  // which announces itself until it is gone. `isSigningOut` is separate from the
+  // dialog being open because the work outlives the click: the button has to
+  // stay disabled while the server action runs and the redirect resolves.
+  const [isSignOutOpen, setIsSignOutOpen] = useState(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  // Focus lands on CANCEL, not on the confirming action. A dialog that opens
+  // with the destructive button focused turns a stray Enter — the one that may
+  // well have opened it — into a confirmed sign-out.
+  useEffect(() => {
+    if (isSignOutOpen) cancelRef.current?.focus();
+  }, [isSignOutOpen]);
+
+  // Escape closes it, as every other dismissible surface in the shell should.
+  // Ignored mid-sign-out: there is nothing left to cancel once the session is
+  // already being torn down, and closing the dialog would only hide that.
+  useEffect(() => {
+    if (!isSignOutOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !isSigningOut) setIsSignOutOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isSignOutOpen, isSigningOut]);
+
   const handleSignOut = async () => {
+    if (isSigningOut) return;
+    setIsSigningOut(true);
     // Sign-out is a client-side `router.push`, so module-scope stores are NOT torn
     // down the way a full document load would tear them down. The P&L Calculator
     // keeps parsed client trade data in one, so it has to be cleared explicitly or
     // the next person to sign in on this browser inherits it.
     usePnlCalculatorStore.getState().reset();
     await signOut();
-    router.push("/");
+    // `/login` rather than `/`, which is now only a redirect to it. Left in the
+    // signing-out state on purpose: the navigation is the next thing that
+    // happens, and re-enabling the button first only invites a second click.
+    router.push("/login");
   };
 
   // Client account switcher: persist the choice (server action revalidates the
@@ -239,7 +273,7 @@ export function PortalShell({
           </div>
         </div>
         <button
-          onClick={handleSignOut}
+          onClick={() => setIsSignOutOpen(true)}
           className="flex items-center gap-2 text-xs text-mut-d hover:text-white hover:bg-white/5 p-2 w-full rounded-lg transition-colors cursor-pointer"
         >
           <svg className="w-3.75 h-3.75 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
@@ -328,6 +362,33 @@ export function PortalShell({
       <div className="w-7.75 h-7.75 rounded-full bg-navy text-white font-semibold text-[11px] flex items-center justify-center flex-none">
         {role === "admin" ? "SG" : clientAv}
       </div>
+
+      {/*
+        Sign out, mobile only.
+
+        The sidebar carries it on desktop, but the sidebar is `hidden md:flex` —
+        so below md there was no way to sign out at all. On a phone, which is the
+        device most likely to be handed to someone else or left on a table, that
+        is the wrong control to be missing.
+
+        `md:hidden` rather than shown everywhere, because two sign-outs on one
+        screen invites the question of whether they do the same thing. Placed
+        after the avatar so it reads as an action on the identity beside it, and
+        it opens the same dialog the sidebar does.
+      */}
+      <button
+        onClick={() => setIsSignOutOpen(true)}
+        className="md:hidden relative flex p-1.5 rounded-[9px] hover:bg-white border border-transparent hover:border-line cursor-pointer text-ink transition-all"
+        aria-label="Sign out"
+        title="Sign out"
+      >
+        <svg
+          className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
+          viewBox="0 0 24 24"
+        >
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+        </svg>
+      </button>
     </header>
   );
 
@@ -495,6 +556,97 @@ export function PortalShell({
     </>
   );
 
+  /**
+   * Sign-out confirmation.
+   *
+   * Styled on the More menu above — same overlay, same card — but sits at z-[60]
+   * so it is above the drawer and that menu rather than behind whichever was
+   * open when it was raised.
+   *
+   * The layout follows the lesson in LLD §8.37: the overlay scrolls
+   * (`overflow-y-auto`) and the card is `my-auto max-h-[92vh] overflow-y-auto`,
+   * so it centres when it fits and scrolls when it does not. This dialog is short
+   * enough to fit anywhere, but ten modals in this app were unreachable on a
+   * short screen for exactly the want of those classes.
+   */
+  const signOutModal = (
+    <div
+      className={`fixed inset-0 bg-navy/55 backdrop-blur-[2px] transition-opacity z-[60] ${
+        isSignOutOpen
+          ? "opacity-100 flex items-center justify-center p-4.5 overflow-y-auto"
+          : "opacity-0 hidden"
+      }`}
+      onClick={() => {
+        // A backdrop click cancels — but not once the session is already going,
+        // where dismissing the dialog would just hide work in progress.
+        if (!isSigningOut) setIsSignOutOpen(false);
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="signout-title"
+        aria-describedby="signout-body"
+        className="bg-white rounded-2xl max-w-100 w-full p-6 shadow-shadow-lg my-auto max-h-[92vh] overflow-y-auto text-ink"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3.5">
+          <span className="shrink-0 w-9 h-9 rounded-full bg-loss-bg grid place-items-center">
+            <svg
+              className="w-4.5 h-4.5 stroke-loss-d fill-none stroke-[1.8]"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <div className="min-w-0">
+            <h3 id="signout-title" className="font-disp font-medium text-[20px] leading-snug">
+              Sign out of Vitti Capital?
+            </h3>
+            <p id="signout-body" className="text-[13.5px] text-mut mt-1.5 leading-relaxed">
+              {role === "admin" ? (
+                <>
+                  You will need a new one-time code to sign back in. The client
+                  you are inspecting is cleared, and anything loaded into the
+                  P&amp;L Calculator on this browser is discarded.
+                </>
+              ) : (
+                <>
+                  You will need your password or a one-time code to sign back in.
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex gap-2.5 mt-6">
+          <button
+            ref={cancelRef}
+            type="button"
+            onClick={() => setIsSignOutOpen(false)}
+            disabled={isSigningOut}
+            className="flex-1 btn rounded-[10px] py-2.5 text-[13px] font-semibold cursor-pointer select-none border border-line-2 bg-white text-ink hover:bg-paper-2 transition-colors disabled:opacity-55 disabled:cursor-not-allowed"
+          >
+            Stay signed in
+          </button>
+          <button
+            type="button"
+            onClick={handleSignOut}
+            disabled={isSigningOut}
+            className="flex-1 btn rounded-[10px] py-2.5 text-[13px] font-semibold cursor-pointer select-none bg-loss text-white hover:opacity-90 transition-opacity disabled:opacity-55 disabled:cursor-not-allowed"
+          >
+            {isSigningOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="app-shell flex min-h-screen bg-paper font-body select-none">
       {sidebar}
@@ -508,6 +660,7 @@ export function PortalShell({
 
       {alertsDrawer}
       {moreMenuModal}
+      {signOutModal}
     </div>
   );
 }
