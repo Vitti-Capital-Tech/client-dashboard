@@ -17,6 +17,7 @@ import {
   fieldClass,
   buttonClass,
 } from "@/app/components/AuthShell";
+import { PasswordInput } from "@/app/components/PasswordInput";
 import {
   CodeInput,
   CODE_LENGTH,
@@ -199,10 +200,9 @@ export function SignUpClient({ start }: { start: Step }) {
               placeholder="you@example.com"
             />
 
-            <Field
+            <PasswordInput
               id="password"
               label="Password"
-              type="password"
               autoComplete="new-password"
               value={password}
               onChange={setPassword}
@@ -210,10 +210,9 @@ export function SignUpClient({ start }: { start: Step }) {
               hint={`At least ${MIN_PASSWORD_LENGTH} characters, with a letter and a number.`}
             />
 
-            <Field
+            <PasswordInput
               id="confirmation"
               label="Confirm password"
-              type="password"
               autoComplete="new-password"
               value={confirmation}
               onChange={setConfirmation}

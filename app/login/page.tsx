@@ -14,6 +14,7 @@ import {
   fieldClass,
   buttonClass,
 } from "@/app/components/AuthShell";
+import { PasswordInput } from "@/app/components/PasswordInput";
 import {
   CodeInput,
   CODE_LENGTH,
@@ -222,11 +223,15 @@ export default function LoginPage() {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <div className="flex items-baseline justify-between gap-3">
-              <label htmlFor="password" className="block text-xs font-semibold text-ink">
-                Password
-              </label>
+          <PasswordInput
+            id="password"
+            label="Password"
+            autoComplete="current-password"
+            value={password}
+            onChange={setPassword}
+            placeholder="••••••••••"
+            aria-describedby={error ? "login-error" : undefined}
+            rightSlot={
               <Link
                 // Carries the address across so the reset page does not ask for
                 // something the person has already typed.
@@ -235,20 +240,8 @@ export default function LoginPage() {
               >
                 Forgot password?
               </Link>
-            </div>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••"
-              required
-              aria-describedby={error ? "login-error" : undefined}
-              className={fieldClass}
-            />
-          </div>
+            }
+          />
 
           {errorBlock}
 

@@ -15,6 +15,7 @@ import {
   fieldClass,
   buttonClass,
 } from "@/app/components/AuthShell";
+import { PasswordInput } from "@/app/components/PasswordInput";
 import {
   CodeInput,
   CODE_LENGTH,
@@ -195,46 +196,24 @@ export function ResetPasswordClient({ initialEmail }: { initialEmail: string }) 
             disabled={busy}
           />
 
-          <div className="space-y-1.5">
-            <label htmlFor="password" className="block text-xs font-semibold text-ink">
-              New password
-            </label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••"
-              required
-              className={fieldClass}
-            />
-            <p className="text-[11.5px] text-mut">
-              At least {MIN_PASSWORD_LENGTH} characters, with a letter and a
-              number.
-            </p>
-          </div>
+          <PasswordInput
+            id="password"
+            label="New password"
+            autoComplete="new-password"
+            value={password}
+            onChange={setPassword}
+            placeholder="••••••••••"
+            hint={`At least ${MIN_PASSWORD_LENGTH} characters, with a letter and a number.`}
+          />
 
-          <div className="space-y-1.5">
-            <label
-              htmlFor="confirmation"
-              className="block text-xs font-semibold text-ink"
-            >
-              Confirm new password
-            </label>
-            <input
-              id="confirmation"
-              name="confirmation"
-              type="password"
-              autoComplete="new-password"
-              value={confirmation}
-              onChange={(e) => setConfirmation(e.target.value)}
-              placeholder="••••••••••"
-              required
-              className={fieldClass}
-            />
-          </div>
+          <PasswordInput
+            id="confirmation"
+            label="Confirm new password"
+            autoComplete="new-password"
+            value={confirmation}
+            onChange={setConfirmation}
+            placeholder="••••••••••"
+          />
 
           {error && (
             <FormError id="reset-error">
