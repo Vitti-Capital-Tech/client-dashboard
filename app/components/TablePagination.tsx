@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 export interface TablePaginationProps {
   totalItems: number;
@@ -111,9 +112,7 @@ export function TablePagination({
             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-[6px] text-xs font-semibold text-ink hover:bg-white hover:shadow-xs disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:shadow-none disabled:cursor-not-allowed cursor-pointer transition-all"
             title="Previous page"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeft className="w-3.5 h-3.5" />
             Prev
           </button>
 
@@ -155,9 +154,7 @@ export function TablePagination({
             title="Next page"
           >
             Next
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
-            </svg>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
       )}

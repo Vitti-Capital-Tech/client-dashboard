@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Mail } from "lucide-react";
 import {
   requestLoginCode,
   verifyLoginCode,
@@ -341,14 +342,7 @@ export default function LoginPage() {
       ) : (
         <div className="space-y-5">
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-d bg-green-bg px-3 py-1.5 rounded-full">
-            <svg
-              className="w-3.5 h-3.5 fill-none stroke-current stroke-2"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <path d="M3.5 7l8.5 6 8.5-6" />
-            </svg>
+            <Mail className="w-3.5 h-3.5 stroke-2" aria-hidden="true" />
             One-time code
           </span>
 

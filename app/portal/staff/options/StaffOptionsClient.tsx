@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useMemo } from "react";
+import { Download, Search, X } from "lucide-react";
 import type { ClientRow, AccountRow, OptionRow } from "@/lib/data/queries";
 import type { StoredPnlRow } from "@/lib/data/pnl";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
@@ -390,9 +391,7 @@ export function StaffOptionsClient({
             onClick={handleExportCsv}
             className="inline-flex items-center gap-1.5 bg-white hover:bg-paper-2 border border-line text-ink font-semibold py-1.5 px-3 rounded-lg text-xs transition-colors shadow-2xs cursor-pointer"
           >
-            <svg className="w-3.5 h-3.5 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <Download className="w-3.5 h-3.5 text-mut" />
             Export
           </button>
         </div>
@@ -512,14 +511,7 @@ export function StaffOptionsClient({
           {/* Search Bar & Reset */}
           <div className="flex items-center gap-3">
             <div className="relative flex-1">
-              <svg
-                className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-              </svg>
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
               <input
                 type="text"
                 placeholder="Search series, company, terms, client, account..."
@@ -539,9 +531,7 @@ export function StaffOptionsClient({
                   }}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-ink cursor-pointer"
                 >
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <X className="w-3 h-3" />
                 </button>
               )}
             </div>

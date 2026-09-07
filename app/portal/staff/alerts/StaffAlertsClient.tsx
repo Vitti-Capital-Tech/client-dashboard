@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Clock, TrendingUp, AlertTriangle } from "lucide-react";
 import type { AlertRow, ClientRow } from "@/lib/data/queries";
 import { ackAlert, addCustomAlert } from "@/app/actions/alerts";
 
@@ -36,12 +37,13 @@ export function StaffAlertsClient({ alerts, clients }: { alerts: AlertRow[]; cli
   const alertIco = (a: AlertRow) => {
     const map = { expiry: "amber", itm: "green", window: "red", price: a.sev === "amber" ? "amber" : "green" };
     const col = a.sev === "red" ? "red" : (a.sev === "amber" ? "amber" : map[a.kind] || "green");
-    const path = {
-      expiry: "M12 8v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
-      itm: "M4 18l6-6 4 4 6-8M14 8h4v4",
-      window: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
-      price: "M3 17l6-6 4 4 8-8M21 7v6h-6"
-    }[a.kind] || "M12 8v5l3 2";
+
+    const Icon = {
+      expiry: Clock,
+      itm: TrendingUp,
+      window: AlertTriangle,
+      price: TrendingUp,
+    }[a.kind] || Clock;
 
     const colors: Record<string, string> = {
       red: "bg-loss-bg text-loss-d",
@@ -51,9 +53,7 @@ export function StaffAlertsClient({ alerts, clients }: { alerts: AlertRow[]; cli
 
     return (
       <div className={`w-8.5 h-8.5 rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
-        <svg className="w-4.25 h-4.25 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
-          <path d={path} />
-        </svg>
+        <Icon className="w-4.25 h-4.25 stroke-[1.8]" />
       </div>
     );
   };

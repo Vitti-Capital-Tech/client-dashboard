@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { X } from "lucide-react";
 import type {
   WatchRow,
   PlacementRow,
@@ -229,9 +230,7 @@ export function WatchlistClient({
                           onClick={() => handleRemoveSecurity(idx)}
                           className="p-1 rounded-lg hover:bg-paper-2 text-mut hover:text-ink cursor-pointer"
                         >
-                          <svg className="w-3.5 h-3.5 fill-none stroke-current stroke-2" viewBox="0 0 24 24">
-                            <path d="M6 6l12 12M18 6 6 18" />
-                          </svg>
+                          <X className="w-3.5 h-3.5 stroke-2" />
                         </button>
                       </td>
                     </tr>

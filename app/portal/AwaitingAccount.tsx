@@ -1,3 +1,4 @@
+import { Clock } from "lucide-react";
 import type { ClaimRequestRow } from "@/lib/data/queries";
 
 /**
@@ -32,14 +33,7 @@ export function AwaitingAccount({ claim }: { claim: ClaimRequestRow }) {
       <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
         <div className="px-6 py-5 border-b border-line flex items-start gap-3.5">
           <span className="shrink-0 w-9 h-9 rounded-full bg-amber-bg grid place-items-center">
-            <svg
-              className="w-4.5 h-4.5 fill-none stroke-amber-d stroke-2"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="12" r="9" />
-              <path d="M12 7.5v5l3 2" strokeLinecap="round" />
-            </svg>
+            <Clock className="w-4.5 h-4.5 text-amber-d stroke-2" aria-hidden="true" />
           </span>
           <div>
             <div className="font-mono text-xs tracking-wider uppercase text-mut">

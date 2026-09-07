@@ -2,6 +2,7 @@
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ListPlus } from "lucide-react";
 import type { PnlSummaryRow } from "@/lib/export/order-history";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
 import { markPositionOpenAction } from "@/app/actions/trades";
@@ -340,16 +341,7 @@ export function MismatchRow({
               className="btn ghost sm inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-1 rounded-[6px] text-mut border border-line/70 hover:text-navy hover:border-navy/40 hover:bg-paper-2 transition-all cursor-pointer"
               title="Contract notes for this ticker — add, amend, reclassify, delete or dismiss"
             >
-              <svg
-                className="w-3.5 h-3.5"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              >
-                <path d="M4 6h10M4 12h10M4 18h7M18 15v6M15 18h6" />
-              </svg>
+              <ListPlus className="w-3.5 h-3.5" />
               Txns
             </button>
           </div>

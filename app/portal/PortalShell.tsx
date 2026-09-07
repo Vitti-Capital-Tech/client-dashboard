@@ -3,6 +3,29 @@
 import React, { useEffect, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import {
+  Home,
+  Zap,
+  LineChart,
+  BarChart3,
+  MessageSquareMore,
+  TrendingUp,
+  Layers,
+  Star,
+  CreditCard,
+  Users,
+  Calculator,
+  AlertTriangle,
+  Bell,
+  GitMerge,
+  ClipboardCheck,
+  Clock,
+  ChevronDown,
+  LogOut,
+  MoreHorizontal,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
 import { signOut, setActiveAccount } from "@/app/actions/session";
@@ -44,7 +67,7 @@ interface NavItem {
   k: string;
   label: string;
   path: string;
-  icon: string;
+  icon: LucideIcon;
   tab: boolean;
   ai?: boolean;
   badge?: string;
@@ -178,31 +201,31 @@ export function PortalShell({
 
   const navItems: { client: NavItem[]; admin: NavItem[] } = {
     client: [
-      { k: "dashboard", label: "Home", path: "/portal/client", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
-      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true },
-      { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: "M4 19V5M4 19h16M8 15l3-4 3 2 4-6", tab: true },
-      { k: "insights", label: "Insights", path: "/portal/client/insights", icon: "M3 3v18h18M7 13l3 3 4-6 4 4", tab: true },
-      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: "M21 11.5a8.4 8.4 0 0 1-8.5 8.4 8.6 8.6 0 0 1-3.9-.9L3 20.5l1.5-5.4a8.4 8.4 0 1 1 16.5-3.6zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01", tab: true, ai: true },
-      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: "M3 3v18h18M7 14l3-4 3 3 5-7", tab: false },
-      { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: false },
-      { k: "options", label: "Options", path: "/portal/client/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: false },
-      { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: "m12 3 2.7 5.8 6.3.7-4.7 4.3 1.3 6.2L12 16.8 6.4 20l1.3-6.2L3 9.5l6.3-.7z", tab: false },
-      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: "M3 7h18v12H3zM3 10h18M7 15h4", tab: false }
+      { k: "dashboard", label: "Home", path: "/portal/client", icon: Home, tab: true },
+      { k: "invest", label: "Invest", path: "/portal/client/invest", icon: Zap, tab: true },
+      { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: LineChart, tab: true },
+      { k: "insights", label: "Insights", path: "/portal/client/insights", icon: BarChart3, tab: true },
+      { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: MessageSquareMore, tab: true, ai: true },
+      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: TrendingUp, tab: false },
+      { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: Zap, tab: false },
+      { k: "options", label: "Options", path: "/portal/client/options", icon: Layers, tab: false },
+      { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: Star, tab: false },
+      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: CreditCard, tab: false }
       // No "Alerts" entry: the bell in the top bar opens the same list, from
       // every page, with the same unread count on it. Two doors to one drawer
       // is one door too many, and the nav one was the slower of the two.
       // `/portal/client/alerts` still exists and still renders.
     ],
     admin: [
-      { k: "overview", label: "Overview", path: "/portal/staff", icon: "M3 10.5 12 3l9 7.5M5 9.5V21h14V9.5", tab: true },
-      { k: "clients", label: "Clients", path: "/portal/staff/clients", icon: "M16 7a4 4 0 1 0-8 0 4 4 0 0 0 8 0zM3 21c0-3.9 4-7 9-7s9 3.1 9 7", tab: true },
-      { k: "placements", label: "Placements", path: "/portal/staff/placements", icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z", tab: true, badge: "pendingAlloc" },
-      { k: "options", label: "Options", path: "/portal/staff/options", icon: "M3 5h18v14H3zM7 12h4M7 15h7M15 9h3", tab: true },
-      { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: "M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", tab: true },
-      { k: "mismatches", label: "Mismatched Qty", path: "/portal/staff/mismatches", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z", tab: true },
-      { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: "M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0", tab: false, badge: "alerts" },
-      { k: "merge", label: "Account requests", path: "/portal/staff/merge-requests", icon: "M7 3v6a5 5 0 0 0 5 5 5 5 0 0 1 5 5v2M7 3H4m3 0h3M17 21h3m-3 0h-3", tab: false, badge: "pendingMerge" },
-      { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: "M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11", tab: false }
+      { k: "overview", label: "Overview", path: "/portal/staff", icon: Home, tab: true },
+      { k: "clients", label: "Clients", path: "/portal/staff/clients", icon: Users, tab: true },
+      { k: "placements", label: "Placements", path: "/portal/staff/placements", icon: Zap, tab: true, badge: "pendingAlloc" },
+      { k: "options", label: "Options", path: "/portal/staff/options", icon: Layers, tab: true },
+      { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: Calculator, tab: true },
+      { k: "mismatches", label: "Mismatched Qty", path: "/portal/staff/mismatches", icon: AlertTriangle, tab: true },
+      { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: Bell, tab: false, badge: "alerts" },
+      { k: "merge", label: "Account requests", path: "/portal/staff/merge-requests", icon: GitMerge, tab: false, badge: "pendingMerge" },
+      { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: ClipboardCheck, tab: false }
     ]
   };
 
@@ -227,12 +250,13 @@ export function PortalShell({
   const alertIco = (a: AlertRow) => {
     const map: Record<string, string> = { expiry: "amber", itm: "green", window: "red", price: a.sev === "amber" ? "amber" : "green" };
     const col = a.sev === "red" ? "red" : (a.sev === "amber" ? "amber" : map[a.kind] || "green");
-    const path = {
-      expiry: "M12 8v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
-      itm: "M4 18l6-6 4 4 6-8M14 8h4v4",
-      window: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
-      price: "M3 17l6-6 4 4 8-8M21 7v6h-6"
-    }[a.kind] || "M12 8v5l3 2";
+
+    const Icon = {
+      expiry: Clock,
+      itm: TrendingUp,
+      window: AlertTriangle,
+      price: TrendingUp,
+    }[a.kind] || Clock;
 
     const colors: Record<string, string> = {
       red: "bg-loss-bg text-loss-d",
@@ -242,9 +266,7 @@ export function PortalShell({
 
     return (
       <div className={`w-8.5 h-8.5 rounded-[9px] flex-none flex items-center justify-center ${colors[col] || "bg-paper-2 text-mut"}`}>
-        <svg className="w-4.25 h-4.25 stroke-current stroke-[1.8] fill-none stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
-          <path d={path} />
-        </svg>
+        <Icon className="w-4.25 h-4.25 stroke-[1.8]" />
       </div>
     );
   };
@@ -267,9 +289,7 @@ export function PortalShell({
           const motion = soon ? "" : ICON_MOTION;
           const body = (
             <>
-              <svg className={`w-4.5 h-4.5 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round flex-none ${motion}`} viewBox="0 0 24 24">
-                <path d={it.icon} />
-              </svg>
+              <it.icon className={`w-4.5 h-4.5 stroke-[1.7] flex-none ${motion}`} />
               <span>{it.label}</span>
               {soon ? (
                 <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-white/10 text-mut-d px-1.5 py-0.5 rounded-[5px]">SOON</span>
@@ -352,16 +372,12 @@ export function PortalShell({
             className="hidden sm:inline-flex items-center gap-1.5 text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 px-3"
             title={activeAccount?.accountType}
           >
-            <svg className="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-              <path d="M3 7h18v12H3zM3 10h18M7 15h4" />
-            </svg>
+            <CreditCard className="w-3.5 h-3.5 stroke-[1.8]" />
             {activeAccount?.label}
           </span>
         ) : (
           <label className="relative inline-flex items-center" title="Switch account">
-            <svg className="w-3.5 h-3.5 stroke-current fill-none stroke-[1.8] text-mut absolute left-2.5 pointer-events-none" viewBox="0 0 24 24">
-              <path d="M3 7h18v12H3zM3 10h18M7 15h4" />
-            </svg>
+            <CreditCard className="w-3.5 h-3.5 stroke-[1.8] text-mut absolute left-2.5 pointer-events-none" />
             <select
               value={activeAccountId}
               onChange={(e) => handleAccountChange(e.target.value)}
@@ -375,9 +391,7 @@ export function PortalShell({
                 </option>
               ))}
             </select>
-            <svg className="w-3 h-3 stroke-current fill-none stroke-[2] text-mut absolute right-2.5 pointer-events-none" viewBox="0 0 24 24">
-              <path d="M6 9l6 6 6-6" />
-            </svg>
+            <ChevronDown className="w-3 h-3 stroke-[2] text-mut absolute right-2.5 pointer-events-none" />
           </label>
         )
       )}
@@ -388,10 +402,7 @@ export function PortalShell({
         className="relative flex p-1.5 rounded-[9px] hover:bg-white border border-transparent hover:border-line cursor-pointer text-ink transition-all"
         aria-label="Alerts"
       >
-        <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
-          <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-        </svg>
+        <Bell className="w-4.75 h-4.75 stroke-[1.7]" />
         {alertsCount > 0 && (
           <span className="absolute top-0.75 right-0.5 min-w-3.75 h-3.75 px-1 rounded-full bg-loss text-white text-[9px] font-bold flex items-center justify-center border-2 border-paper">
             {alertsCount}
@@ -458,9 +469,7 @@ export function PortalShell({
               }}
               className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
             >
-              <svg className="w-4 h-4 stroke-current fill-none stroke-[1.7] flex-none" viewBox="0 0 24 24">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-              </svg>
+              <LogOut className="w-4 h-4 stroke-[1.7] flex-none" />
               Sign out
             </button>
           </div>
@@ -486,12 +495,7 @@ export function PortalShell({
         aria-label="Sign out"
         title="Sign out"
       >
-        <svg
-          className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round"
-          viewBox="0 0 24 24"
-        >
-          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-        </svg>
+        <LogOut className="w-4.75 h-4.75 stroke-[1.7]" />
       </button>
     </header>
   );
@@ -514,9 +518,7 @@ export function PortalShell({
                 : `cursor-pointer ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`
             }`}
           >
-            <svg className={`w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round ${soon ? "" : ICON_MOTION}`} viewBox="0 0 24 24">
-              <path d={it.icon} />
-            </svg>
+            <it.icon className={`w-5 h-5 stroke-[1.8] ${soon ? "" : ICON_MOTION}`} />
             <span>{it.label}</span>
             {badgeVal !== null && (
               <span className="absolute -top-0.75 right-[50%] -mr-4 bg-loss text-white text-[8.5px] font-bold rounded-full px-1 min-w-3.5 text-center">
@@ -532,11 +534,7 @@ export function PortalShell({
         onClick={() => setIsMoreOpen(true)}
         className="flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold cursor-pointer text-mut hover:text-ink"
       >
-        <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
-          <circle cx="5" cy="12" r="1.6" />
-          <circle cx="12" cy="12" r="1.6" />
-          <circle cx="19" cy="12" r="1.6" />
-        </svg>
+        <MoreHorizontal className="w-5 h-5 stroke-[1.8]" />
         <span>More</span>
       </button>
     </nav>
@@ -556,9 +554,7 @@ export function PortalShell({
             onClick={() => setIsAlertsOpen(false)}
             className="p-1.5 rounded-[9px] hover:bg-white text-ink cursor-pointer"
           >
-            <svg className="w-4.75 h-4.75 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
-              <path d="M6 6l12 12M18 6 6 18" />
-            </svg>
+            <X className="w-4.75 h-4.75 stroke-[1.7]" />
           </button>
         </div>
         <div className="p-4.5 overflow-y-auto flex-1 space-y-2.5">
@@ -617,9 +613,7 @@ export function PortalShell({
           <div className="flex justify-between items-center mb-4">
             <h3 className="font-disp font-medium text-[22px]">More</h3>
             <button onClick={() => setIsMoreOpen(false)} className="text-mut hover:text-ink cursor-pointer">
-              <svg className="w-6 h-6 stroke-current fill-none stroke-[1.7]" viewBox="0 0 24 24">
-                <path d="M6 6l12 12M18 6 6 18" />
-              </svg>
+              <X className="w-6 h-6 stroke-[1.7]" />
             </button>
           </div>
           <div className="space-y-1">
@@ -641,9 +635,7 @@ export function PortalShell({
                       : `hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`
                   }`}
                 >
-                  <svg className={`w-4.75 h-4.75 stroke-current fill-none stroke-[1.7] stroke-linecap-round stroke-linejoin-round ${soon ? "" : ICON_MOTION}`} viewBox="0 0 24 24">
-                    <path d={it.icon} />
-                  </svg>
+                  <it.icon className={`w-4.75 h-4.75 stroke-[1.7] flex-none ${soon ? "" : ICON_MOTION}`} />
                   <span>{it.label}</span>
                   {soon && (
                     <span className="ml-auto text-[9px] font-bold tracking-wider bg-paper-2 text-mut px-1.5 py-0.5 rounded-[5px]">SOON</span>
@@ -698,17 +690,10 @@ export function PortalShell({
       >
         <div className="flex items-start gap-3.5">
           <span className="shrink-0 w-9 h-9 rounded-full bg-loss-bg grid place-items-center">
-            <svg
-              className="w-4.5 h-4.5 stroke-loss-d fill-none stroke-[1.8]"
-              viewBox="0 0 24 24"
+            <LogOut
+              className="w-4.5 h-4.5 stroke-loss-d stroke-[1.8]"
               aria-hidden="true"
-            >
-              <path
-                d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+            />
           </span>
           <div className="min-w-0">
             <h3 id="signout-title" className="font-disp font-medium text-[20px] leading-snug">

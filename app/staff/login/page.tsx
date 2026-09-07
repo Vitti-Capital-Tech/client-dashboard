@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Shield, Mail } from "lucide-react";
 import { requestLoginCode, verifyLoginCode } from "@/app/actions/session";
 import {
   AuthShell,
@@ -126,13 +127,7 @@ export default function StaffLoginPage() {
         <form onSubmit={handleEmailSubmit} className="space-y-5" noValidate>
           <div>
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-navy px-3 py-1.5 rounded-full">
-              <svg
-                className="w-3.5 h-3.5 fill-none stroke-current stroke-2"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path d="M12 3l7.5 3.75v5.25c0 4.5-3 7.5-7.5 9-4.5-1.5-7.5-4.5-7.5-9V6.75L12 3z" />
-              </svg>
+              <Shield className="w-3.5 h-3.5 stroke-2" aria-hidden="true" />
               Desk console
             </span>
           </div>
@@ -208,14 +203,7 @@ export default function StaffLoginPage() {
       ) : (
         <div className="space-y-5">
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-green-d bg-green-bg px-3 py-1.5 rounded-full">
-            <svg
-              className="w-3.5 h-3.5 fill-none stroke-current stroke-2"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <rect x="3" y="5" width="18" height="14" rx="2" />
-              <path d="M3.5 7l8.5 6 8.5-6" />
-            </svg>
+            <Mail className="w-3.5 h-3.5 stroke-2" aria-hidden="true" />
             One-time code
           </span>
 

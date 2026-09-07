@@ -2,6 +2,26 @@
 
 import React, { useState, useTransition, useRef, useEffect } from "react";
 import {
+  Wrench,
+  Download,
+  Upload,
+  Loader2,
+  Calculator,
+  AlertCircle,
+  Plus,
+  CheckCircle2,
+  X,
+  FileText,
+  User,
+  Calendar,
+  Search,
+  RefreshCw,
+  RotateCcw,
+  Check,
+  Info,
+  Pencil,
+} from "lucide-react";
+import {
   exportPnlXlsxAction,
   exportPnlCsvAction,
   fetchPlacementTrackerUrlAction,
@@ -1366,9 +1386,7 @@ export function PnlCalculatorClient() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-navy/5 text-navy text-xs font-semibold uppercase tracking-wider mb-2">
-              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z" />
-              </svg>
+              <Wrench className="w-3.5 h-3.5" />
               Admin Tool
             </div>
             <h1 className="text-2.5xl font-disp font-bold text-navy tracking-tight">
@@ -1382,9 +1400,7 @@ export function PnlCalculatorClient() {
             onClick={handleDownloadSample}
             className="inline-flex items-center gap-2 text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-4 py-2.5 rounded-xl transition-all shadow-2xs"
           >
-            <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
+            <Download className="w-4 h-4 text-mut" />
             Download Sample Template
           </button>
         </div>
@@ -1415,9 +1431,7 @@ export function PnlCalculatorClient() {
             />
 
             <div className="w-14 h-14 rounded-2xl bg-paper-1 border border-paper-border flex items-center justify-center mx-auto mb-4 shadow-2xs text-navy">
-              <svg className="w-7 h-7 stroke-[1.7]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 0115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
+              <Upload className="w-7 h-7 stroke-[1.7]" />
             </div>
 
             {file ? (
@@ -1434,19 +1448,19 @@ export function PnlCalculatorClient() {
                   }}
                   className="text-xs font-semibold text-loss hover:underline pt-1 inline-block"
                 >
-                  Remove & pick another file
+                  Remove File
                 </button>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <p className="font-semibold text-navy text-base">
-                  Drag and drop your trade ledger file here
+                  Choose a trade history spreadsheet or drag &amp; drop
                 </p>
                 <p className="text-xs text-mut">
-                  Supports <span className="font-medium text-navy">.xlsx</span>, <span className="font-medium text-navy">.xls</span>, or <span className="font-medium text-navy">.csv</span> contract note exports
+                  Supports modern and legacy Excel formats (.xlsx, .xls) and CSV (.csv)
                 </p>
-                <p className="text-2xs text-mut/80 pt-2">
-                  (Columns expected: Security, Type, Units, Avg Price / Value, CNote, Status)
+                <p className="text-3xs text-mut/80 pt-2 font-mono">
+                  Expects standard ledger headers: Reference, Date, Side, Ticker, Security, Units, Price, Net
                 </p>
               </div>
             )}
@@ -1462,17 +1476,12 @@ export function PnlCalculatorClient() {
               >
                 {isProcessing ? (
                   <>
-                    <svg className="animate-spin w-4 h-4 text-white" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
+                    <Loader2 className="animate-spin w-4 h-4 text-white" />
                     Parsing File...
                   </>
                 ) : (
                   <>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 7h6m-6 4h6m-6 4h4M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
-                    </svg>
+                    <Calculator className="w-4 h-4" />
                     Calculate PNL Summary
                   </>
                 )}
@@ -1485,9 +1494,7 @@ export function PnlCalculatorClient() {
       {/* Parsing Errors Banner */}
       {result && result.errors.length > 0 && (
         <div className="bg-loss-bg/30 border border-loss/20 rounded-2xl p-5 text-sm text-loss flex items-start gap-3">
-          <svg className="w-5 h-5 flex-none mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <AlertCircle className="w-5 h-5 flex-none mt-0.5" />
           <div>
             <p className="font-semibold">Processing Issue</p>
             <ul className="list-disc list-inside mt-1 space-y-1 text-xs">
@@ -1507,15 +1514,7 @@ export function PnlCalculatorClient() {
         <div className="bg-card border border-line rounded-2xl p-10 sm:p-14 shadow-shadow flex flex-col items-center text-center gap-4">
           <span className="relative flex h-12 w-12">
             <span className="absolute inline-flex h-full w-full rounded-full bg-navy/20 animate-ping" />
-            <svg className="relative h-12 w-12 animate-spin text-navy" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
-              <path
-                d="M22 12a10 10 0 0 1-10 10"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeLinecap="round"
-              />
-            </svg>
+            <Loader2 className="relative h-12 w-12 animate-spin text-navy" />
           </span>
 
           <div className="space-y-1.5">
@@ -1624,9 +1623,7 @@ export function PnlCalculatorClient() {
                   disabled={isMergingPlacementFile}
                   className="text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3.5 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
                 >
-                  <svg className="w-3.5 h-3.5 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
-                  </svg>
+                  <Plus className="w-3.5 h-3.5 text-mut" />
                   {isMergingPlacementFile ? "Merging Files..." : "Upload Placement (.xlsx)"}
                 </button>
               </div>
@@ -1643,9 +1640,7 @@ export function PnlCalculatorClient() {
                     key={pFile.id}
                     className="inline-flex items-center gap-1.5 bg-paper-2 border border-paper-border px-2.5 py-1 rounded-lg text-xs text-navy shadow-2xs"
                   >
-                    <svg className="w-3.5 h-3.5 text-green-d flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0" />
-                    </svg>
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-d flex-shrink-0" />
                     <span className="font-semibold text-2xs max-w-[170px] truncate" title={pFile.name}>
                       {pFile.name}
                     </span>
@@ -1656,9 +1651,7 @@ export function PnlCalculatorClient() {
                       className="text-mut hover:text-loss p-0.5 rounded transition-colors cursor-pointer ml-0.5"
                       title={`Remove ${pFile.name}`}
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ))}
@@ -1729,10 +1722,7 @@ export function PnlCalculatorClient() {
               >
                 {isFetchingUrl ? (
                   <>
-                    <svg className="animate-spin w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                    </svg>
+                    <Loader2 className="animate-spin w-3.5 h-3.5 text-white" />
                     Fetching & Merging...
                   </>
                 ) : (
@@ -1771,9 +1761,7 @@ export function PnlCalculatorClient() {
             {tradeFiles.length > 0 && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
                 <div className="flex items-center gap-2 text-xs font-semibold text-navy">
-                  <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
+                  <FileText className="w-4 h-4 text-emerald-600" />
                   <span>Active Trade File:</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -1809,9 +1797,7 @@ export function PnlCalculatorClient() {
             {result?.accounts && result.accounts.length > 0 && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
                 <div className="flex items-center gap-2 text-xs font-semibold text-navy">
-                  <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                  </svg>
+                  <User className="w-4 h-4 text-mut" />
                   <span>Client Account (external_ref):</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -1849,9 +1835,7 @@ export function PnlCalculatorClient() {
             {result && (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
                 <div className="flex items-center gap-2 text-xs font-semibold text-navy">
-                  <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
+                  <Calendar className="w-4 h-4 text-mut" />
                   <span>Reporting Period (Contract Date):</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -1966,9 +1950,7 @@ export function PnlCalculatorClient() {
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               {/* Search Bar */}
               <div className="relative flex-1 max-w-md">
-                <svg className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
+                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-mut" />
                 <input
                   type="text"
                   placeholder="Search ticker or company..."
@@ -1981,9 +1963,7 @@ export function PnlCalculatorClient() {
                     onClick={() => setSearchQuery("")}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-navy p-0.5"
                   >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -1996,9 +1976,7 @@ export function PnlCalculatorClient() {
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                   title="Auto-fill Qty & Market Value from Database Portfolio Holdings for open positions"
                 >
-                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
+                  <RefreshCw className="w-4 h-4 text-indigo-600" />
                   {isSyncingDb ? "Syncing DB..." : "Sync DB Market Value"}
                 </button>
 
@@ -2012,9 +1990,7 @@ export function PnlCalculatorClient() {
                     "Exporting..."
                   ) : (
                     <>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
+                      <Download className="w-4 h-4" />
                       Excel (.xlsx)
                     </>
                   )}
@@ -2030,9 +2006,7 @@ export function PnlCalculatorClient() {
                     "Exporting..."
                   ) : (
                     <>
-                      <svg className="w-4 h-4 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                      </svg>
+                      <Download className="w-4 h-4 text-mut" />
                       CSV (.csv)
                     </>
                   )}
@@ -2043,9 +2017,7 @@ export function PnlCalculatorClient() {
                   className="inline-flex items-center gap-1.5 text-xs font-semibold text-mut hover:text-loss border border-paper-border hover:border-loss/30 px-3 py-2 rounded-xl transition-all cursor-pointer"
                   title="Reset & upload new trade ledger file"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
+                  <RotateCcw className="w-4 h-4" />
                   New
                 </button>
               </div>
@@ -2160,18 +2132,14 @@ export function PnlCalculatorClient() {
                                   className="p-1.5 rounded-lg bg-green text-white hover:bg-green-h transition-all cursor-pointer shadow-2xs"
                                   title="Save Changes"
                                 >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
-                                  </svg>
+                                  <Check className="w-4 h-4 stroke-[2.5]" />
                                 </button>
                                 <button
                                   onClick={handleCancelEdit}
                                   className="p-1.5 rounded-lg bg-paper-2 text-mut hover:text-navy border border-paper-border transition-all cursor-pointer"
                                   title="Cancel Edit"
                                 >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
+                                  <X className="w-4 h-4" />
                                 </button>
                               </div>
                             </td>
@@ -2223,9 +2191,7 @@ export function PnlCalculatorClient() {
                                   }}
                                   onBlur={() => setUnlistedTip(null)}
                                 >
-                                  <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 16v-5m0-4h.01" />
-                                  </svg>
+                                  <Info className="w-2.5 h-2.5 stroke-[3]" />
                                 </button>
                               )}
                               {item.isEnriched && (
@@ -2356,9 +2322,7 @@ export function PnlCalculatorClient() {
                               className="inline-flex items-center gap-1 text-xs font-semibold text-mut hover:text-navy px-2.5 py-1 rounded-lg border border-paper-border hover:bg-paper-2 transition-all cursor-pointer"
                               title="Edit position values manually"
                             >
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                              </svg>
+                              <Pencil className="w-3.5 h-3.5" />
                               Edit
                             </button>
                           </td>

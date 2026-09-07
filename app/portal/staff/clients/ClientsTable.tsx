@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { Search, X } from "lucide-react";
 import { setViewClient } from "@/app/actions/session";
 import { TablePagination } from "@/app/components/TablePagination";
 
@@ -59,19 +60,7 @@ export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
       {/* Search */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 px-4.5 py-3 border-b border-line">
         <div className="relative flex-1 max-w-md min-w-[200px]">
-          <svg
-            className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
           <input
             // `text`, not `search`: WebKit draws its own clear button inside a
             // search input, which would sit beside the one below it. Escape is
@@ -90,9 +79,7 @@ export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
               aria-label="Clear search"
               className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
             >
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
+              <X className="w-3 h-3" />
             </button>
           )}
         </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { fieldClass } from "./AuthShell";
 
 /**
@@ -82,47 +83,15 @@ export function PasswordInput({
           title={visible ? "Hide password" : "Show password"}
           className="absolute right-1 top-1/2 -translate-y-1/2 p-2 rounded-[8px] text-mut hover:text-ink hover:bg-paper-2 focus:outline-none focus:text-ink cursor-pointer transition-colors"
         >
-          {visible ? <EyeOff /> : <Eye />}
+          {visible ? (
+            <EyeOff className="w-4.5 h-4.5 stroke-[1.7]" aria-hidden="true" />
+          ) : (
+            <Eye className="w-4.5 h-4.5 stroke-[1.7]" aria-hidden="true" />
+          )}
         </button>
       </div>
 
       {hint && <p className="text-[11.5px] text-mut">{hint}</p>}
     </div>
-  );
-}
-
-function Eye() {
-  return (
-    <svg
-      className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7]"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <path
-        d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx="12" cy="12" r="3.1" />
-    </svg>
-  );
-}
-
-/** The same eye with a stroke through it, so the two read as one control. */
-function EyeOff() {
-  return (
-    <svg
-      className="w-4.5 h-4.5 stroke-current fill-none stroke-[1.7]"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
-      <path
-        d="M10.7 6.2A8.9 8.9 0 0 1 12 6.1c6 0 9.5 6 9.5 6a17 17 0 0 1-2.9 3.5M6.4 7.9A17 17 0 0 0 2.5 12s3.5 6 9.5 6a9.4 9.4 0 0 0 3.7-.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path d="M9.9 9.9a3.1 3.1 0 0 0 4.3 4.3" strokeLinecap="round" />
-      <path d="M3.5 3.5l17 17" strokeLinecap="round" />
-    </svg>
   );
 }

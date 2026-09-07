@@ -2,6 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { Search, X } from "lucide-react";
 import type {
   ClientRow,
   AccountRow,
@@ -992,19 +993,7 @@ export function ClientDetailClient({
               {/* Search & Quick Controls Row */}
               <div className="flex items-center justify-between gap-3 pt-0.5">
                 <div className="relative flex-1 max-w-sm">
-                  <svg
-                    className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                    />
-                  </svg>
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
                   <input
                     type="text"
                     placeholder="Search ticker or company..."
@@ -1025,9 +1014,7 @@ export function ClientDetailClient({
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
                       title="Clear search"
                     >
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
+                      <X className="w-3 h-3" />
                     </button>
                   )}
                 </div>
@@ -1046,9 +1033,7 @@ export function ClientDetailClient({
                       }}
                       className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
                     >
-                      <svg className="w-3 h-3 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
+                      <X className="w-3 h-3 text-mut" />
                       Reset Filter
                     </button>
                   </div>
@@ -1202,19 +1187,7 @@ export function ClientDetailClient({
             {/* Search & Quick Controls Row */}
             <div className="flex items-center justify-between gap-3 pt-0.5">
               <div className="relative flex-1 max-w-sm">
-                <svg
-                  className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                  />
-                </svg>
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
                 <input
                   type="text"
                   placeholder="Search series, company, terms..."
@@ -1235,9 +1208,7 @@ export function ClientDetailClient({
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
                     title="Clear search"
                   >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    <X className="w-3 h-3" />
                   </button>
                 )}
               </div>
@@ -1256,9 +1227,7 @@ export function ClientDetailClient({
                     }}
                     className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
                   >
-                    <svg className="w-3 h-3 text-mut" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
+                    <X className="w-3 h-3 text-mut" />
                     Reset Filter
                   </button>
                 </div>

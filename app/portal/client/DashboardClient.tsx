@@ -2,6 +2,15 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import {
+  DollarSign,
+  AlertTriangle,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+  Clock,
+  type LucideIcon,
+} from "lucide-react";
 import type {
   Position,
   OptionRow,
@@ -140,13 +149,19 @@ export function DashboardClient({
 
   // Build personalized suggestions based on portfolio state
   const getSuggestions = () => {
-    const list = [];
+    const list: {
+      tone: string;
+      icon: LucideIcon;
+      title: string;
+      sub: string;
+      path: string;
+    }[] = [];
 
     // 1. Idle Cash
     if (cash >= 20000) {
       list.push({
         tone: "green",
-        icon: "M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6",
+        icon: DollarSign,
         title: `Put $${cash.toLocaleString("en-AU")} cash to work`,
         sub: "Build a plan across timeframes",
         path: "/portal/client/invest"
@@ -158,7 +173,7 @@ export function DashboardClient({
     if (urgentOpt) {
       list.push({
         tone: "red",
-        icon: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+        icon: AlertTriangle,
         title: `Act on ${urgentOpt.code} — ${urgentOpt.dte}d left`,
         sub: "Unlisted, in the money, window closing",
         path: "/portal/client/options"
@@ -174,7 +189,7 @@ export function DashboardClient({
       const sig = signals[trimHolding.code];
       list.push({
         tone: "amber",
-        icon: "M4 19V5M4 19h16M8 11l3 3 4-6",
+        icon: TrendingDown,
         title: `${sig.action} ${trimHolding.code}`,
         sub: sig.headline,
         path: "/portal/client/positions"
@@ -185,7 +200,7 @@ export function DashboardClient({
     if (list.length < 3) {
       list.push({
         tone: "green",
-        icon: "M13 2 4.5 13.5H11L9.5 22 19 10h-6.5z",
+        icon: Zap,
         title: "See this week's idea",
         sub: "Curated, with target and timeframe",
         path: "/portal/client/invest"
@@ -208,18 +223,16 @@ export function DashboardClient({
 
   const getAlertIco = (kind: string, sev: string) => {
     const col = sev === "red" ? "text-loss-d bg-loss-bg" : (sev === "amber" ? "text-amber-d bg-amber-bg" : "text-green-d bg-green-bg");
-    const path = {
-      expiry: "M12 8v5l3 2M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z",
-      itm: "M4 18l6-6 4 4 6-8M14 8h4v4",
-      window: "M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
-      price: "M3 17l6-6 4 4 8-8M21 7v6h-6"
-    }[kind] || "M12 8v5l3 2";
+    const Icon = {
+      expiry: Clock,
+      itm: TrendingUp,
+      window: AlertTriangle,
+      price: TrendingUp,
+    }[kind] || Clock;
 
     return (
       <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-none ${col}`}>
-        <svg className="w-4 h-4 stroke-current fill-none stroke-[1.8]" viewBox="0 0 24 24">
-          <path d={path} />
-        </svg>
+        <Icon className="w-4 h-4 stroke-[1.8]" />
       </div>
     );
   };
@@ -287,9 +300,7 @@ export function DashboardClient({
                 className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow flex items-center gap-3.5 hover:-translate-y-0.5 transition-transform cursor-pointer select-none"
               >
                 <div className={`w-9.5 h-9.5 rounded-[10px] flex-none flex items-center justify-center ${getSuggIconColor(s.tone)}`}>
-                  <svg className="w-5 h-5 stroke-current fill-none stroke-[1.8] stroke-linecap-round stroke-linejoin-round" viewBox="0 0 24 24">
-                    <path d={s.icon} />
-                  </svg>
+                  <s.icon className="w-5 h-5 stroke-[1.8]" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-[13px] text-ink leading-tight truncate">{s.title}</div>
