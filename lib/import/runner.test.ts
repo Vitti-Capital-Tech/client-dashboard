@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { detectCsvKind, ImportError } from "./runner.ts";
+import { detectCsvKind, ImportError, ownerIdByExternalRef } from "./runner.ts";
 import { runHoldingsImport } from "./run-holdings.ts";
 import { runTradeImport } from "./run-trades.ts";
 import { fakeDb } from "../test-support/fake-db.ts";
@@ -348,4 +348,113 @@ test("trades: the ledger replay reads past PostgREST's 1000-row cap", async () =
   assert.equal(rollup.costOfSold, 1200);
   assert.equal(rollup.realizedPl, 1800, "3000 proceeds − 1200 cost");
   assert.equal(rollup.shortHistory, false, "a full cost basis was found");
+});
+
+// ---------------------------------------------------------------------------
+// ownerIdByExternalRef — who owns an account for a broker entity ref
+// ---------------------------------------------------------------------------
+/**
+ * The importer used to read the client row carrying the ref and stop there.
+ * After an approved claim that row is an emptied stub (`clients.merged_into`),
+ * so a NEW account arriving for that entity was created under a client
+ * `getClients()` filters out of the register for owning nothing — invisible in
+ * the client's own switcher and to the desk.
+ */
+
+test("owner: an unmerged entity is owned by the row carrying its ref", async () => {
+  const { db } = fakeDb({
+    clients: [{ id: "c1", external_ref: "114716", merged_into: null }],
+  });
+
+  const owners = await ownerIdByExternalRef(db, ["114716"]);
+  assert.equal(owners.get("114716"), "c1");
+});
+
+test("owner: a merged-away stub resolves to the login that absorbed it", async () => {
+  const { db } = fakeDb({
+    clients: [
+      // The broker-created stub. It KEEPS its external_ref on purpose — the ref
+      // is UNIQUE and the importer re-creates any ref it cannot find, so
+      // deleting the stub would bring it back as an empty client every morning.
+      { id: "stub", external_ref: "114716", email: null, merged_into: "login" },
+      // The self-registered client who claimed it. No external_ref at all: the
+      // broker ref is unknown at sign-up and only becomes known on approval.
+      { id: "login", external_ref: null, email: "punam@example.com", merged_into: null },
+    ],
+  });
+
+  const owners = await ownerIdByExternalRef(db, ["114716"]);
+  assert.equal(owners.get("114716"), "login");
+});
+
+test("owner: a chain of merges resolves to the end of it", async () => {
+  // A claim onto an already-merged row is refused, so a chain cannot be built in
+  // one step — but it forms over time: A merges into B, then B's own last
+  // account is later claimed by C. Following one hop would stop at B, which is
+  // hidden and owns nothing: the same bug one level down.
+  const { db } = fakeDb({
+    clients: [
+      { id: "a", external_ref: "114716", merged_into: "b" },
+      { id: "b", external_ref: "220001", merged_into: "c" },
+      { id: "c", external_ref: null, email: "end@example.com", merged_into: null },
+    ],
+  });
+
+  const owners = await ownerIdByExternalRef(db, ["114716"]);
+  assert.equal(owners.get("114716"), "c");
+});
+
+test("owner: a cycle terminates instead of hanging", async () => {
+  // Should be unreachable: a row must be emptied to be marked, and claiming onto
+  // a marked row is refused. But this runs unattended at 9am, and "should be
+  // unreachable" is a poor reason for an importer to spin.
+  const { db } = fakeDb({
+    clients: [
+      { id: "x", external_ref: "114716", merged_into: "y" },
+      { id: "y", external_ref: "220001", merged_into: "x" },
+    ],
+  });
+
+  const owners = await ownerIdByExternalRef(db, ["114716"]);
+  // Whichever end it stops on, it must be a real row and it must return.
+  assert.ok(["x", "y"].includes(owners.get("114716")!));
+});
+
+test("owner: refs with no client row are simply absent", async () => {
+  const { db } = fakeDb({ clients: [] });
+  const owners = await ownerIdByExternalRef(db, ["999999"]);
+  assert.equal(owners.get("999999"), undefined);
+  assert.equal(owners.size, 0);
+});
+
+test("holdings: a new account for a claimed entity lands on the login, not the stub", async () => {
+  // The bug this fix exists for, end to end. Account 114716 was claimed by
+  // `login`, emptying the stub. The broker snapshot then introduces 114717 for
+  // the same entity ref... which it cannot, because a ref maps to one account.
+  //
+  // So the case is the one that actually happens: the snapshot still carries
+  // 114716, the account row for it was deleted or never created under the login,
+  // and the importer has to create it. It must pick the login as owner.
+  const { db, tables } = fakeDb({
+    clients: [
+      { id: "stub", external_ref: "114716", email: null, merged_into: "login" },
+      { id: "login", external_ref: null, email: "punam@example.com", merged_into: null },
+    ],
+  });
+
+  const csv = [
+    "Account Number,Account Name,Security Code,Company Name,Holding Qty,Market Price,Average Cost,Market Value,Portfolio Value,Status,Advisor Code,Advisor Name",
+    "114716,BHALRA PUNAM,EOS,ELECTRO OPTIC,1000,8.00,5.00,8000,5000,ACTIVE,VIZ,Vitti",
+    "",
+  ].join("\n");
+
+  await runHoldingsImport(db, csv);
+
+  const created = tables.accounts.find((a) => a.external_ref === "114716");
+  assert.ok(created, "the account should have been created");
+  assert.equal(
+    created!.client_id,
+    "login",
+    "a new account must be owned by the login that absorbed the entity, not the emptied stub",
+  );
 });

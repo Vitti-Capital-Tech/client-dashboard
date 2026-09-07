@@ -175,3 +175,96 @@ export function detectCsvKind(text: string): CsvKind {
   if (hasAll(CONTRACT_NOTES_LISTING_HEADERS)) return "trades";
   return "unknown";
 }
+
+/**
+ * Broker entity ref → the `clients.id` that should OWN an account for it.
+ *
+ * Not simply the row carrying the ref. When an account claim is approved
+ * (`approve_account_claim`, 20260904090000) the broker-created client row is
+ * left behind marked `merged_into`, and the real owner is a different row — the
+ * one holding the login. The stub keeps its `external_ref` on purpose: the ref
+ * is UNIQUE and this importer re-creates any ref it does not find, so deleting
+ * the stub would bring it back as a fresh empty client every morning.
+ *
+ * That is exactly why looking the ref up and stopping there is wrong. It was:
+ * a new account arriving for an entity whose accounts had all been claimed got
+ * created under the stub — a row `getClients()` filters out of the register for
+ * owning nothing. The account existed, the client could not see it in their
+ * switcher, and the desk could not see it either, because its owner was hidden.
+ * `clients.merged_into` says "this entity is now part of that one" and this was
+ * the one place that did not read it.
+ *
+ * ── Why the pointer is followed as a CHAIN ──────────────────────────────────
+ * `approve_account_claim` refuses to claim *onto* a merged-away row, so a chain
+ * cannot be built in one step. It can still form over time: A merges into B, and
+ * later B's own last account is claimed by C. Following one hop would then land
+ * on B — hidden, owning nothing, the same bug one level down.
+ *
+ * The loop is bounded and cycle-guarded rather than trusting the data to be a
+ * tree. A cycle should be impossible (a row must be emptied to be marked, and a
+ * claim onto a marked row is refused), but "should be impossible" is a poor
+ * reason for an importer that runs unattended at 9am to hang. On hitting the cap
+ * or a cycle it keeps the last row it resolved, which is the most correct answer
+ * available and never worse than not following the pointer at all.
+ */
+export async function ownerIdByExternalRef(
+  db: AdminDb,
+  refs: string[],
+): Promise<Map<string, string>> {
+  type Row = { id: string; external_ref: string | null; merged_into: string | null };
+
+  if (refs.length === 0) return new Map();
+
+  const { data, error } = await db
+    .from("clients")
+    .select("id, external_ref, merged_into")
+    .in("external_ref", refs);
+  if (error) throw new Error(`resolve client owners: ${error.message}`);
+
+  const rows = (data ?? []) as unknown as Row[];
+
+  // Every row reachable by following the pointers, keyed by id. Seeded with what
+  // the refs matched; targets are fetched in batches below.
+  const byId = new Map<string, Row>(rows.map((r) => [r.id, r]));
+
+  const MAX_HOPS = 8;
+  for (let hop = 0; hop < MAX_HOPS; hop++) {
+    const wanted = [
+      ...new Set(
+        [...byId.values()]
+          .map((r) => r.merged_into)
+          .filter((id): id is string => !!id && !byId.has(id)),
+      ),
+    ];
+    if (wanted.length === 0) break;
+
+    const { data: more, error: moreError } = await db
+      .from("clients")
+      .select("id, external_ref, merged_into")
+      .in("id", wanted);
+    if (moreError) throw new Error(`resolve client owners: ${moreError.message}`);
+
+    for (const r of (more ?? []) as unknown as Row[]) byId.set(r.id, r);
+  }
+
+  const owners = new Map<string, string>();
+  for (const start of rows) {
+    let current = start;
+    const seen = new Set<string>([current.id]);
+
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const next = current.merged_into;
+      if (!next) break;
+      const target = byId.get(next);
+      // Unfetched (ran out of hops above) or already visited (a cycle) — stop on
+      // the last row known to be real rather than following a pointer nowhere.
+      if (!target || seen.has(target.id)) break;
+      seen.add(target.id);
+      current = target;
+    }
+
+    if (start.external_ref) owners.set(start.external_ref, current.id);
+  }
+
+  return owners;
+}

@@ -24,6 +24,7 @@ import type { RowError } from "./trades.ts";
 import {
   ImportError,
   upsertChunked,
+  ownerIdByExternalRef,
   type AccountRefRow,
   type AdminDb,
 } from "./runner.ts";
@@ -169,18 +170,12 @@ export async function runHoldingsImport(
 
   const accountRefs = accounts.map((a) => a.externalRef);
 
-  const { data: clientRows, error: clientErr } = await db
-    .from("clients")
-    .select("id, external_ref")
-    .in("external_ref", accountRefs);
-  if (clientErr) throw clientErr;
-
-  const clientIdByRef = new Map(
-    ((clientRows ?? []) as unknown as { id: string; external_ref: string }[]).map((c) => [
-      c.external_ref,
-      c.id,
-    ]),
-  );
+  // Through `ownerIdByExternalRef`, which follows `clients.merged_into`, rather
+  // than the row the ref sits on. The upsert above keeps that row's name in step
+  // with the broker; who OWNS an account for the entity is a different question
+  // once a claim has moved its accounts to a login. See the helper for what
+  // reading the ref alone used to cost.
+  const clientIdByRef = await ownerIdByExternalRef(db, accountRefs);
 
   // ── Who owns an account is NOT the importer's to decide, after the first time
   //
