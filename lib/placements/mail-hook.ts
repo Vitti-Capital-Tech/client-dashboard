@@ -1,3 +1,4 @@
+import { publicOrigin } from "../app-origin.ts";
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { GraphCall } from "./tracker-writer.ts";
 
@@ -109,13 +110,10 @@ export function clientStateMatches(received: string | null | undefined): boolean
 }
 
 /** The app's own public origin — Graph has to be able to reach it. */
-export function publicOrigin(): string | null {
-  const explicit = process.env.APP_URL?.trim();
-  if (explicit) return explicit.replace(/\/+$/, "");
-  // Vercel sets this on every deployment, so the common case needs no config.
-  const vercel = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
-  return vercel ? `https://${vercel.replace(/\/+$/, "")}` : null;
-}
+// Moved to lib/app-origin.ts when the email-change confirmation needed the same
+// answer. Imported as well as re-exported: a bare `export … from` creates no
+// local binding, and `notificationUrl` below calls it.
+export { publicOrigin };
 
 export function notificationUrl(): string | null {
   const origin = publicOrigin();

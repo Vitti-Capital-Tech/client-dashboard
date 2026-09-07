@@ -37,10 +37,24 @@
   Available here: {{ .Email }} (the current address), {{ .NewEmail }},
   {{ .TokenHash }}, {{ .Token }}, {{ .SiteURL }}.
 
+  ── {{ .RedirectTo }}, and NOT {{ .SiteURL }} ───────────────────────────────
+  `{{ .SiteURL }}` is ONE project-level setting, and this project serves local
+  development and production from the same Supabase instance. A template built on
+  it therefore mails every client a link to whichever environment was configured
+  last — which is not hypothetical: it mailed `localhost:3000`.
+
+  `{{ .RedirectTo }}` is the `emailRedirectTo` the app passes per request,
+  resolved by `authConfirmUrl()` from APP_URL or Vercel's own production URL. The
+  running deployment names itself, so there is nothing to keep in step by hand.
+
   ── Requires, in the dashboard ──────────────────────────────────────────────
-  Authentication → URL Configuration → Site URL set to the app's own origin, and
-  the same origin in Redirect URLs. `{{ .SiteURL }}` below is that value; if it
-  still points at localhost, every client gets a link to their own machine.
+  Authentication → URL Configuration → **Redirect URLs** must contain
+  `https://<your-host>/auth/confirm` (a wildcard such as
+  `https://<your-host>/**` also works). GoTrue silently falls back to the Site
+  URL for any redirect not on that list — so a missing entry looks exactly like
+  the app not passing one, and you get a localhost link again. Set Site URL to
+  the production origin too; it is the fallback and several other auth flows use
+  it.
 
   ── Why the markup looks like 2005 ──────────────────────────────────────────
   Same reasons as magic-link.html: tables, inline styles, no images, no web
@@ -102,7 +116,7 @@
               <tr>
                 <td align="center" style="background-color:#1d202f;border-radius:10px">
                   <a
-                    href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email_change"
+                    href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email_change"
                     style="display:block;padding:14px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none"
                   >
                     Confirm this change

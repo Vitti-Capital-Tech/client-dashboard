@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { passwordProblem, confirmationProblem } from "@/lib/auth/password";
 import { VIEW_COOKIE, ACCOUNT_COOKIE } from "@/lib/session";
+import { authConfirmUrl } from "@/lib/app-origin";
 
 /**
  * What a client can change about their own login: the password, the address, and
@@ -146,7 +147,31 @@ export async function startEmailChange(newEmail: string): Promise<ActionResult> 
     };
   }
 
-  const { error } = await supabase.auth.updateUser({ email: address });
+  // ── The link has to come back HERE, not to whatever Site URL says ───────
+  // `{{ .SiteURL }}` is one project-level value and this project serves local
+  // development and production from the same Supabase instance, so a template
+  // built on it mails every client a link to whichever environment was
+  // configured last. It mailed `localhost:3000`. Passing the origin per request
+  // moves the decision to the deployment that is actually running.
+  //
+  // Refused rather than sent without it: a confirmation email whose link points
+  // at a host we guessed is worse than no email, because the client clicks it
+  // and nothing happens — with no error to tell them why.
+  const redirectTo = authConfirmUrl();
+  if (!redirectTo) {
+    console.error(
+      "settings: refusing an email change — neither APP_URL nor VERCEL_PROJECT_PRODUCTION_URL is set, so the confirmation link would have no host",
+    );
+    return {
+      ok: false,
+      error: "Changing your email is unavailable just now. Please contact the Vitti desk.",
+    };
+  }
+
+  const { error } = await supabase.auth.updateUser(
+    { email: address },
+    { emailRedirectTo: redirectTo },
+  );
   if (error) {
     if (error.status === 429) {
       return { ok: false, error: "Too many requests. Wait a minute and try again." };
