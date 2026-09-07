@@ -13,11 +13,15 @@
   Supabase template ships `{{ .ConfirmationURL }}` instead, which is why an
   unedited project emails a link and the code box can never be filled.
 
-  The link is deliberately left out rather than offered as well. This app has no
-  auth callback route — nothing under /auth — so a clicked link verifies at
-  Supabase and lands nowhere that can establish the session cookies. A link in an
-  email is the thing people click first, so one that cannot work is worse than
-  none at all. Add `{{ .ConfirmationURL }}` only alongside a route that handles it.
+  The link is deliberately left out rather than offered as well, and it stays out
+  even though /auth/confirm now exists. That route was added for the email-change
+  flow (change-email-address.html) and accepts `type=email_change` ONLY: a route
+  that took every type would be a second way to sign in — a bearer token sitting
+  in browser history and referrer headers — beside the code flow chosen to avoid
+  precisely that. A link in an email is the thing people click first, so one that
+  cannot work is worse than none at all; a link that signs you in is worse still.
+  If a magic link is ever genuinely wanted, that is a decision about credentials,
+  not a template edit.
 
   ── Why the markup looks like 2005 ──────────────────────────────────────────
   Tables, inline styles, no images, no web fonts. Mail clients strip <style>

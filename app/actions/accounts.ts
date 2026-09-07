@@ -474,7 +474,13 @@ export async function decideAccountClaim(
   const { error } = await supabase.rpc("approve_account_claim", {
     p_request_id: requestId,
     p_actor: actor,
-    p_decision_note: trimmedNote,
+    // `?? undefined` rather than making `trimmedNote` undefined outright: the two
+    // call sites want opposite things from an empty note. The RPC argument is
+    // `DEFAULT NULL`, so the generated type is optional and omitting it lets the
+    // default apply. The rejection branch above writes the same variable into an
+    // UPDATE, where `null` is the value being stored and `undefined` would be
+    // dropped by JSON serialisation — leaving whatever was in the column.
+    p_decision_note: trimmedNote ?? undefined,
   });
   if (error) throw new Error(error.message);
 

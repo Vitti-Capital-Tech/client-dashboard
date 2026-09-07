@@ -472,45 +472,6 @@ export type Database = {
           },
         ]
       }
-      commentary_runs: {
-        Row: {
-          batch_id: string
-          collected_at: string | null
-          errored: number
-          model: string
-          notes: string[]
-          requested: number
-          status: Database["public"]["Enums"]["commentary_run_status"]
-          submitted_at: string
-          week_of: string
-          written: number
-        }
-        Insert: {
-          batch_id: string
-          collected_at?: string | null
-          errored?: number
-          model: string
-          notes?: string[]
-          requested?: number
-          status?: Database["public"]["Enums"]["commentary_run_status"]
-          submitted_at?: string
-          week_of: string
-          written?: number
-        }
-        Update: {
-          batch_id?: string
-          collected_at?: string | null
-          errored?: number
-          model?: string
-          notes?: string[]
-          requested?: number
-          status?: Database["public"]["Enums"]["commentary_run_status"]
-          submitted_at?: string
-          week_of?: string
-          written?: number
-        }
-        Relationships: []
-      }
       clients: {
         Row: {
           created_at: string
@@ -557,6 +518,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      commentary_runs: {
+        Row: {
+          batch_id: string
+          collected_at: string | null
+          errored: number
+          model: string
+          notes: string[]
+          requested: number
+          status: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at: string
+          week_of: string
+          written: number
+        }
+        Insert: {
+          batch_id: string
+          collected_at?: string | null
+          errored?: number
+          model: string
+          notes?: string[]
+          requested?: number
+          status?: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at?: string
+          week_of: string
+          written?: number
+        }
+        Update: {
+          batch_id?: string
+          collected_at?: string | null
+          errored?: number
+          model?: string
+          notes?: string[]
+          requested?: number
+          status?: Database["public"]["Enums"]["commentary_run_status"]
+          submitted_at?: string
+          week_of?: string
+          written?: number
+        }
+        Relationships: []
       }
       ingest_attachments: {
         Row: {
@@ -882,6 +882,10 @@ export type Database = {
           subject: string
           summary: string
           ticker: string
+          tracker_attempts: number
+          tracker_error: string | null
+          tracker_sheet: string | null
+          tracker_written_at: string | null
         }
         Insert: {
           company?: string
@@ -901,6 +905,10 @@ export type Database = {
           subject?: string
           summary?: string
           ticker: string
+          tracker_attempts?: number
+          tracker_error?: string | null
+          tracker_sheet?: string | null
+          tracker_written_at?: string | null
         }
         Update: {
           company?: string
@@ -920,6 +928,10 @@ export type Database = {
           subject?: string
           summary?: string
           ticker?: string
+          tracker_attempts?: number
+          tracker_error?: string | null
+          tracker_sheet?: string | null
+          tracker_written_at?: string | null
         }
         Relationships: [
           {
@@ -1521,47 +1533,6 @@ export type Database = {
         }
         Relationships: []
       }
-      security_commentary: {
-        Row: {
-          edited_by: string | null
-          generated_at: string
-          loss_note: string
-          model: string | null
-          profit_note: string
-          security_code: string
-          sources: Json
-          week_of: string
-        }
-        Insert: {
-          edited_by?: string | null
-          generated_at?: string
-          loss_note: string
-          model?: string | null
-          profit_note: string
-          security_code: string
-          sources?: Json
-          week_of: string
-        }
-        Update: {
-          edited_by?: string | null
-          generated_at?: string
-          loss_note?: string
-          model?: string | null
-          profit_note?: string
-          security_code?: string
-          sources?: Json
-          week_of?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "security_commentary_security_code_fkey"
-            columns: ["security_code"]
-            isOneToOne: false
-            referencedRelation: "securities"
-            referencedColumns: ["code"]
-          },
-        ]
-      }
       sectors: {
         Row: {
           beneficiaries: string[]
@@ -1627,6 +1598,47 @@ export type Database = {
           {
             foreignKeyName: "securities_parent_code_fkey"
             columns: ["parent_code"]
+            isOneToOne: false
+            referencedRelation: "securities"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
+      security_commentary: {
+        Row: {
+          edited_by: string | null
+          generated_at: string
+          loss_note: string
+          model: string | null
+          profit_note: string
+          security_code: string
+          sources: Json
+          week_of: string
+        }
+        Insert: {
+          edited_by?: string | null
+          generated_at?: string
+          loss_note: string
+          model?: string | null
+          profit_note: string
+          security_code: string
+          sources?: Json
+          week_of: string
+        }
+        Update: {
+          edited_by?: string | null
+          generated_at?: string
+          loss_note?: string
+          model?: string | null
+          profit_note?: string
+          security_code?: string
+          sources?: Json
+          week_of?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "security_commentary_security_code_fkey"
+            columns: ["security_code"]
             isOneToOne: false
             referencedRelation: "securities"
             referencedColumns: ["code"]
@@ -1824,9 +1836,9 @@ export type Database = {
     Functions: {
       approve_account_claim: {
         Args: {
-          p_request_id: string
           p_actor: string
-          p_decision_note?: string | null
+          p_decision_note?: string
+          p_request_id: string
         }
         Returns: Json
       }
@@ -1835,6 +1847,7 @@ export type Database = {
       lookup_account_for_claim: { Args: { p_number: string }; Returns: Json }
       normalise_account_number: { Args: { raw: string }; Returns: string }
       role_from_email_domain: { Args: { addr: string }; Returns: string }
+      user_has_password: { Args: never; Returns: boolean }
     }
     Enums: {
       alert_direction: "above" | "below"
@@ -1866,12 +1879,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1895,11 +1908,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1920,11 +1933,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1945,11 +1958,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1962,11 +1975,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -1984,6 +1997,8 @@ export const Constants = {
       alert_direction: ["above", "below"],
       alert_kind: ["expiry", "itm", "window", "price"],
       alert_severity: ["red", "amber", "green"],
+      claim_status: ["pending", "approved", "rejected"],
+      commentary_run_status: ["submitted", "collected", "failed"],
       merge_status: ["pending", "approved", "rejected"],
       news_direction: ["up", "dn"],
       option_status: ["open", "pending", "expired"],

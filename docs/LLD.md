@@ -1236,7 +1236,7 @@ Sign-in was originally a **6-digit code emailed to the address**, with no passwo
 - **~~Removing the password form does not disable password auth.~~ — overtaken by §8.38 for clients, still true for staff.** The observation was that this Supabase version has no per-provider toggle and the API keeps accepting `grant_type=password`, so what actually closed it was that no account held a usable password: `createUser` is called without one, the legacy demo password was rotated to a discarded random value, and signups were off. Clients may now hold one deliberately. **Staff still hold none**, and §8.38 makes that an enforced invariant rather than a side effect of nothing setting one.
 - **A paste longer than the boxes is refused, not trimmed.** The project's Email OTP Length was 8 while the form asked for 6; truncating silently filled six boxes and auto-submitted the first six, which fails as "not a valid code" and sends you looking at the wrong thing. It now names the mismatch.
 - **~~One login screen.~~ — revisited in §8.38.** The `?role=` split was removed because the role follows from the domain and is settled after the code is verified, so asking somebody to categorise themselves before proving anything offered a stranger two doors and a chance to guess wrong. That argument still holds and is why the *role* is still never decided by the page. There are two pages again, for a different reason: `/login` acquired a password, a reset and a link to registration, none of which apply to staff. The pages refuse the addresses they are not for rather than trusting the visitor's choice.
-- **Dashboard config that the repo cannot hold** is listed in README §4.4 — custom SMTP (the built-in mailer is rate-limited to a handful per hour and is the actual gating item), the Magic Link template (`{{ .Token }}`, or an unedited project emails a link the code box can never consume), OTP length and expiry, and signups off. `supabase/email-templates/magic-link.html` is version-controlled precisely because dashboard config is otherwise invisible to review; it deliberately omits `{{ .ConfirmationURL }}`, since the app has no auth callback route and a link that cannot work is the thing people click first.
+- **Dashboard config that the repo cannot hold** is listed in README §4.4 — custom SMTP (the built-in mailer is rate-limited to a handful per hour and is the actual gating item), the Magic Link template (`{{ .Token }}`, or an unedited project emails a link the code box can never consume), OTP length and expiry, and signups off. `supabase/email-templates/magic-link.html` is version-controlled precisely because dashboard config is otherwise invisible to review; it deliberately omits `{{ .ConfirmationURL }}`. A callback route now exists (`/auth/confirm`, §8.39) but accepts `type=email_change` only, so the omission stands for a different reason than it started with: a link that cannot work is the thing people click first, and a link that signs you in is worse than one that fails.
 
 ### 8.33 The client portal reads the desk's figures (`lib/pnl/client-portfolio.ts`, `lib/options/from-stored-pnl.ts`)
 
@@ -1265,7 +1265,13 @@ The first real client sign-in exposed a class of bug nothing had reached before:
 
 Multi-account has been in the schema since Stage 9 (§8.12), but nothing ever put a *second* account onto a login. The broker export models an entity and its account as one thing (`extractAccounts`), so each import creates one `clients` row per account number: all **54 accounts sat 1:1 with 54 client rows**. The real case is visible in the data — `Saturn Fund Investments PTY LTD` (ref 1101162, email attached) and `Saturn Fund Investments PTY LTD <saturn Unit Short A/c>` (ref 1102004, no email) are the same entity under two client rows.
 
-- **The request records a string, and resolves nothing.** A client types the number from their statement; `account_claim_requests` stores it normalised and that is all. Looking it up at request time — even only to say "no such account" — turns the form into an oracle for the firm's account numbers, answerable by anyone with a login and a loop. Every request is accepted identically. The only thing the action *does* check is whether the number is already on the caller's own login, which is a no-op worth naming rather than work for the desk.
+- **~~The request records a string, and resolves nothing.~~ — reversed by `…_account_number_lookup.sql`.** The original rule: `account_claim_requests` stored the normalised number and the form answered nothing, because looking it up — even only to say "no such account" — turns it into an oracle for the firm's account numbers, answerable by anyone with a login and a loop.
+
+  The desk asked for the answer anyway, and the reason was better than the rule: a mistyped digit was invisible until a human worked it out days later, and the client could not distinguish a typo from a slow queue. There is now a **Verify** button (`checkAccountNumber` → `lookup_account_for_claim`), and `requestAccountClaim` refuses a number that does not resolve.
+
+  The disclosure is real and was not argued away — it was **priced**. What the lookup keeps: a hard per-client hourly limit (one or two checks is a person; hundreds of thousands is a loop, and it gets twenty an hour); an audit row per check written *before* the answer, and for misses as well as hits, so a scrape is visible in the log rather than inferred from its absence; and no owner information at all — the account's own name only, never the client holding it, which would turn one number into a name, an entity and a relationship. Resolving decides nothing either way: approval is still `approve_account_claim` under staff authority, with its own refusal for an account whose owner can log in.
+
+- **The importer had to learn about `merged_into`.** Keeping the emptied stub row (below) means the broker's entity ref still sits on a client that owns nothing — and both importers resolved an account's owner by reading that ref. So a NEW account arriving for an already-claimed entity was created under the stub: a row `getClients()` filters out for owning nothing, leaving the account invisible in the client's switcher *and* in the staff register, because its owner was hidden. `ownerIdByExternalRef` (`lib/import/runner.ts`) now follows the pointer, as a chain and with a cycle guard, and both importers go through it. `clients.merged_into` means "this entity is now part of that one"; the importer was the one place that did not read it.
 - **One spelling of a number, defined once.** People type `1102004 `, `1-102-004`, `A/c 1102004`. The partial unique index that prevents duplicate pending claims and the lookup that resolves one on approval are both written in terms of `normalise_account_number(text)`, and `lib/accounts/account-number.ts` mirrors it exactly — if the two disagreed, a client could hold two live claims on one account, or file one that never resolves. Non-alphanumerics are dropped rather than just whitespace, and the result is upper-cased, because not every ref is numeric (`PLACEVITT` is a real account).
 - **Approval is an RPC because it cannot be half-done.** `decideAccountMerge` does its work as sequential PostgREST calls and says so in a `NOTE`. A claim is the case that makes that unacceptable: re-parenting one account rewrites `client_id` on **eight** tables — `positions`, `option_holdings`, `bids`, `trades`, `realized_pnl`, `pnl_overrides`, `pnl_summary`, `pnl_runs` — all of which carry both `account_id` and `client_id` by deliberate denormalization (§8.12). A failure on the seventh leaves the account under one client and its P&L under another, which is a client reading someone else's figures. `approve_account_claim` is one `SECURITY DEFINER` function, so one transaction; it checks `is_staff()` first and explicitly, because a definer function that forgot that check would be an open re-parent endpoint for any authenticated user.
 - **The rail that matters: an owner with an email is refused.** An account whose current `clients` row has an email is an account somebody can sign in and see. Moving it would take live data off one person's screen on the strength of a number the claimant typed. The RPC raises, naming the holder and telling the desk to confirm the relationship and use a merge instead. Every refusal raises rather than returning a status, so the transaction unwinds and the action layer has one thing to catch; the messages are written to be read by staff and are surfaced verbatim.
@@ -1307,6 +1313,7 @@ The portal shell has had a mobile bottom nav and a "More" drawer since the layou
 
 - **Ten of thirteen modals could not be reached on a short screen.** Every overlay is `fixed inset-0 … flex items-center justify-center`, centring a card of whatever height its content needs. Taller than the viewport — a trade ticket on a 375×667 phone, or anything in landscape — and its top and bottom sat off-screen with nothing to scroll: the overlay is `fixed`, so the page behind it does not scroll either, and the Close button was one of the parts that could not be reached. The overlay now takes `overflow-y-auto` and the card `my-auto max-h-[92vh] overflow-y-auto`, so it still centres when it fits and scrolls when it does not. Only `PortalShell`'s More menu and the mismatches modal had ever been given a height cap, which is why the pattern was not obviously wrong.
 - **Two tables widened the page instead of scrolling in their own box.** Most already sit in `overflow-x-auto`; the Client Bids Register did not, and it renders client *names* — one real account is `Saturn Fund Investments PTY LTD <saturn Unit Short A/c>`, 55 characters. A table overflowing its card widens `<body>`, and a horizontally scrolling body is what knocks the fixed bottom nav out of alignment.
+- **There was no way to sign out on a phone.** The sidebar carries the only sign-out control and is `hidden md:flex`, so below `md` it did not exist — on the device most likely to be handed to someone else or left on a table. A `md:hidden` control now sits in the topbar beside the avatar, and opens the same confirmation dialog the sidebar does. Found while adding that dialog, which is the pattern of this whole section: the shell was fine, the surface below `md` was not.
 - **The holding modal was a dead click for any holding with no `signals` row.** It rendered on `selectedStock && advice`, and `signals` is adviser-authored content that covers a handful of securities — so tapping most rows in the holdings table did nothing at all. It now renders on the holding alone, with the target row and the desk headline conditional, which is also what makes the weekly commentary (§8.36) reachable on every holding rather than only on covered ones.
 
 ### 8.38 Client self-registration, passwords, and two doors (`app/actions/signup.ts`, `app/signup/`, `app/staff/login/`, `app/reset-password/`, `lib/auth/password.ts`, `…_password_signup.sql`)
@@ -1354,6 +1361,20 @@ A login with no account reaches the portal and sees an empty dashboard, an empty
 
 A **pending** claim counts as linked: the number is with the desk and there is nothing further for the client to do. Asking again would give staff a second row to reconcile against the first.
 
+#### The state sign-up created, and the 500 it caused
+
+Self-registration produced a client with **zero accounts** — impossible before, because every client came from the broker import owning exactly one. Six client pages take `getActiveAccountId()`, which returns `""` for such a client, and handed it to the DAL:
+
+```
+.eq("account_id", "")   →  account_id=eq.  →  Postgres casts '' to uuid  →  22P02  →  throw  →  500
+```
+
+Two layers of fix, and the second matters more than the first. `getPositions`/`getOptions` now answer an empty id with no rows — "no account" is a legitimate state with an obvious answer, not a query error. But a guard alone would then have rendered the dashboard with **every figure zero**, and zero is a claim about the client's money rather than about our data: a portfolio reading $0.00 with an empty holdings table is indistinguishable from a client whose account really is empty, and it looks authoritative. So `app/portal/layout.tsx` renders `AwaitingAccount` in place of `children` — the claimed number, when it was submitted, and that nothing further is needed from them.
+
+In the layout rather than in the pages, because the whole portal is account-scoped: one place knows about the state instead of six that each have to survive it, and every nav destination lands back on the same honest answer.
+
+This is also the second half of "step 3 is mandatory". A client with no accounts **and no pending claim** is redirected to `/signup`; one with a pending claim is shown this. The two states need opposite answers, and conflating them would either strand somebody who had already given the desk their number or let somebody past a step they never did.
+
 #### Staff hold no password — as an invariant, not a side effect
 
 §8.32 could say "no account holds a password" as an observation. Once clients have them, staff not having them has to be enforced, because the domain-based self-provisioning in `provisionStaffAccount` rests entirely on the code having to be **read** at a firm mailbox. Four gates:
@@ -1380,3 +1401,60 @@ A **pending** claim counts as linked: the number is with the desk and there is n
 #### The landing page is gone
 
 `/` was a marketing splash with a headline and two descriptive cards. It is a `redirect("/login")` now: this is a portal for existing wholesale clients and the desk that runs their money, not something anyone arrives at cold, and the splash was one click between them and the form. A redirect rather than rendering the form at `/` as well, because two routes serving one form is two things to keep in step. Signed-in visitors are not special-cased in the page — they land on `/login` and the proxy forwards them, so that logic lives in one place.
+
+### 8.39 Client self-service settings (`app/actions/profile.ts`, `/portal/client/settings`, `/auth/confirm`, `…_client_settings.sql`)
+
+A page for the three things a client can change about their own login. It was chosen over a "profile" page on purpose: a profile page would have shown a client their name, their address and their accounts — the first two they typed themselves, the third already the Accounts page — and been a screen nobody opens twice. What was missing was not somewhere to *read* those facts but somewhere to *change* them.
+
+#### Notification preferences are absent, deliberately
+
+Nothing in this application sends a client an email. The alert engine writes rows to `alerts` which the portal renders; the only outbound mail in the whole system is Supabase Auth's own one-time codes, and every "notification" in the codebase is an **inbound** Microsoft Graph mail-hook for the placements ingest (§8.19). Switches for mail nobody sends would be controls that quietly do nothing — worse than their absence, because a client would believe them. The section belongs here when a real dispatch exists, not before.
+
+#### The current password is verified by using it
+
+`secure_password_change` is off in this project, so `updateUser({ password })` accepts a new password on the strength of the session alone. That turns an unlocked laptop into permanent access: a session expires, a password does not, and the owner is locked out of their own login without ever having seen a prompt.
+
+So `changePassword` calls `signInWithPassword` with the supplied current password first. Verified by *using* the credential rather than by a flag: on the same user it returns a session for that same user, so nothing changes hands and there is no way past the check without the password.
+
+#### Two password forms, because most of this firm's clients have none
+
+Every login the broker import or `link-client-login.mjs` created signs in with an emailed code and has no `encrypted_password` (§8.32). Asking such a client for their current password answers "that password is incorrect" — untrue, and unactionable.
+
+`user_has_password()` decides which form renders. It is `SECURITY DEFINER`, takes **no parameter**, and is scoped to `auth.uid()`: a version taking an address would report which of the firm's clients hold passwords, and one taking a user id would do the same to anyone who could guess one.
+
+The password-less path sets a first password through the emailed code (`requestPasswordResetCode` → `resetPassword`), not simply because the caller is signed in. A session is proof of access *now*; a password is access indefinitely, and an open session on a borrowed machine should not be convertible into the second.
+
+#### Changing the login email: three parts, none of them optional
+
+| Part | Where | Why |
+| --- | --- | --- |
+| Refuse a staff-domain target | `startEmailChange` + `block_email_change_to_staff_domain` | `stamp_role_from_email` fires on `UPDATE OF email` too, so a client renaming themselves to `anything@vitti.capital` would be stamped **admin** and land in the desk console on the next token refresh. Refused in the action for a readable sentence, and in the database because that is the boundary |
+| Refuse an address already registered | `startEmailChange`, service role | `clients.email` is UNIQUE. Checked with the service role because RLS shows the caller only their own row — they would see no conflict and hit a constraint on confirmation, days later |
+| Move `clients.email` when the address actually moves | `sync_client_email_from_auth` | See below |
+
+`updateUser({ email })` changes nothing; it sends mail. With `double_confirm_changes` the old **and** new addresses each get a link with its own token, and both must be followed — which is what stops somebody who reaches an open session from redirecting the login to an address they own.
+
+**Why the second half is a trigger and not app code.** A client login is two halves in two places, and `lib/session.ts` and `current_client_id()` both resolve the client row from the address. If `auth.users.email` moved and `clients.email` did not, the person would be authenticated and attached to **nothing** — every policy denying them, so the portal reads as empty rather than as broken. And the change lands when the last link is followed: possibly days later, possibly from a phone, with no request in flight for the app to hook. A trigger is the only thing that observes the actual change, and it runs inside the auth transaction, so the halves cannot drift.
+
+It matches on `OLD.email` rather than a user id, because `clients` has no FK to `auth.users` — the two are joined by address, which is the whole reason the trigger has to exist. Staff have no `clients` row, so it updates nothing for them, which is correct.
+
+Incidentally this closed a hazard that predates the page: editing an address by hand in the Supabase dashboard silently detached the client.
+
+#### `/auth/confirm` — the first auth callback route, and a narrow one
+
+Every other credential here is a six-digit code typed into a form, and `magic-link.html` omits the URL for that reason. An email change cannot work that way: the new address is not a registered user, so there is no session to verify a code against and no screen belonging to that address to type one into. Supabase sends links; this route catches them.
+
+- **`type=email_change` only.** A route accepting every type would be a second way to sign in — a bearer token in a URL, in browser history and referrer headers — beside the code flow chosen precisely to avoid that. `recovery` in particular is refused: password reset already has a form.
+- **`token_hash`, not the implicit fragment.** `{{ .ConfirmationURL }}` returns the session in a `#access_token=` fragment that only browser JavaScript can read; this app establishes sessions on the server, so the template is hand-built to carry `token_hash` and the route calls `verifyOtp`.
+- **One answer for every failure.** Expired, already used, or the other half of the pair not yet confirmed all redirect the same way: the person's next step is identical, and distinguishing them tells a stranger holding a stale link which kind of stale it is.
+- **It does not touch `clients.email`.** The route only sees whichever confirmation happens to be last, and with double confirmation that may be the old address, the new one, or neither if the person finishes elsewhere. The trigger observes the change; the route does not guess at it.
+
+#### Sign-out asks first
+
+Sign-out is one click from the nav, and on the staff console it also drops the inspected client (`vitti_view`) and resets the P&L Calculator store — unsaved parsed trade data, which nothing announced until it was gone. A confirmation dialog now sits on the shell, at `z-[60]` so it is above the alerts drawer and the More menu rather than behind whichever was open.
+
+Focus lands on **cancel**, not on the confirming action: a dialog that opens with the destructive button focused turns a stray Enter — quite possibly the one that opened it — into a confirmed sign-out. `isSigningOut` is separate state from the dialog being open, because the work outlives the click and the button must stay disabled while the action runs and the redirect resolves.
+
+#### `PasswordInput`
+
+Five password boxes across four pages, so one component. Visibility is **per box**: revealing "Password" and "Confirm password" together defeats the point of asking twice, since the second box exists to catch a typo in the first and you catch it by typing it again. `type="button"`, because a bare `<button>` inside a `<form>` defaults to submit — the toggle would have attempted a sign-in with a half-typed password. It stays in the tab order rather than taking `tabIndex={-1}`: somebody who cannot see the field is precisely who may need to check what they typed.

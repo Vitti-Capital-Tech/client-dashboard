@@ -13,6 +13,7 @@ import {
   Layers,
   Star,
   CreditCard,
+  Settings,
   Users,
   Calculator,
   AlertTriangle,
@@ -210,7 +211,8 @@ export function PortalShell({
       { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: Zap, tab: false },
       { k: "options", label: "Options", path: "/portal/client/options", icon: Layers, tab: false },
       { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: Star, tab: false },
-      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: CreditCard, tab: false }
+      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: CreditCard, tab: false },
+      { k: "settings", label: "Settings", path: "/portal/client/settings", icon: Settings, tab: false }
       // No "Alerts" entry: the bell in the top bar opens the same list, from
       // every page, with the same unread count on it. Two doors to one drawer
       // is one door too many, and the nav one was the slower of the two.
