@@ -1,7 +1,7 @@
 import { getActiveAccountId, getActiveClientId } from "@/lib/session";
 import {
-  getPositions,
-  getAccount,
+  getAccounts,
+  getClientPositions,
   getSignals,
   getClientOptions,
   getClientTrades,
@@ -11,8 +11,9 @@ import {
 } from "@/lib/data/queries";
 import { getClientStoredPnl } from "@/lib/data/pnl";
 import { getClientPnlOverrides } from "@/lib/data/holdings";
-import { clientPortfolio } from "@/lib/pnl/client-portfolio";
-import { unlistedValue, attributeSells } from "@/lib/data/compute";
+import { clientSummary, type ClientSummary } from "@/lib/pnl/client-portfolio";
+import { offLedgerBuyLines } from "@/lib/pnl/off-ledger-buys";
+import type { LedgerLine } from "@/lib/import/trades";
 import { PositionsClient } from "./PositionsClient";
 
 /**
@@ -25,32 +26,43 @@ import { PositionsClient } from "./PositionsClient";
  * current holdings cannot know about, and which is why the client's own P&L
  * used to be a thinner number than the one their adviser was reading.
  *
- * The figures now come from the same place the staff console reads, through the
+ * The figures come from the same place the staff console reads, through the
  * same rollup and with the same corrections applied, so the two screens agree.
  * See `lib/pnl/client-portfolio.ts` for what is deliberately left behind.
  *
- * ── Client-scoped, and account-scoped, and not the same thing ───────────────
- * Holdings stay ACCOUNT-scoped: a client with several accounts switches between
- * them, and the holdings table is about one of them. The P&L is CLIENT-scoped,
- * matching the staff view, which aggregates a client's accounts — a portfolio
- * return that silently covered one of three accounts would be the wrong number
- * with no way to tell.
+ * ── Why the rows arrive pre-scoped, one set per account ─────────────────────
+ * The page carries the staff console's own account filter — All accounts, or
+ * one of them — and Holdings, Historical P&L and Options all follow it. The
+ * holdings and the ledger can be filtered in the browser, because a position
+ * and a contract note each state which account they belong to.
  *
- * Either way a client only ever reads their own rows: the getters filter on the
- * id from `getActiveClientId()` (resolved from their verified JWT email, never a
- * cookie), and `pnl_summary` / `pnl_overrides` / `positions` all carry RLS of
+ * The P&L summary rows cannot, and the reason is the overrides: a desk
+ * correction is stored PER ACCOUNT, and `storedToSummaryRows` resolves it while
+ * building the row. Filtering finished rows would apply one account's
+ * correction to another's figures, which is precisely the arithmetic the
+ * staff page avoids by scoping the stored rows first. So each scope is built
+ * here, the same way, and the browser picks one.
+ *
+ * That is also what keeps `note` — the desk's free-text reason, kept for the
+ * audit trail — out of the payload entirely rather than merely off the screen.
+ * `clientSummary` blanks it, and it can only do that on the server.
+ *
+ * ── A client only ever reads their own rows ─────────────────────────────────
+ * Every getter filters on the id from `getActiveClientId()`, resolved from the
+ * client's verified JWT email and never from a cookie, and `pnl_summary` /
+ * `pnl_overrides` / `positions` / `trades` all carry RLS of
  * `is_staff() OR client_id = current_client_id()`.
  */
 export default async function ClientPositionsPage() {
-  const [accountId, clientId] = await Promise.all([
+  const [activeAccountId, clientId] = await Promise.all([
     getActiveAccountId(),
     getActiveClientId(),
   ]);
 
   const [
+    accounts,
     positions,
     options,
-    account,
     signals,
     storedPnl,
     overrides,
@@ -58,9 +70,11 @@ export default async function ClientPositionsPage() {
     securityMap,
     commentaryByCode,
   ] = await Promise.all([
-    getPositions(accountId),
+    getAccounts(clientId),
+    // The client's WHOLE book, not one account's: the account filter lives in
+    // the island now, so the page cannot know which account is being asked for.
+    clientId ? getClientPositions(clientId) : Promise.resolve([]),
     getClientOptions(clientId),
-    getAccount(accountId),
     getSignals(),
     clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
     clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
@@ -69,26 +83,51 @@ export default async function ClientPositionsPage() {
     getSecurityCommentary(),
   ]);
 
-  const cash = account?.cash ?? 0;
-  const unlisted = unlistedValue(options);
   const signalMap: Record<string, SignalRow> = Object.fromEntries(
     signals.map((s) => [s.code, s]),
   );
 
   /**
-   * Dated realised P&L, attributed HERE rather than in the browser.
+   * The summary rows the filter can select between.
    *
-   * The date picker is interactive, so the island needs the underlying data
-   * rather than one pre-computed answer — but it needs the SALES, not the
-   * ledger. One tested account holds 1,650 contract notes and the replay that
-   * turns them into per-sale results is the same cost-basis walk the importer
-   * uses; running it on the server sends the browser only the sales (a few
-   * hundred small rows), and keeps one implementation of the arithmetic instead
-   * of a second one written for the client.
+   * `all` is always built — it is what a single-account client sees, and what
+   * the Analytics tab reads whichever account is selected. Per-account scopes
+   * are built only where there is more than one account to choose from, which
+   * is also the only case where the filter renders at all.
    */
-  const sells = attributeSells(trades);
+  const summaryByScope: Record<string, ClientSummary> = {
+    all: clientSummary(storedPnl, overrides),
+  };
 
-  const portfolio = clientPortfolio(storedPnl, overrides);
+  /**
+   * The purchases the contract-note ledger never recorded — a placement reaches
+   * the client as a sale with no matching buy — recovered per scope so the
+   * realised table and the by-month chart can cost those sales.
+   *
+   * Built HERE rather than in the island for the same reason as above and one
+   * more: the difference has to be taken against the PRE-override stored
+   * figures. A desk correction reaches the realised figures separately, through
+   * `overrideDeltas`, and taking it into account twice would move the client's
+   * realised P&L by the size of the correction all over again.
+   * `clientSummary` deliberately does not ship those pre-override values.
+   *
+   * See lib/pnl/off-ledger-buys.ts for what the difference is and why.
+   */
+  const offLedgerByScope: Record<string, LedgerLine[]> = {
+    all: offLedgerBuyLines(storedPnl, trades),
+  };
+
+  if (accounts.length > 1) {
+    for (const a of accounts) {
+      const accountStored = storedPnl.filter((r) => r.accountId === a.id);
+      const accountTrades = trades.filter((t) => t.accountId === a.id);
+      summaryByScope[a.id] = clientSummary(
+        accountStored,
+        overrides.filter((o) => o.accountId === a.id),
+      );
+      offLedgerByScope[a.id] = offLedgerBuyLines(accountStored, accountTrades);
+    }
+  }
 
   /**
    * Ticker → sector, for every ticker the sector chart can be asked about.
@@ -101,13 +140,14 @@ export default async function ClientPositionsPage() {
    * row; where it is absent the code IS the ordinary.
    *
    * Built from the tickers actually in the portfolio rather than from the whole
-   * 775-row catalogue, so the payload is the client's own holdings.
+   * 775-row catalogue, so the payload is the client's own holdings. Taken over
+   * the `all` scope because the chart reading it covers all accounts.
    */
   const parentOf = new Map(
     storedPnl.map((r) => [r.ticker, r.parentTicker ?? r.ticker]),
   );
   const sectorByTicker: Record<string, string | null> = {};
-  for (const row of portfolio.rows) {
+  for (const row of summaryByScope.all.rows) {
     const parent = parentOf.get(row.ticker) ?? row.ticker;
     sectorByTicker[row.ticker] =
       securityMap.get(row.ticker)?.sector ?? securityMap.get(parent)?.sector ?? null;
@@ -115,12 +155,14 @@ export default async function ClientPositionsPage() {
 
   return (
     <PositionsClient
+      accounts={accounts}
+      activeAccountId={activeAccountId}
       positions={positions}
-      cash={cash}
-      unlisted={unlisted}
+      options={options}
       signals={signalMap}
-      portfolio={portfolio}
-      sells={sells}
+      summaryByScope={summaryByScope}
+      offLedgerByScope={offLedgerByScope}
+      trades={trades}
       sectorByTicker={sectorByTicker}
       commentary={Object.fromEntries(commentaryByCode)}
     />

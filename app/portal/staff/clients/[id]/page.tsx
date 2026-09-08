@@ -12,6 +12,8 @@ import {
 import { getClientRealized, getClientPnlOverrides } from "@/lib/data/holdings";
 import { getClientStoredPnl, getClientLatestPnlRuns } from "@/lib/data/pnl";
 import { getQueuedAccountIds } from "@/lib/data/ingest";
+import { offLedgerBuyLines } from "@/lib/pnl/off-ledger-buys";
+import type { LedgerLine } from "@/lib/import/trades";
 import { ClientDetailClient } from "./ClientDetailClient";
 
 // Server Component: single client register view. Fetches the client and all of
@@ -69,6 +71,31 @@ export default async function Page({
 
   const signalsMap = Object.fromEntries(signals.map((s) => [s.code, s]));
 
+  /**
+   * The purchases the contract-note ledger never recorded, per account scope.
+   *
+   * A placement is transacted through the house account and journalled out, so
+   * the client ledger shows the sale and no purchase — and the realised-P&L
+   * chart, which replays that ledger, drew the whole proceeds as profit. The
+   * stored figures know the real cost because the recompute merges the
+   * Placement Trackers into them; this recovers it by difference so the chart
+   * can use it. See lib/pnl/off-ledger-buys.ts.
+   *
+   * Built HERE rather than in the island for two reasons. The difference has to
+   * be taken against the PRE-override stored rows, and calling it inside the
+   * island put React Compiler off optimising the whole component — see the
+   * `offLedger` note there.
+   */
+  const offLedgerByScope: Record<string, LedgerLine[]> = {
+    all: offLedgerBuyLines(storedPnl, trades),
+  };
+  for (const a of accounts) {
+    offLedgerByScope[a.id] = offLedgerBuyLines(
+      storedPnl.filter((r) => r.accountId === a.id),
+      trades.filter((t) => t.accountId === a.id),
+    );
+  }
+
   // The detail island filters holdings/bids/cash per account (or aggregates
   // across all of the client's accounts).
   return (
@@ -84,6 +111,7 @@ export default async function Page({
       realized={realized}
       overrides={overrides}
       storedPnl={storedPnl}
+      offLedgerByScope={offLedgerByScope}
       pnlRuns={pnlRuns}
       queuedAccountIds={queuedAccountIds}
     />

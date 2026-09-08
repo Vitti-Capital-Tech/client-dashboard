@@ -7,6 +7,7 @@ import {
   positionStatus,
   type PnlSummaryRow,
 } from "@/lib/export/order-history";
+import { isRowOption } from "@/lib/pnl/summary-rows";
 import { savePnlOverride } from "@/app/actions/pnl-overrides";
 
 /**
@@ -43,31 +44,38 @@ const CELL_INPUT =
 
 export function PnlRow({
   row,
-  editing,
+  editing = false,
   onEdit,
   onClose,
-  accountId,
-  clientId,
+  accountId = null,
+  clientId = "",
   money2,
+  readOnly = false,
 }: {
   row: PnlSummaryRow;
-  editing: boolean;
-  onEdit: () => void;
-  onClose: () => void;
-  accountId: string | null;
-  clientId: string;
+  editing?: boolean;
+  onEdit?: () => void;
+  onClose?: () => void;
+  accountId?: string | null;
+  clientId?: string;
   money2: (n: number) => string;
+  /**
+   * Render the row as a FIGURE, with no way into the editor.
+   *
+   * Set by the client portal, where the same table is shown to the person whose
+   * money it describes. `savePnlOverride` refuses a non-staff caller on its own,
+   * so this is not what makes the override safe — it is what stops the client
+   * being offered an action that would be refused, and it also drops the desk
+   * columns (the trailing Edit cell, the working note, the dotted “edited by the
+   * desk” marks) that describe our workings rather than their position.
+   */
+  readOnly?: boolean;
 }) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const isOption = Boolean(
-    row.isOption ||
-    row.isUnlistedOption ||
-    row.ticker.endsWith("-UO") ||
-    row.type.toLowerCase().includes("option")
-  );
+  const isOption = isRowOption(row);
 
   const displayBuyQty = isOption
     ? (row.buyQty || row.sellQty || (row.openQty ? Math.abs(row.openQty) : 0))
@@ -134,12 +142,12 @@ export function PnlRow({
 
     if (!res.ok) return setError(res.error);
     router.refresh();
-    onClose();
+    onClose?.();
   };
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") void save();
-    if (e.key === "Escape") onClose();
+    if (e.key === "Escape") onClose?.();
   };
 
   // Amber = still held, green = fully exited, neutral = the buy side could not
@@ -163,7 +171,7 @@ export function PnlRow({
   // A dotted underline marks a value set by hand, with the computed figure in
   // the tooltip so the change stays inspectable without opening the editor.
   const mark = (on: boolean, computed: string) =>
-    on
+    on && !readOnly
       ? {
           className:
             "decoration-dotted decoration-loss underline underline-offset-4 cursor-help",
@@ -220,18 +228,22 @@ export function PnlRow({
         </td>
         <td className={`px-4.5 py-3 text-[11px] ${row.flagged ? "text-loss-d font-semibold" : "text-mut"}`}>
           {row.type}
-          {row.note && (
+          {/* The note is the reason the DESK typed against a figure, kept on the
+              audit trail. It is addressed to us, so it stays on our screen. */}
+          {row.note && !readOnly && (
             <div className="text-[10px] text-mut-d italic mt-0.5">{row.note}</div>
           )}
         </td>
-        <td className="px-4.5 py-3 text-right">
-          <button
-            onClick={onEdit}
-            className="text-[11px] font-semibold text-mut hover:text-ink underline underline-offset-2 cursor-pointer"
-          >
-            Edit
-          </button>
-        </td>
+        {!readOnly && (
+          <td className="px-4.5 py-3 text-right">
+            <button
+              onClick={onEdit}
+              className="text-[11px] font-semibold text-mut hover:text-ink underline underline-offset-2 cursor-pointer"
+            >
+              Edit
+            </button>
+          </td>
+        )}
       </tr>
     );
   }

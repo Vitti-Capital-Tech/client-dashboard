@@ -26,17 +26,33 @@ import {
   pnlSummaryFilename,
   SUMMARY_HEADERS,
   type PnlOverride,
-  type PnlSummaryRow,
 } from "@/lib/export/order-history";
 import { storedToSummaryRows } from "@/lib/export/stored-pnl";
-import { moneynessOf, UNKNOWN_MONEYNESS } from "@/lib/options/moneyness";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
+// The row predicates, the filters and the option derivation are shared with the
+// client portal, which shows these same three tables. See lib/pnl/summary-rows.ts.
+import {
+  isRowUnlistedOption,
+  filterPnlRows,
+  pnlFilterCounts,
+  optionSummaryRows,
+  filterOptionRows,
+  optionFilterCounts,
+  optionTotals,
+  PNL_FILTERS,
+  PNL_FILTER_LABELS,
+  OPTION_FILTERS,
+  OPTION_FILTER_LABELS,
+  type PnlFilter,
+  type OptionFilter,
+} from "@/lib/pnl/summary-rows";
+import type { LedgerLine } from "@/lib/import/trades";
 import type { StoredPnlRow, PnlRunRow } from "@/lib/data/pnl";
 import { buildPnlSummaryXlsx } from "@/app/actions/exports";
 import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
 import { TablePagination } from "@/app/components/TablePagination";
-import { PnlRow } from "./PnlRow";
-import { RealizedPnlChart } from "./RealizedPnlChart";
+import { PnlRow } from "@/app/components/PnlRow";
+import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { posValue, posCost, posPL, unlistedValue } from "@/lib/data/compute";
 
 /**
@@ -96,48 +112,6 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-type HistoricalPnlFilter =
-  | "all"
-  | "equity"
-  | "options"
-  | "unlisted"
-  | "open"
-  | "matched"
-  | "profit"
-  | "loss"
-  | "unmatched";
-
-const isRowOption = (r: PnlSummaryRow) =>
-  Boolean(
-    r.isOption ||
-    r.isUnlistedOption ||
-    r.ticker.endsWith("-UO") ||
-    r.type.toLowerCase().includes("option")
-  );
-
-const isRowUnlistedOption = (r: PnlSummaryRow) =>
-  Boolean(
-    r.isUnlistedOption ||
-    r.ticker.endsWith("-UO") ||
-    r.type.toLowerCase().includes("unlisted")
-  );
-
-const isRowMatched = (r: PnlSummaryRow) =>
-  Boolean(r.isMatched || r.type.startsWith("Matched"));
-
-const isRowOpen = (r: PnlSummaryRow) =>
-  Boolean(
-    r.openPosition ||
-    (r.openQty !== undefined && r.openQty > 0) ||
-    r.isDbOpenValued ||
-    r.type.startsWith("Open")
-  );
-
-const isRowUnmatched = (r: PnlSummaryRow) =>
-  !isRowMatched(r) && !isRowOption(r);
-
-const isRowEquity = (r: PnlSummaryRow) => !isRowOption(r);
-
 export function ClientDetailClient({
   client,
   accounts,
@@ -150,6 +124,7 @@ export function ClientDetailClient({
   realized,
   overrides,
   storedPnl,
+  offLedgerByScope,
   pnlRuns,
   queuedAccountIds,
 }: {
@@ -164,17 +139,21 @@ export function ClientDetailClient({
   realized: RealizedRow[];
   overrides: PnlOverrideRow[];
   storedPnl: StoredPnlRow[];
+  /**
+   * Per account scope, the purchases the contract-note ledger never recorded —
+   * chiefly placement parcels. Built on the server; see the page and
+   * lib/pnl/off-ledger-buys.ts.
+   */
+  offLedgerByScope: Record<string, LedgerLine[]>;
   pnlRuns: PnlRunRow[];
   /** Accounts a run could not finish — still owed a recompute. */
   queuedAccountIds: string[];
 }) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("holdings");
-  const [pnlFilter, setPnlFilter] = useState<HistoricalPnlFilter>("all");
+  const [pnlFilter, setPnlFilter] = useState<PnlFilter>("all");
   const [pnlSearch, setPnlSearch] = useState<string>("");
-  const [optionsTabFilter, setOptionsTabFilter] = useState<
-    "all" | "listed" | "unlisted" | "itm"
-  >("all");
+  const [optionsTabFilter, setOptionsTabFilter] = useState<OptionFilter>("all");
   const [optionsSearch, setOptionsSearch] = useState<string>("");
   // Account filter: "all" aggregates across the client's accounts, else scope
   // to one account. Holdings/options/bids/cash follow this; alerts stay
@@ -263,39 +242,29 @@ export function ClientDetailClient({
   const visibleStoredPnl = storedPnl.filter((r) => inAcct(r.accountId));
   const summaryRows = storedToSummaryRows(visibleStoredPnl, overrideMap);
 
-  const pnlTabCounts: Record<HistoricalPnlFilter, number> = {
-    all: summaryRows.length,
-    equity: summaryRows.filter(isRowEquity).length,
-    options: summaryRows.filter(isRowOption).length,
-    unlisted: summaryRows.filter(isRowUnlistedOption).length,
-    open: summaryRows.filter(isRowOpen).length,
-    matched: summaryRows.filter(isRowMatched).length,
-    profit: summaryRows.filter((r) => r.pnl > 0).length,
-    loss: summaryRows.filter((r) => r.pnl < 0).length,
-    unmatched: summaryRows.filter(isRowUnmatched).length,
-  };
+  /**
+   * The purchases the ledger never recorded — chiefly placement parcels, which
+   * reach a client as a sale with no matching buy — so the realised-P&L chart
+   * costs them instead of drawing the whole proceeds as profit.
+   *
+   * Arrives pre-built per account scope rather than being derived here, for two
+   * reasons. It has to be taken against the PRE-override stored figures — a
+   * desk correction reaches the chart separately through `chartDeltas` below,
+   * and counting it in both places would move every corrected month twice. And
+   * calling it in this component put React Compiler off optimising the whole
+   * island: `storedToSummaryRows` may alias its input, so any further call
+   * holding those rows is one the compiler must assume could mutate what
+   * `summaryRows` points at, which makes every `useMemo` keyed on it
+   * unpreservable.
+   */
+  const offLedger = offLedgerByScope[acctFilter] ?? offLedgerByScope.all ?? [];
 
-  const filteredSummaryRows = useMemo(() => {
-    return summaryRows.filter((r) => {
-      const query = pnlSearch.trim().toLowerCase();
-      const matchesSearch =
-        !query ||
-        r.ticker.toLowerCase().includes(query) ||
-        r.name.toLowerCase().includes(query);
+  const pnlTabCounts = useMemo(() => pnlFilterCounts(summaryRows), [summaryRows]);
 
-      if (!matchesSearch) return false;
-
-      if (pnlFilter === "matched") return isRowMatched(r);
-      if (pnlFilter === "profit") return r.pnl > 0;
-      if (pnlFilter === "loss") return r.pnl < 0;
-      if (pnlFilter === "unmatched") return isRowUnmatched(r);
-      if (pnlFilter === "options") return isRowOption(r);
-      if (pnlFilter === "unlisted") return isRowUnlistedOption(r);
-      if (pnlFilter === "open") return isRowOpen(r);
-      if (pnlFilter === "equity") return isRowEquity(r);
-      return true;
-    });
-  }, [summaryRows, pnlSearch, pnlFilter]);
+  const filteredSummaryRows = useMemo(
+    () => filterPnlRows(summaryRows, pnlFilter, pnlSearch),
+    [summaryRows, pnlFilter, pnlSearch],
+  );
 
   const filteredSummaryTotal = useMemo(
     () => grandTotal(filteredSummaryRows),
@@ -345,7 +314,11 @@ export function ClientDetailClient({
       .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
       .map((r) => [r.ticker, r.pnl - r.computed.pnl]),
   );
-  const chartPeriods = realizedByMonth(attributeSells(visibleTrades), chartDeltas);
+
+  const chartPeriods = realizedByMonth(
+    attributeSells(visibleTrades, offLedger),
+    chartDeltas,
+  );
 
   /** Export honours the account filter, so the file always matches the screen. */
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -494,67 +467,20 @@ export function ClientDetailClient({
   // grant, where its strike sits against the underlying — the ITM badge and the
   // exercise value that badge claims both read off this ONE derivation, so they
   // cannot disagree.
-  const allOptionSummaryRows = useMemo(() => {
-    return summaryRows.filter(isRowOption).map((r) => {
-      // An unlisted grant's count sits on the sell side (it was never bought)
-      // and its open quantity is negative, so magnitude is what is held.
-      const qty =
-        r.buyQty > 0
-          ? r.buyQty
-          : r.sellQty > 0
-          ? r.sellQty
-          : r.openQty !== undefined && r.openQty !== 0
-          ? Math.abs(r.openQty)
-          : 0;
+  const allOptionSummaryRows = useMemo(
+    () => optionSummaryRows(summaryRows),
+    [summaryRows],
+  );
 
-      // ONLY the modelled grants. A listed series is quoted and traded on its
-      // own market — the Current Value column already carries what it is worth,
-      // and an intrinsic figure struck off the underlying would be a second,
-      // unrelated number sitting beside it claiming to describe the same row.
-      const isUnlisted = isRowUnlistedOption(r);
-      const strike = isUnlisted ? r.strike ?? null : null;
-      const spot = isUnlisted ? r.underlyingPrice ?? null : null;
+  const optionTabCounts = useMemo(
+    () => optionFilterCounts(allOptionSummaryRows),
+    [allOptionSummaryRows],
+  );
 
-      return {
-        row: r,
-        qty,
-        strike,
-        spot,
-        // Placement grants are calls by construction.
-        money: isUnlisted
-          ? moneynessOf({ spot, strike, qty, kind: "Call" })
-          : UNKNOWN_MONEYNESS,
-      };
-    });
-  }, [summaryRows]);
-
-  type OptionTabId = "all" | "listed" | "unlisted" | "itm";
-
-  const optionTabCounts: Record<OptionTabId, number> = {
-    all: allOptionSummaryRows.length,
-    listed: allOptionSummaryRows.filter((o) => !isRowUnlistedOption(o.row)).length,
-    unlisted: allOptionSummaryRows.filter((o) => isRowUnlistedOption(o.row)).length,
-    itm: allOptionSummaryRows.filter((o) => o.money.isItm).length,
-  };
-
-  const filteredOptionRows = useMemo(() => {
-    return allOptionSummaryRows.filter((o) => {
-      const r = o.row;
-      const query = optionsSearch.trim().toLowerCase();
-      const matchesSearch =
-        !query ||
-        r.ticker.toLowerCase().includes(query) ||
-        r.name.toLowerCase().includes(query) ||
-        (r.note && r.note.toLowerCase().includes(query));
-
-      if (!matchesSearch) return false;
-
-      if (optionsTabFilter === "listed") return !isRowUnlistedOption(r);
-      if (optionsTabFilter === "unlisted") return isRowUnlistedOption(r);
-      if (optionsTabFilter === "itm") return o.money.isItm;
-      return true;
-    });
-  }, [allOptionSummaryRows, optionsTabFilter, optionsSearch]);
+  const filteredOptionRows = useMemo(
+    () => filterOptionRows(allOptionSummaryRows, optionsTabFilter, optionsSearch),
+    [allOptionSummaryRows, optionsTabFilter, optionsSearch],
+  );
 
   const paginatedOptions = useMemo(() => {
     if (optionsPageSize >= filteredOptionRows.length) return filteredOptionRows;
@@ -562,14 +488,10 @@ export function ClientDetailClient({
     return filteredOptionRows.slice(start, start + optionsPageSize);
   }, [filteredOptionRows, optionsPage, optionsPageSize]);
 
-  const filteredOptionTotal = useMemo(() => {
-    const buyPrice = filteredOptionRows.reduce((s, o) => s + o.row.buyPrice, 0);
-    const sellOrCurrent = filteredOptionRows.reduce((s, o) => s + o.row.sellOrCurrent, 0);
-    const pnl = filteredOptionRows.reduce((s, o) => s + o.row.pnl, 0);
-    const qty = filteredOptionRows.reduce((s, o) => s + o.qty, 0);
-    const intrinsic = filteredOptionRows.reduce((s, o) => s + o.money.intrinsicValue, 0);
-    return { buyPrice, sellOrCurrent, pnl, qty, intrinsic };
-  }, [filteredOptionRows]);
+  const filteredOptionTotal = useMemo(
+    () => optionTotals(filteredOptionRows),
+    [filteredOptionRows],
+  );
 
   const paginatedBids = useMemo(() => {
     if (bidsPageSize >= bidRows.length) return bidRows;
@@ -774,6 +696,43 @@ export function ClientDetailClient({
                   })
                 )}
               </tbody>
+              {/* The Grand Total the P&L and Options tables have always had, and
+                  this one did not. Taken over every position in scope, never
+                  over the page — a footer that totalled 10 of 54 would be a
+                  different number every time you paged.
+
+                  UNREALISED, matching the column above it: today's market value
+                  against what was paid, on positions still held. Realised P&L is
+                  on the Historical P&L tab, where a sale has a date to sit on.
+
+                  Quantities are not totalled — units of different companies are
+                  not the same thing. */}
+              {visiblePositions.length > 0 && (
+                <tfoot>
+                  <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
+                    <td className="px-4.5 py-3" colSpan={2}>
+                      Grand Total
+                      {paginatedPositions.length !== visiblePositions.length
+                        ? ` (all ${visiblePositions.length} positions)`
+                        : ""}
+                    </td>
+                    <td className="px-4.5 py-3" />
+                    <td className="px-4.5 py-3" />
+                    <td className="px-4.5 py-3" />
+                    <td className="px-4.5 py-3 text-right font-mono">${money2(tv)}</td>
+                    <td
+                      className={`px-4.5 py-3 text-right font-mono ${tpl >= 0 ? "text-gain" : "text-loss-d"}`}
+                    >
+                      {tpl < 0 ? "-" : ""}${money2(Math.abs(tpl))}
+                      <div className="text-[10px] font-normal">
+                        {tpl >= 0 ? "+" : ""}
+                        {tplp.toFixed(1)}%
+                      </div>
+                    </td>
+                    <td className="px-4.5 py-3" />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
           <TablePagination
@@ -929,32 +888,9 @@ export function ClientDetailClient({
             <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
               {/* Full-width Segmented Filter Tabs */}
               <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap border border-line/60">
-                {(
-                  [
-                    "all",
-                    "equity",
-                    "options",
-                    "unlisted",
-                    "open",
-                    "matched",
-                    "profit",
-                    "loss",
-                    "unmatched",
-                  ] as const
-                ).map((f) => {
+                {PNL_FILTERS.map((f) => {
                   const active = pnlFilter === f;
                   const count = pnlTabCounts[f];
-                  const labels: Record<HistoricalPnlFilter, string> = {
-                    all: "All Tickers",
-                    equity: "Equity",
-                    options: "Options",
-                    unlisted: "Unlisted Options",
-                    open: "Open",
-                    matched: "Matched P&L",
-                    profit: "Profit Only",
-                    loss: "Loss Only",
-                    unmatched: "Unmatched",
-                  };
                   return (
                     <button
                       key={f}
@@ -968,7 +904,7 @@ export function ClientDetailClient({
                         : "text-mut hover:text-ink font-medium hover:bg-white/50"
                         }`}
                     >
-                      <span>{labels[f]}</span>
+                      <span>{PNL_FILTER_LABELS[f]}</span>
                       <span
                         className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${active
                           ? f === "profit"
@@ -1145,22 +1081,15 @@ export function ClientDetailClient({
           <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
             {/* Segmented Filter Pills */}
             <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto flex-wrap sm:flex-nowrap border border-line/60">
-              {(
-                [
-                  { id: "all", label: "All Options" },
-                  { id: "listed", label: "Listed Options" },
-                  { id: "unlisted", label: "Unlisted Options" },
-                  { id: "itm", label: "In the Money" },
-                ] as const
-              ).map((t) => {
-                const active = optionsTabFilter === t.id;
-                const count = optionTabCounts[t.id];
+              {OPTION_FILTERS.map((t) => {
+                const active = optionsTabFilter === t;
+                const count = optionTabCounts[t];
                 return (
                   <button
-                    key={t.id}
+                    key={t}
                     type="button"
                     onClick={() => {
-                      setOptionsTabFilter(t.id);
+                      setOptionsTabFilter(t);
                       setOptionsPage(1);
                     }}
                     className={`flex-1 flex items-center justify-center gap-2 px-3 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
@@ -1169,7 +1098,7 @@ export function ClientDetailClient({
                         : "text-mut hover:text-ink font-medium hover:bg-white/50"
                     }`}
                   >
-                    <span>{t.label}</span>
+                    <span>{OPTION_FILTER_LABELS[t]}</span>
                     <span
                       className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
                         active

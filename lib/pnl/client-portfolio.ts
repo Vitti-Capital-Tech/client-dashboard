@@ -1,5 +1,5 @@
 import { storedToSummaryRows } from "../export/stored-pnl.ts";
-import { grandTotal } from "../export/order-history.ts";
+import { grandTotal, type PnlSummaryRow } from "../export/order-history.ts";
 import type { PnlOverrideRow } from "../data/holdings.ts";
 import type { StoredPnlRow } from "../data/pnl.ts";
 
@@ -20,11 +20,11 @@ import type { StoredPnlRow } from "../data/pnl.ts";
  * overrides applied.
  *
  * ── What is deliberately NOT carried across ─────────────────────────────────
- * `PnlSummaryRow` also holds the desk's working notes — `flagged` (this row
- * needs a human), `edited` / `overridden` (a figure was corrected by hand),
- * `note` — and those are how the firm works, not facts about the client's
- * money. A client seeing "corrected by hand" against their own position learns
- * nothing they can act on and quite a lot about internal process.
+ * `PnlSummaryRow` also holds the desk's working notes — `edited` / `overridden`
+ * (a figure was corrected by hand) and the free-text `note` — and those are how
+ * the firm works, not facts about the client's money. A client seeing
+ * "corrected by hand" against their own position learns nothing they can act on
+ * and quite a lot about internal process.
  *
  * The one operational field whose EFFECT must survive is `excludedFromTotal`:
  * it is set when a row's cost is genuinely unknown, and summing such a row
@@ -87,10 +87,48 @@ export type ClientPortfolio = {
   overrideDeltas: [string, number][];
 };
 
-export function clientPortfolio(
+/**
+ * The same figures, but as full `PnlSummaryRow`s — so the client portal can
+ * render the desk's own Historical P&L and Options tables rather than thinner
+ * tables of its own.
+ *
+ * ── Why the full row, and what is blanked out of it ─────────────────────────
+ * Those tables ask things `ClientPortfolioRow` cannot answer: is this a listed
+ * series or a modelled grant, what is its strike against spot, do the two legs
+ * reconcile, is the parcel still open. Every one of those is a fact about the
+ * client's own position, so it crosses over.
+ *
+ * What does not cross over is the desk's WORKING — the free-text `note`, which
+ * is written for the audit trail and addressed to us, and the `edited` /
+ * `overridden` marks that say a figure was corrected by hand. Those are blanked
+ * HERE, on the server, rather than merely left unrendered: an unrendered field
+ * is still in the page's payload, and "the client cannot see it" has to mean
+ * they were never sent it.
+ *
+ * `flagged` and `type` are kept verbatim, deliberately. `type` already says
+ * "CHECK - sold more than bought" in words, so dropping the styling that goes
+ * with it would hide the signal while keeping the sentence — and re-wording it
+ * for the client would be the one thing `statusOf` warns against: one row
+ * reading two different things on two screens.
+ */
+export type ClientSummary = {
+  rows: PnlSummaryRow[];
+  total: { buyPrice: number; sellOrCurrent: number; pnl: number };
+  outsideTotal: number;
+  overrideDeltas: [string, number][];
+};
+
+const NOTHING_OVERRIDDEN = {
+  buyQty: false,
+  sellQty: false,
+  buyPrice: false,
+  sellOrCurrent: false,
+} as const;
+
+export function clientSummary(
   stored: StoredPnlRow[],
   overrides: PnlOverrideRow[] = [],
-): ClientPortfolio {
+): ClientSummary {
   // Keyed by `parent` exactly as the staff page keys it, so a correction lands
   // on the same row for both of them.
   const overrideMap = new Map(overrides.map((o) => [o.parent, { ...o, parent: o.parent }]));
@@ -103,11 +141,59 @@ export function clientPortfolio(
 
   // Half a cent of slack: these are two floating-point paths to the same
   // figure, and a delta of 1e-13 is not a correction anybody made.
+  //
+  // Read BEFORE the marks are blanked below, which is the only order that
+  // works: these deltas are what keep the dated window and the chart agreeing
+  // with the corrected table, and `edited` is how a correction is found.
   const overrideDeltas: [string, number][] = summary
     .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
     .map((r) => [r.ticker, r.pnl - r.computed.pnl]);
 
-  const rows: ClientPortfolioRow[] = summary.map((r) => ({
+  const rows: PnlSummaryRow[] = summary.map((r) => ({
+    ...r,
+    edited: false,
+    overridden: { ...NOTHING_OVERRIDDEN },
+    note: null,
+    /**
+     * The status, without the trailing `(edited)` marker.
+     *
+     * `storedToSummaryRows` appends that marker to `type` itself, which makes it
+     * the one place the desk's working travels as WORDING rather than as a flag
+     * — and the Type column prints `type` verbatim, so blanking `edited` and
+     * `overridden` while leaving this would have put "Matched (edited)" on the
+     * client's own screen. The status in front of it is kept exactly as it is;
+     * only the marker goes.
+     */
+    type: r.type.replace(/ \(edited\)$/, ""),
+    // `computed` is what the sources said BEFORE a correction, and the table
+    // renders it as "was $X" beside an edited figure. Set to the values in
+    // force, so there is nothing to compare against and nothing to leak.
+    computed: {
+      buyQty: r.buyQty,
+      sellQty: r.sellQty,
+      buyPrice: r.buyPrice,
+      sellOrCurrent: r.sellOrCurrent,
+      pnl: r.pnl,
+    },
+  }));
+
+  return { rows, total, outsideTotal, overrideDeltas };
+}
+
+/**
+ * The narrow view, for the screens that only need the figures.
+ *
+ * Delegates, so the sanitisation and the total have exactly one implementation.
+ * This used to BE that implementation, and a second copy of "what a client is
+ * not shown" is the last thing worth having two of.
+ */
+export function clientPortfolio(
+  stored: StoredPnlRow[],
+  overrides: PnlOverrideRow[] = [],
+): ClientPortfolio {
+  const summary = clientSummary(stored, overrides);
+
+  const rows: ClientPortfolioRow[] = summary.rows.map((r) => ({
     ticker: r.ticker,
     name: r.name,
     buyQty: r.buyQty,
@@ -120,7 +206,12 @@ export function clientPortfolio(
     type: r.type,
   }));
 
-  return { rows, total, outsideTotal, overrideDeltas };
+  return {
+    rows,
+    total: summary.total,
+    outsideTotal: summary.outsideTotal,
+    overrideDeltas: summary.overrideDeltas,
+  };
 }
 
 /** Is this row an option of either kind? The rollup says so in `type`. */

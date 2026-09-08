@@ -1,6 +1,7 @@
 import type { Position, OptionRow, TradeRow } from "./queries";
 import {
   replayLedger,
+  type LedgerLine,
   type SellAttribution,
 } from "../import/trades.ts";
 import { money } from "../import/normalize.ts";
@@ -136,21 +137,39 @@ export type RealizedPeriod = {
  *
  * Pass trades already scoped to one account — the account dimension is dropped
  * here (`scope: ""`) because the caller has filtered.
+ *
+ * ── `offLedger`: the purchases the ledger never recorded ────────────────────
+ * A placement reaches the client as a SALE with no matching purchase: it is
+ * transacted through the house account and journalled out, so no client
+ * contract note exists. Replaying the ledger alone therefore costed those sales
+ * at zero and reported the whole proceeds as profit — while the stored P&L
+ * beside it showed the real cost, which the tracker merge had filled in.
+ *
+ * `lib/pnl/off-ledger-buys.ts` recovers those parcels; they are handed in here
+ * so the replay pools them like any other purchase. Callers that have no stored
+ * rows to recover from pass nothing and get the old behaviour, which for a book
+ * of purely on-market trades is the same answer.
  */
-export function attributeSells(trades: TradeRow[]): SellAttribution[] {
-  return replayLedger(
-    trades.map((t) => ({
-      scope: "",
-      parent: t.parent,
-      cnote: t.cnote,
-      side: t.side,
-      tradeDate: t.tradeDate,
-      units: t.units,
-      value: t.value,
-      status: t.status,
-      fees: t.brokerage + t.otherCharges + t.gst,
-    })),
-  ).sells;
+export function attributeSells(
+  trades: TradeRow[],
+  offLedger: LedgerLine[] = [],
+): SellAttribution[] {
+  return replayLedger([
+    ...trades.map(
+      (t): LedgerLine => ({
+        scope: "",
+        parent: t.parent,
+        cnote: t.cnote,
+        side: t.side,
+        tradeDate: t.tradeDate,
+        units: t.units,
+        value: t.value,
+        status: t.status,
+        fees: t.brokerage + t.otherCharges + t.gst,
+      }),
+    ),
+    ...offLedger,
+  ]).sells;
 }
 
 /**

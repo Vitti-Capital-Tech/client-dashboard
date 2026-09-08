@@ -1,9 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Search, X } from "lucide-react";
 import type {
+  AccountRow,
   Position,
+  OptionRow,
   SignalRow,
+  TradeRow,
   SecurityCommentaryRow,
 } from "@/lib/data/queries";
 import {
@@ -11,15 +15,73 @@ import {
   posCost,
   posPL,
   realizedBetween,
+  realizedByMonth,
+  attributeSells,
+  unlistedValue,
   monthsBack,
 } from "@/lib/data/compute";
-import type { SellAttribution } from "@/lib/import/trades";
-import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+import {
+  buildPnlSummaryCsv,
+  grandTotal,
+  pnlSummaryFilename,
+  SUMMARY_HEADERS,
+  type PnlSummaryRow,
+} from "@/lib/export/order-history";
+import { buildPnlSummaryXlsx } from "@/app/actions/exports";
+// The row predicates, the filters and the option derivation are shared with the
+// staff console, which shows these same three tables. That sharing is the point:
+// a client and their adviser reading different numbers under the same heading is
+// not a display bug, it is a conversation nobody can win.
+import {
+  isRowUnlistedOption,
+  filterPnlRows,
+  pnlFilterCounts,
+  optionSummaryRows,
+  filterOptionRows,
+  optionFilterCounts,
+  optionTotals,
+  PNL_FILTERS,
+  PNL_FILTER_LABELS,
+  OPTION_FILTERS,
+  OPTION_FILTER_LABELS,
+  type PnlFilter,
+  type OptionFilter,
+} from "@/lib/pnl/summary-rows";
+import type { ClientPortfolioRow, ClientSummary } from "@/lib/pnl/client-portfolio";
+import type { LedgerLine } from "@/lib/import/trades";
 import { sectorMix, type SectorScope } from "@/lib/pnl/sector-mix";
+import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
+import { PnlRow } from "@/app/components/PnlRow";
+import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { TablePagination } from "@/app/components/TablePagination";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 const qty0 = (n: number) => (n ? Math.round(n).toLocaleString("en-AU") : "—");
+
+/**
+ * Money to the cent, thousands-separated — no `$`, the callers add it.
+ *
+ * The rest of this page rounds to the dollar, which is right for a portfolio
+ * headline. The Historical P&L and Options tables do NOT: they show settled
+ * cash amounts from contract notes, and a $3,634.80 sale must not read as
+ * $3,635 on the client's screen while their adviser's screen shows the cents.
+ */
+const money2 = (n: number): string =>
+  n.toLocaleString("en-AU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+/**
+ * Option strikes and spots, which are quoted in fractions of a cent. Rounding
+ * a $0.0125 strike to $0.01 would make the ITM arithmetic beside it fail to
+ * add up, so up to four places are kept and trailing zeros dropped.
+ */
+const money4 = (n: number): string =>
+  n.toLocaleString("en-AU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4,
+  });
 
 /**
  * A return as a percentage of cost, or null when there is no cost to divide by.
@@ -135,27 +197,58 @@ const RANGE_PRESETS: { label: string; months: number }[] = [
 ];
 
 export function PositionsClient({
+  accounts,
+  activeAccountId,
   positions,
-  cash,
-  unlisted,
+  options,
   signals,
-  portfolio,
-  sells,
+  summaryByScope,
+  offLedgerByScope,
+  trades,
   sectorByTicker,
   commentary,
 }: {
-  positions: Position[];
-  cash: number;
-  unlisted: number;
-  signals: Record<string, SignalRow>;
-  /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
-  portfolio: ClientPortfolio;
+  /** Every account this client holds — what the account filter offers. */
+  accounts: AccountRow[];
   /**
-   * Every sale, with the date its money was realised on, replayed on the server
-   * through the importer's own cost-basis walk. What the date range is taken
-   * over.
+   * The account the portal header's own switcher is on.
+   *
+   * Seeds the filter below, so the page opens agreeing with the "Viewing
+   * &lt;account&gt;" line above it rather than on a total the header does not
+   * claim. From then on the two are independent: the filter can widen to All
+   * accounts, which the header switcher deliberately cannot offer — every other
+   * client page is scoped to exactly one account.
    */
-  sells: SellAttribution[];
+  activeAccountId: string;
+  /** The client's whole book, at account grain. Filtered here, not fetched so. */
+  positions: Position[];
+  options: OptionRow[];
+  signals: Record<string, SignalRow>;
+  /**
+   * The desk's own stored P&L rows, one set per account plus `all`.
+   *
+   * Pre-scoped on the server because a desk correction is stored per account
+   * and is resolved while the row is built — see the page for why filtering
+   * finished rows would apply one account's correction to another's figures.
+   */
+  summaryByScope: Record<string, ClientSummary>;
+  /**
+   * Per scope, the purchases the contract-note ledger never recorded — chiefly
+   * placement parcels, which reach the client as a sale with no matching buy.
+   *
+   * Replayed alongside the ledger so those sales are costed instead of being
+   * reported as pure profit and flagged "cost base not on file". Recovered on
+   * the server, from the pre-override stored figures; see the page and
+   * lib/pnl/off-ledger-buys.ts.
+   */
+  offLedgerByScope: Record<string, LedgerLine[]>;
+  /**
+   * The contract-note ledger. The dated realised window, the by-month chart and
+   * the Bought / Sold / Fees totals are all replayed from it in the browser, at
+   * whatever account scope is selected — which is exactly what the staff console
+   * does with the same rows, through the same `attributeSells`.
+   */
+  trades: TradeRow[];
   /**
    * Ticker → sector, with a derivative already resolved to its ordinary's
    * sector by the caller. Passed in because the lookup needs `securities`,
@@ -170,8 +263,23 @@ export function PositionsClient({
    */
   commentary: Record<string, SecurityCommentaryRow>;
 }) {
-  const [tab, setTab] = useState<"holdings" | "pnl" | "analytics">("holdings");
+  const [tab, setTab] = useState<
+    "holdings" | "historical" | "options" | "analytics"
+  >("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
+
+  /**
+   * Which account the figures cover: `all`, or one of them.
+   *
+   * Seeded from the portal header's switcher so the page agrees with it on
+   * load. Only rendered — and only meaningful — where there is more than one
+   * account, which is also the only case the server builds per-account scopes
+   * for: a single-account client falls through to `all`, which for them IS that
+   * one account.
+   */
+  const [acctFilter, setAcctFilter] = useState<string>(() =>
+    accounts.length > 1 && activeAccountId ? activeAccountId : "all",
+  );
 
   // Search + paging per table. A client with a long history has hundreds of P&L
   // lines — one tested account has 334 — and scrolling is not a way to find a
@@ -180,8 +288,101 @@ export function PositionsClient({
   const [holdPage, setHoldPage] = useState(1);
   const [holdSize, setHoldSize] = useState(25);
   const [pnlSearch, setPnlSearch] = useState("");
+  const [pnlFilter, setPnlFilter] = useState<PnlFilter>("all");
   const [pnlPage, setPnlPage] = useState(1);
   const [pnlSize, setPnlSize] = useState(25);
+  const [optionsSearch, setOptionsSearch] = useState("");
+  const [optionsFilter, setOptionsFilter] = useState<OptionFilter>("all");
+  const [optionsPage, setOptionsPage] = useState(1);
+  const [optionsSize, setOptionsSize] = useState(25);
+
+  /**
+   * Everything the account filter decides, in one place.
+   *
+   * `inAcct` is the same test the staff console uses, and the four collections
+   * below are the same four it derives from it. Positions, options and trades
+   * each state their own account so they are filtered here; the P&L summary
+   * rows arrive already scoped (see the props).
+   */
+  const scoped = summaryByScope[acctFilter] ?? summaryByScope.all;
+  const summaryRows = scoped.rows;
+
+  /** What the KPI strip says its figures cover, in words. */
+  const scopeLabel =
+    acctFilter === "all"
+      ? accounts.length > 1
+        ? "all accounts"
+        : "your account"
+      : (accounts.find((a) => a.id === acctFilter)?.label ?? "this account");
+
+  // Compared inline rather than through a shared `inAcct(id)` helper: a closure
+  // over `acctFilter` is invisible to the dependency linter, so each of these
+  // would need its rule silenced to say what the array already says.
+  const visiblePositions = useMemo(
+    () =>
+      acctFilter === "all"
+        ? positions
+        : positions.filter((p) => p.accountId === acctFilter),
+    [positions, acctFilter],
+  );
+  const visibleTrades = useMemo(
+    () =>
+      acctFilter === "all"
+        ? trades
+        : trades.filter((t) => t.accountId === acctFilter),
+    [trades, acctFilter],
+  );
+
+  const changeAccount = (id: string) => {
+    setAcctFilter(id);
+    setHoldPage(1);
+    setPnlPage(1);
+    setOptionsPage(1);
+    setPnlSearch("");
+    setPnlFilter("all");
+    setOptionsSearch("");
+    setOptionsFilter("all");
+    // Back to "derived", so the dated window follows the new account's own sale
+    // history instead of keeping a range taken over the previous account's.
+    setRange(null);
+  };
+
+  /**
+   * The positions the ANALYTICS tab reads, which is the active account's —
+   * unchanged from when this page fetched only that account.
+   *
+   * Analytics deliberately sits outside the account filter: its asset-allocation
+   * and top-movers cards are about one account's current book, its P&L split is
+   * about the whole client, and it says so on each card. The filter row is
+   * hidden while that tab is open rather than left showing over figures it does
+   * not move.
+   */
+  const activePositions = useMemo(
+    () => positions.filter((p) => p.accountId === activeAccountId),
+    [positions, activeAccountId],
+  );
+
+  /**
+   * Every sale, with the date its money was realised on.
+   *
+   * Replayed in the browser through the importer's own cost-basis walk, at
+   * whatever account scope is selected — the same call the staff console makes
+   * on the same rows. It used to be done on the server and shipped
+   * pre-attributed, which was cheaper but can no longer answer the question:
+   * cost basis is attributed per scope, so an account filter changes the
+   * arithmetic and not just which rows survive it.
+   *
+   * The recovered off-ledger purchases go in alongside the ledger, so a
+   * placement's sale is costed rather than booked as pure profit.
+   */
+  const sells = useMemo(
+    () =>
+      attributeSells(
+        visibleTrades,
+        offLedgerByScope[acctFilter] ?? offLedgerByScope.all ?? [],
+      ),
+    [visibleTrades, offLedgerByScope, acctFilter],
+  );
 
   /**
    * The realised-P&L window.
@@ -205,16 +406,35 @@ export function PositionsClient({
     [sells],
   );
 
+  /** Every sale on file — what "All time" means, and the pickers' own bounds. */
   const defaultRange = useMemo(
-    () => (lastSaleDate ? monthsBack(lastSaleDate, 12) : { from: "", to: "" }),
-    [lastSaleDate],
+    () => ({ from: firstSaleDate, to: lastSaleDate }),
+    [firstSaleDate, lastSaleDate],
   );
-  const [rangeFrom, setRangeFrom] = useState(defaultRange.from);
-  const [rangeTo, setRangeTo] = useState(defaultRange.to);
+
+  /**
+   * The picked range, or `null` for ALL TIME.
+   *
+   * Nullable rather than two seeded strings, and that carries two facts at once.
+   *
+   * Seeded state does not re-seed, so with the account filter alongside it, two
+   * strings left the pickers pinned to the previous account's sale history — a
+   * range whose own `min`/`max` no longer contained it, reading $0 realised over
+   * a window the client never chose. `null` follows the scope instead.
+   *
+   * And `null` is what the table reads to decide WHAT it is showing: all time is
+   * every parcel the client has ever held, sold or not, which is the reference
+   * view. A narrower range can only describe money that actually changed hands,
+   * so the table switches to realised sales — see `tableRows`.
+   */
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+  const isAllTime = range === null;
+  const rangeFrom = range?.from ?? defaultRange.from;
+  const rangeTo = range?.to ?? defaultRange.to;
 
   const deltaByTicker = useMemo(
-    () => new Map(portfolio.overrideDeltas),
-    [portfolio.overrideDeltas],
+    () => new Map(scoped.overrideDeltas),
+    [scoped.overrideDeltas],
   );
   const window_ = useMemo(
     () =>
@@ -226,45 +446,79 @@ export function PositionsClient({
 
   /** Which preset, if any, the current range corresponds to — for the pills. */
   const activePreset = useMemo(() => {
-    if (!lastSaleDate || rangeTo !== lastSaleDate) return null;
+    // All time has its own pill. Without this guard a client whose sale history
+    // happens to be almost exactly a year long would see both it and `1Y` lit,
+    // which is two answers to "what am I looking at".
+    if (isAllTime || !lastSaleDate || rangeTo !== lastSaleDate) return null;
     return (
       RANGE_PRESETS.find((p) => monthsBack(lastSaleDate, p.months).from === rangeFrom)
         ?.label ?? null
     );
-  }, [lastSaleDate, rangeFrom, rangeTo]);
+  }, [isAllTime, lastSaleDate, rangeFrom, rangeTo]);
 
-  const applyPreset = (months: number) => {
+  /**
+   * Changing the period changes WHICH TABLE is on screen — all-time parcels, or
+   * the sales inside a window — so the filter and the page number go back to
+   * the start with it. A `Matched` pill carried into a realised view would
+   * match nothing and read as an empty account.
+   */
+  const pickRange = (next: { from: string; to: string } | null) => {
+    setRange(next);
+    setPnlFilter("all");
+    setPnlPage(1);
+  };
+
+  const pickPreset = (months: number) => {
     if (!lastSaleDate) return;
-    const { from, to } = monthsBack(lastSaleDate, months);
-    setRangeFrom(from);
-    setRangeTo(to);
+    pickRange(monthsBack(lastSaleDate, months));
   };
 
-  const applyAllTime = () => {
-    if (!firstSaleDate || !lastSaleDate) return;
-    setRangeFrom(firstSaleDate);
-    setRangeTo(lastSaleDate);
-  };
+  /** Back to `null`, which is All time AND the table's reference view. */
+  const pickAllTime = () => pickRange(null);
 
   // ── Sector chart: which holdings, and which slice is being pointed at ──────
   const [sectorScope, setSectorScope] = useState<SectorScope>("held");
   const [hoveredSector, setHoveredSector] = useState<string | null>(null);
 
   /**
+   * The client-wide portfolio, in the narrow shape the Analytics tab and the
+   * sector chart read.
+   *
+   * The `all` scope whatever the account filter says, deliberately: Analytics
+   * sits outside that filter (see `activePositions`), and its P&L split card
+   * already labels itself "all accounts".
+   */
+  const portfolio = useMemo(() => {
+    const rows: ClientPortfolioRow[] = summaryByScope.all.rows.map((r) => ({
+      ticker: r.ticker,
+      name: r.name,
+      buyQty: r.buyQty,
+      sellQty: r.sellQty,
+      heldQty: r.heldQty ?? 0,
+      buyPrice: r.buyPrice,
+      sellOrCurrent: r.sellOrCurrent,
+      pnl: r.pnl,
+      openPosition: r.openPosition,
+      type: r.type,
+    }));
+    return { rows, total: summaryByScope.all.total };
+  }, [summaryByScope]);
+
+  /**
    * Today's market value for a still-held row, by ticker.
    *
    * The P&L rows are the source of truth for cost and result, but they carry no
-   * live price; `positions` does. Summed rather than looked up, because a client
-   * can hold the same security in more than one account and the P&L rows are
-   * already rolled up across them.
+   * live price; the holdings snapshot does. Summed rather than looked up,
+   * because a client can hold the same security in more than one account and
+   * the P&L rows are already rolled up across them.
    */
   const marketValueByTicker = useMemo(() => {
     const map = new Map<string, number>();
-    for (const p of positions) {
+    for (const p of activePositions) {
       map.set(p.code, (map.get(p.code) ?? 0) + posValue(p));
     }
     return map;
-  }, [positions]);
+  }, [activePositions]);
 
   const mix = useMemo(
     () =>
@@ -297,19 +551,278 @@ export function PositionsClient({
   const [tradeAction, setTradeAction] = useState<"Buy" | "Sell">("Buy");
   const [tradeAmount, setTradeAmount] = useState("10,000");
 
-  // Market value of what is held right now. Cost base and P&L deliberately do
-  // NOT come from here any more — see below.
-  let tv = 0;
-  positions.forEach(p => {
-    tv += posValue(p);
-  });
+  // ── Cash, and market value, at each of the two scopes on this page ─────────
+  //
+  // `active*` is the account the portal header is on and is what Analytics
+  // reads; `scoped*` follows the account filter and is what the KPI strip and
+  // the three tables read. They are the same figure for every client with one
+  // account, which is very nearly all of them.
+  const activeCash =
+    accounts.find((a) => a.id === activeAccountId)?.cash ?? 0;
+  const scopedCash =
+    acctFilter === "all"
+      ? accounts.reduce((sum, a) => sum + a.cash, 0)
+      : (accounts.find((a) => a.id === acctFilter)?.cash ?? 0);
 
-  // The desk's stored figures. Cost base and P&L come from here rather than from
-  // `tv` above, so this page and the adviser's screen cannot report different
-  // returns on the same holdings.
-  const deskCost = portfolio.total.buyPrice;
-  const deskPnl = portfolio.total.pnl;
+  // Market value of what is held right now. Cost base and P&L deliberately do
+  // NOT come from here — see below.
+  const tv = activePositions.reduce((sum, p) => sum + posValue(p), 0);
+  const scopedTv = visiblePositions.reduce((sum, p) => sum + posValue(p), 0);
+
+  /**
+   * Carry on unlisted options — neither a listed position nor cash. Client-wide,
+   * as the Analytics allocation card has always read it.
+   *
+   * Two terms, and the second is the one that ever has a value. `option_holdings`
+   * has never held a row — it was demo-seed data, and nothing in the import or
+   * the tracker pipeline writes it — so the allocation card's "Unlisted /
+   * options" slice read $0 for every client, including those holding grants the
+   * recompute had priced. It is still read, so that anything ever entered there
+   * by hand is not silently dropped; the grants themselves come from the stored
+   * P&L rows, where they actually live.
+   */
+  const unlistedAllValue = useMemo(
+    () =>
+      optionSummaryRows(summaryByScope.all.rows)
+        .filter((o) => isRowUnlistedOption(o.row))
+        .reduce((s, o) => s + o.row.sellOrCurrent, 0),
+    [summaryByScope],
+  );
+  const unlisted = unlistedValue(options) + unlistedAllValue;
+
+  // The desk's stored figures, at the selected scope. Cost base and P&L come
+  // from here rather than from `scopedTv` above, so this page and the adviser's
+  // screen cannot report different returns on the same holdings.
+  const deskCost = scoped.total.buyPrice;
+  const deskPnl = scoped.total.pnl;
   const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
+
+  // ── The Historical P&L tab's own derivations ───────────────────────────────
+  //
+  // Every one of them is the staff console's, on the same rows: the ledger
+  // totals, the filtered table, and the by-month chart the corrections are
+  // folded into. Nothing here is a second way of working the numbers out — that
+  // is the whole point of the tab. What is different is the date range, which
+  // every figure on the tab now follows.
+
+  // Settled trades are the only ones that moved money; the rest are shown in
+  // the count for completeness but excluded from every total.
+  const settledTrades = useMemo(
+    () => visibleTrades.filter((t) => t.status === "SETTLED"),
+    [visibleTrades],
+  );
+
+  /**
+   * The trades inside the selected range, which is what the tiles count.
+   *
+   * All time is not special-cased: the range then spans every sale on file, and
+   * a purchase older than the first sale is deliberately still counted — it is
+   * money the client did spend, and "Bought" that silently omitted the oldest
+   * parcels would not tie to anything.
+   */
+  const rangedTrades = useMemo(
+    () =>
+      isAllTime
+        ? settledTrades
+        : settledTrades.filter(
+            (t) => t.tradeDate >= rangeFrom && t.tradeDate <= rangeTo,
+          ),
+    [settledTrades, isAllTime, rangeFrom, rangeTo],
+  );
+
+  const boughtTotal = rangedTrades
+    .filter((t) => t.side === "BUY")
+    .reduce((s, t) => s + t.value, 0);
+  const soldTotal = rangedTrades
+    .filter((t) => t.side === "SELL")
+    .reduce((s, t) => s + t.value, 0);
+  const feesTotal = rangedTrades.reduce(
+    (s, t) => s + t.brokerage + t.otherCharges + t.gst,
+    0,
+  );
+
+  /**
+   * Realised P&L over the range.
+   *
+   * NOT sold − bought: most of what was bought is still held, so the two are
+   * not comparable. It comes from the replay, which is also what the chart and
+   * the realised table below read — one number, three renderings.
+   *
+   * The stored `realized_pnl` rollup is deliberately not used here even for All
+   * time. It is the importer's replay of the contract-note ledger alone, so it
+   * carries the same placement gap this page now corrects for; reading it would
+   * put a figure on the tile that the table underneath contradicts.
+   */
+  const realizedTotal = window_?.realizedPl ?? 0;
+
+  /**
+   * The sales in the range, as table rows.
+   *
+   * A date range can only describe money that changed hands, so this is what
+   * the table shows once one is picked. Built into the same `PnlSummaryRow`
+   * shape the all-time rows use, so ONE table body renders both and the two
+   * views cannot drift into looking like different tables.
+   *
+   * `buyQty` is left at zero on purpose. The column means "units bought", and
+   * a window has no answer for it: the parcel being sold was acquired at some
+   * earlier date, quite possibly outside the range. Zero reads as "—".
+   */
+  const realisedRows: PnlSummaryRow[] = useMemo(() => {
+    if (!window_) return [];
+
+    const nameOf = new Map(summaryRows.map((r) => [r.ticker, r.name]));
+
+    return window_.contributors.map((c) => ({
+      ticker: c.parent,
+      name: nameOf.get(c.parent) ?? c.parent,
+      buyQty: 0,
+      sellQty: c.units,
+      heldQty: 0,
+      buyPrice: c.costOfSold,
+      sellOrCurrent: c.proceeds,
+      pnl: c.realizedPl,
+      openPosition: false,
+      // The status column reads "Closed" off these — which is the truth about a
+      // sale — and the cost warning travels in the wording instead.
+      type: c.noCostBasis ? "Realised · cost base not on file" : "Realised",
+      flagged: c.noCostBasis,
+      edited: false,
+      overridden: {
+        buyQty: false,
+        sellQty: false,
+        buyPrice: false,
+        sellOrCurrent: false,
+      },
+      note: null,
+      computed: {
+        buyQty: 0,
+        sellQty: c.units,
+        buyPrice: c.costOfSold,
+        sellOrCurrent: c.proceeds,
+        pnl: c.realizedPl,
+      },
+    }));
+  }, [window_, summaryRows]);
+
+  /** All time is every parcel ever held; a range is the sales inside it. */
+  const tableRows = isAllTime ? summaryRows : realisedRows;
+
+  /**
+   * The pills a range can actually answer.
+   *
+   * Open, Matched, Unlisted Options and the rest describe the STATE of a
+   * position, and every row in a realised view is a completed sale — they would
+   * all read zero and invite the reader to click something that cannot work.
+   */
+  const activeFilters = isAllTime
+    ? PNL_FILTERS
+    : (["all", "profit", "loss"] as const);
+
+  const pnlTabCounts = useMemo(() => pnlFilterCounts(tableRows), [tableRows]);
+
+  const filteredSummaryRows = useMemo(
+    () => filterPnlRows(tableRows, pnlFilter, pnlSearch),
+    [tableRows, pnlFilter, pnlSearch],
+  );
+
+  const filteredSummaryTotal = useMemo(
+    () => grandTotal(filteredSummaryRows),
+    [filteredSummaryRows],
+  );
+
+  /**
+   * The by-month chart, over the same range as everything else on the tab.
+   *
+   * A desk correction carries no date of its own, so each corrected company's
+   * delta is handed to the bucketer to spread across that company's sale
+   * months. Without it a corrected row would move the table's total and leave
+   * the chart behind — two figures on one screen, disagreeing.
+   */
+  const chartPeriods = useMemo(() => {
+    const inRange = isAllTime
+      ? sells
+      : sells.filter((s) => s.tradeDate >= rangeFrom && s.tradeDate <= rangeTo);
+    return realizedByMonth(inRange, deltaByTicker);
+  }, [sells, isAllTime, rangeFrom, rangeTo, deltaByTicker]);
+
+  // ── The Options tab, through the shared derivation ─────────────────────────
+  const allOptionRows = useMemo(
+    () => optionSummaryRows(summaryRows),
+    [summaryRows],
+  );
+  const optionTabCounts = useMemo(
+    () => optionFilterCounts(allOptionRows),
+    [allOptionRows],
+  );
+  const filteredOptionRows = useMemo(
+    () => filterOptionRows(allOptionRows, optionsFilter, optionsSearch),
+    [allOptionRows, optionsFilter, optionsSearch],
+  );
+  const filteredOptionTotal = useMemo(
+    () => optionTotals(filteredOptionRows),
+    [filteredOptionRows],
+  );
+
+  /**
+   * Exports, which are the two the desk has: the CSV for the data and the .xlsx
+   * for the colour-coded copy, since plain CSV cannot carry a fill.
+   *
+   * Both are built from `filteredSummaryRows` — the array the table itself
+   * renders — so the file always matches the screen, filter and search
+   * included. Recalculate and Preview CSV are deliberately NOT here: rebuilding
+   * the firm's stored figures is the desk's call, and `recalculateClientPnl`
+   * would refuse a client anyway.
+   */
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportName = (ext: "csv" | "xlsx") =>
+    pnlSummaryFilename(
+      "My portfolio",
+      acctFilter === "all"
+        ? null
+        : (accounts.find((a) => a.id === acctFilter)?.label ?? null),
+      new Date().toISOString().slice(0, 10),
+      ext,
+    );
+
+  const exportCsv = () =>
+    // The BOM makes Excel read the text as UTF-8 rather than the local
+    // codepage, which otherwise mangles non-ASCII company names.
+    downloadBlob(
+      new Blob(["﻿", buildPnlSummaryCsv(filteredSummaryRows)], {
+        type: "text/csv;charset=utf-8",
+      }),
+      exportName("csv"),
+    );
+
+  // The workbook is built by a server action (ExcelJS stays out of the client
+  // bundle), so this one is async and the button reflects that.
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const base64 = await buildPnlSummaryXlsx(
+        filteredSummaryRows,
+        "My portfolio — P&L summary",
+      );
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      downloadBlob(
+        new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }),
+        exportName("xlsx"),
+      );
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleOpenHolding = (code: string) => {
     setSelectedHolding(code);
@@ -366,57 +879,123 @@ export function PositionsClient({
    * absolute P&L so the positions that moved the total are at the top, which is
    * the order somebody reads their own return in.
    */
-  const holdingRows = useMemo(() => {
-    const q = holdSearch.trim().toLowerCase();
-    if (!q) return positions;
-    return positions.filter(
-      (p) =>
-        p.code.toLowerCase().includes(q) || (p.name ?? "").toLowerCase().includes(q),
-    );
-  }, [positions, holdSearch]);
+  /**
+   * The unlisted option grants, as holdings.
+   *
+   * ── Why they belong in this table ──────────────────────────────────────────
+   * They were missing from it, and that made the Holdings tab disagree with the
+   * client's own P&L: a free placement grant is a real, valued position — the
+   * recompute prices it and the Historical P&L tab counts its result — but it
+   * has no contract note and no line in the broker's holdings snapshot, which
+   * is the only thing this table used to read. So a client could see a gain in
+   * their P&L with nothing in Holdings to explain it.
+   *
+   * They cannot come from `option_holdings`: that table has never held a row —
+   * it was demo-seed data, and nothing in the import or the tracker pipeline
+   * writes it. The grants live in the stored P&L rows, which is where the
+   * Options tab reads them from too, through the same `optionSummaryRows` call.
+   *
+   * ── What a "last price" means for one ──────────────────────────────────────
+   * `sellOrCurrent` is a VALUE for the whole parcel, so the per-option figure is
+   * derived rather than read. It is a modelled price, not a market one — nothing
+   * quotes these — which is why the row says so on its face.
+   */
+  const unlistedHoldings = useMemo(
+    () =>
+      allOptionRows
+        .filter((o) => isRowUnlistedOption(o.row))
+        .map((o) => ({
+          code: o.row.ticker,
+          name: o.row.name,
+          qty: o.qty,
+          value: o.row.sellOrCurrent,
+          cost: o.row.buyPrice,
+          pnl: o.row.pnl,
+        })),
+    [allOptionRows],
+  );
 
-  const pnlRows = useMemo(() => {
-    const q = pnlSearch.trim().toLowerCase();
-    return [...portfolio.rows]
-      .filter(
-        (r) =>
-          !q || r.ticker.toLowerCase().includes(q) || r.name.toLowerCase().includes(q),
-      )
-      .sort((a, b) => Math.abs(b.pnl) - Math.abs(a.pnl));
-  }, [portfolio.rows, pnlSearch]);
+  /** What the unlisted grants in scope are carried at, all in. */
+  const unlistedScopedValue = unlistedHoldings.reduce((s, o) => s + o.value, 0);
 
   /**
-   * Realised P&L over a date range.
+   * The Holdings table's footer.
    *
-   * Captioned as REALISED throughout, and never as "your return over this
-   * period". A date range can only describe money that actually changed hands:
-   * unrealised P&L is a cost base against today's price, it belongs to no date,
-   * and there is no price history here to value a holding as at an earlier one.
-   * Labelling this as a period return would be the wrong number with no way for
-   * the client to tell.
+   * Taken over everything in scope, never over the page or the search result —
+   * the same rule the P&L table's Grand Total follows, and for the same reason:
+   * a footer that silently totalled 25 of 334 rows would be a different number
+   * every time you paged.
+   *
+   * `pnl` here is UNREALISED, because that is what the column above it is:
+   * today's value against what was paid, on positions still held. Realised P&L
+   * belongs to sales and lives on the Historical P&L tab, where it can be dated.
+   * Summing the two under one heading would add a figure that has settled to one
+   * that moves with the market.
+   *
+   * Quantities are deliberately not totalled: units of different companies are
+   * not the same thing.
    */
-  const renderRealisedWindow = () => {
-    if (!lastSaleDate || !window_) {
-      return (
-        <div className="card bg-white border border-line rounded-[14px] shadow-shadow p-5">
-          <b className="text-sm font-semibold text-ink">Realised over a period</b>
-          <p className="text-xs text-mut mt-1.5 leading-relaxed">
-            Nothing has been sold from your accounts yet, so there is no realised profit to
-            show over a period. The table below covers everything you hold.
-          </p>
-        </div>
-      );
-    }
+  const holdingsTotal = useMemo(() => {
+    const value =
+      visiblePositions.reduce((s, p) => s + posValue(p), 0) +
+      unlistedHoldings.reduce((s, o) => s + o.value, 0);
+    const cost =
+      visiblePositions.reduce((s, p) => s + posCost(p), 0) +
+      unlistedHoldings.reduce((s, o) => s + o.cost, 0);
+    return { value, cost, pnl: value - cost };
+  }, [visiblePositions, unlistedHoldings]);
 
-    const pl = window_.realizedPl;
-    // A return needs something to divide by. Cost of what was sold is the right
-    // denominator for realised P&L — not the portfolio's value, which includes
-    // everything that was never sold in the window.
-    const pct =
-      window_.costOfSold > 0 && Number.isFinite(pl / window_.costOfSold)
-        ? (pl / window_.costOfSold) * 100
-        : null;
+  /**
+   * One row per holding, listed and unlisted together.
+   *
+   * A tagged union rather than two tables: they answer the same question — what
+   * do I hold and what is it worth — and splitting them would leave the reader
+   * adding two subtotals to get their own position.
+   */
+  type HoldingRow =
+    | { kind: "listed"; position: Position }
+    | { kind: "unlisted"; option: (typeof unlistedHoldings)[number] };
 
+  const holdingRows = useMemo<HoldingRow[]>(() => {
+    const rows: HoldingRow[] = [
+      ...visiblePositions.map((p): HoldingRow => ({ kind: "listed", position: p })),
+      ...unlistedHoldings.map((o): HoldingRow => ({ kind: "unlisted", option: o })),
+    ];
+
+    const q = holdSearch.trim().toLowerCase();
+    if (!q) return rows;
+
+    return rows.filter((r) => {
+      const code = r.kind === "listed" ? r.position.code : r.option.code;
+      const name = (r.kind === "listed" ? r.position.name : r.option.name) ?? "";
+      return code.toLowerCase().includes(q) || name.toLowerCase().includes(q);
+    });
+  }, [visiblePositions, unlistedHoldings, holdSearch]);
+
+  /**
+   * The period every figure on the Historical P&L tab is taken over.
+   *
+   * ── Why it lives on the table rather than in a card of its own ────────────
+   * It used to drive a separate "Realised over a period" card, whose own
+   * contributors table listed holding, units sold, cost, proceeds and P&L —
+   * which is the same five things the P&L-by-company table underneath it was
+   * already listing. Two tables of the same shape, one screen, and the reader
+   * had to work out which one answered their question. There is one table now,
+   * and this says what it covers.
+   *
+   * ── What the range can and cannot mean ────────────────────────────────────
+   * Captioned as REALISED, never as "your return over this period". A date range
+   * can only describe money that actually changed hands: unrealised P&L is a
+   * cost base against today's price, it belongs to no date, and there is no
+   * price history here to value a holding as at an earlier one. Labelling this
+   * as a period return would be the wrong number with no way to tell.
+   *
+   * That is also why All time is a distinct state rather than the widest range:
+   * over all time the table can show every parcel the client has ever held,
+   * open ones included, which is the reference view. Narrow it and only sales
+   * remain.
+   */
+  const renderRangeBar = () => {
     const dateStr = (iso: string) =>
       new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", {
         day: "numeric",
@@ -425,193 +1004,98 @@ export function PositionsClient({
         timeZone: "UTC",
       });
 
-    return (
-      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-        <div className="px-4.5 py-4 border-b border-line flex flex-wrap justify-between items-start gap-3">
-          <div className="select-none">
-            <b className="text-ink text-sm font-semibold">Realised over a period</b>
-            <p className="text-xs text-mut mt-0.5 leading-normal">
-              Profit on what was <b>sold</b> between these dates. Holdings you still own are
-              not in this figure.
-            </p>
-          </div>
+    // No sales at all: there is nothing a range could narrow, so the controls
+    // are replaced by the reason rather than drawn over nothing.
+    if (!lastSaleDate) {
+      return (
+        <div className="px-4.5 py-3 border-b border-line bg-paper-2/40 text-[11px] text-mut leading-relaxed select-none">
+          Nothing has been sold from your accounts yet, so there is no period to
+          choose between — the table below covers everything you hold.
+        </div>
+      );
+    }
 
+    return (
+      <div className="px-4.5 py-3 border-b border-line bg-paper-2/40 space-y-2.5 select-none">
+        <div className="flex flex-wrap items-end gap-3">
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              onClick={pickAllTime}
+              className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
+                isAllTime ? "bg-navy text-white" : "bg-white border border-line text-mut hover:text-ink"
+              }`}
+            >
+              All time
+            </button>
             {RANGE_PRESETS.map((p) => (
               <button
                 key={p.label}
-                onClick={() => applyPreset(p.months)}
+                onClick={() => pickPreset(p.months)}
                 className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
                   activePreset === p.label
                     ? "bg-navy text-white"
-                    : "bg-paper-2 text-mut hover:text-ink"
+                    : "bg-white border border-line text-mut hover:text-ink"
                 }`}
               >
                 {p.label}
               </button>
             ))}
-            <button
-              onClick={applyAllTime}
-              className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
-                rangeFrom === firstSaleDate && rangeTo === lastSaleDate
-                  ? "bg-navy text-white"
-                  : "bg-paper-2 text-mut hover:text-ink"
-              }`}
-            >
-              All
-            </button>
           </div>
-        </div>
 
-        {/* The pickers. `min`/`max` are pinned to the sale history so the range
-            cannot be dragged somewhere there was never anything to realise. */}
-        <div className="px-4.5 py-3.5 border-b border-line flex flex-wrap items-end gap-3 bg-paper-2/40">
-          <div className="space-y-1">
-            <label htmlFor="pnl-from" className="block text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              From
-            </label>
-            <input
-              id="pnl-from"
-              type="date"
-              value={rangeFrom}
-              min={firstSaleDate}
-              max={lastSaleDate}
-              onChange={(e) => setRangeFrom(e.target.value)}
-              className="border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs font-mono focus:border-green focus:outline-none"
-            />
-          </div>
-          <div className="space-y-1">
-            <label htmlFor="pnl-to" className="block text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              To
-            </label>
-            <input
-              id="pnl-to"
-              type="date"
-              value={rangeTo}
-              min={firstSaleDate}
-              max={lastSaleDate}
-              onChange={(e) => setRangeTo(e.target.value)}
-              className="border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs font-mono focus:border-green focus:outline-none"
-            />
-          </div>
-          <p className="text-[11px] text-mut leading-normal flex-1 min-w-45">
-            Sales on file run {dateStr(firstSaleDate)} – {dateStr(lastSaleDate)}.
-          </p>
-        </div>
-
-        {/* Headline */}
-        <div className="px-4.5 py-4 grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              Realised P&amp;L
+          {/* `min`/`max` are pinned to the sale history, so the range cannot be
+              dragged somewhere there was never anything to realise. */}
+          <div className="flex items-end gap-3">
+            <div className="space-y-1">
+              <label
+                htmlFor="pnl-from"
+                className="block text-[10px] font-semibold uppercase tracking-wider text-mut"
+              >
+                From
+              </label>
+              <input
+                id="pnl-from"
+                type="date"
+                value={rangeFrom}
+                min={firstSaleDate}
+                max={lastSaleDate}
+                onChange={(e) => pickRange({ from: e.target.value, to: rangeTo })}
+                className="border border-line-2 bg-white rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-mono focus:border-green focus:outline-none"
+              />
             </div>
-            <div
-              className={`font-mono font-bold text-xl mt-1 ${pl >= 0 ? "text-gain" : "text-loss-d"}`}
-            >
-              {pl >= 0 ? "+" : ""}
-              {money0(pl)}
-            </div>
-            <div className="text-[11px] text-mut mt-0.5">
-              {pct === null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% on cost`}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              Proceeds
-            </div>
-            <div className="font-mono font-semibold text-lg mt-1 text-ink">
-              {money0(window_.proceeds)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              Cost of sold
-            </div>
-            <div className="font-mono font-semibold text-lg mt-1 text-ink">
-              {money0(window_.costOfSold)}
-            </div>
-          </div>
-          <div>
-            <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut">
-              Sales
-            </div>
-            <div className="font-mono font-semibold text-lg mt-1 text-ink">
-              {window_.saleCount}
+            <div className="space-y-1">
+              <label
+                htmlFor="pnl-to"
+                className="block text-[10px] font-semibold uppercase tracking-wider text-mut"
+              >
+                To
+              </label>
+              <input
+                id="pnl-to"
+                type="date"
+                value={rangeTo}
+                min={firstSaleDate}
+                max={lastSaleDate}
+                onChange={(e) => pickRange({ from: rangeFrom, to: e.target.value })}
+                className="border border-line-2 bg-white rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-mono focus:border-green focus:outline-none"
+              />
             </div>
           </div>
         </div>
 
-        {/* Who moved it */}
-        {window_.contributors.length > 0 && (
-          <div className="overflow-x-auto border-t border-line">
-            <table className="w-full border-collapse text-left text-[12.5px] font-medium">
-              <thead>
-                <tr className="border-b border-line text-mut select-none">
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5">
-                    Holding
-                  </th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right hidden sm:table-cell">
-                    Units sold
-                  </th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right hidden md:table-cell">
-                    Cost
-                  </th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right">
-                    Proceeds
-                  </th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-2.5 text-right">
-                    P&amp;L
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#f0ede5]">
-                {window_.contributors.map((c) => (
-                  <tr key={c.parent} className="hover:bg-[#faf9f5]">
-                    <td className="px-4.5 py-3">
-                      <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">
-                        {c.parent}
-                      </span>
-                      {c.noCostBasis && (
-                        <div className="text-[10.5px] text-amber-d mt-1">
-                          cost base not on file
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4.5 py-3 text-right font-mono hidden sm:table-cell">
-                      {qty0(c.units)}
-                    </td>
-                    <td className="px-4.5 py-3 text-right font-mono hidden md:table-cell">
-                      {money0(c.costOfSold)}
-                    </td>
-                    <td className="px-4.5 py-3 text-right font-mono">{money0(c.proceeds)}</td>
-                    <td
-                      className={`px-4.5 py-3 text-right font-mono font-semibold ${c.realizedPl >= 0 ? "text-gain" : "text-loss-d"}`}
-                    >
-                      {c.realizedPl >= 0 ? "+" : ""}
-                      {money0(c.realizedPl)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {window_.saleCount === 0 && (
-          <div className="px-4.5 py-6 text-center text-xs text-mut">
-            Nothing was sold between {dateStr(window_.from)} and {dateStr(window_.to)}.
-          </div>
-        )}
-
-        {/* Where profit has no cost behind it, the figure is overstated. Saying
-            so is the difference between a number and a misleading one. */}
-        {window_.hasUncosted && (
-          <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
-            Some of these sales have no purchase on file yet, so their profit is shown as the
-            full proceeds and this total is higher than the real result. Vitti is confirming
-            the cost base.
-          </div>
-        )}
+        <p className="text-[11px] text-mut leading-normal">
+          {isAllTime ? (
+            <>
+              Every parcel on file, sold and still held. Sales run{" "}
+              {dateStr(firstSaleDate)} – {dateStr(lastSaleDate)} — narrow the
+              period to see just what was <b>realised</b> in it.
+            </>
+          ) : (
+            <>
+              Showing what was <b>realised</b> between {dateStr(rangeFrom)} and{" "}
+              {dateStr(rangeTo)}. Holdings you still own are not in these figures.
+            </>
+          )}
+        </p>
       </div>
     );
   };
@@ -845,121 +1329,633 @@ export function PositionsClient({
     );
   };
 
-  const renderPnl = () => {
-    const rows = pnlRows;
-    const page = rows.slice((pnlPage - 1) * pnlSize, (pnlPage - 1) * pnlSize + pnlSize);
+  /**
+   * Historical P&L — the desk's own tab, on the client's own rows.
+   *
+   * Reads top to bottom the way the question is actually asked: what did I make
+   * recently (the dated window), then how has realised profit arrived over time
+   * (the chart), then the parcel-by-parcel reference the first two can be
+   * checked against.
+   *
+   * ── What the desk has here and a client does not ────────────────────────────
+   * Recalculate and Preview CSV are absent: rebuilding the firm's stored figures
+   * is the desk's call, and `recalculateClientPnl` refuses a non-staff caller in
+   * any case. So is the "Calculated <time>" stamp and the run's warnings — those
+   * describe the state of OUR pipeline, and a client cannot act on the news that
+   * a recompute is queued. What the age of a figure actually costs them is
+   * already said in the words that matter: a line whose cost base is still being
+   * confirmed says so, at the bottom of the table.
+   *
+   * The rows themselves are the desk's, rendered `readOnly` — same columns, same
+   * status pills, same colours, no way into the override editor and none of the
+   * working notes behind it. See lib/pnl/client-portfolio.ts.
+   */
+  const renderHistoricalPnl = () => {
+    const page = filteredSummaryRows.slice(
+      (pnlPage - 1) * pnlSize,
+      (pnlPage - 1) * pnlSize + pnlSize,
+    );
 
     return (
-      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-        <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none flex-wrap gap-2">
+      <div className="space-y-4">
+        {/* Ledger totals, over whatever period the table is showing. Realised
+            P&L is NOT sold − bought: most of what was bought is still held, so
+            the two are not comparable. It comes from the replayed cost basis. */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+          {[
+            { label: "Bought", value: boughtTotal, tone: "" },
+            { label: "Sold", value: soldTotal, tone: "" },
+            { label: "Brokerage + GST", value: feesTotal, tone: "" },
+            {
+              label: "Realised P&L",
+              value: realizedTotal,
+              tone: realizedTotal >= 0 ? "text-gain" : "text-loss-d",
+            },
+          ].map((k) => (
+            <div
+              key={k.label}
+              className="bg-white border border-line rounded-[14px] shadow-shadow px-4 py-3"
+            >
+              <div className="font-mono text-[10px] tracking-wider uppercase text-mut">
+                {k.label}
+              </div>
+              <div className={`font-mono text-[17px] mt-1 tabular-nums ${k.tone}`}>
+                {k.value < 0 ? "-$" : "$"}
+                {money2(Math.abs(k.value))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <RealizedPnlChart periods={chartPeriods} />
+
+        <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+          <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex flex-col md:flex-row md:items-baseline justify-between gap-3">
+            <div>
+              <b className="text-sm font-semibold text-ink">P&amp;L by company</b>
+              <div className="text-[11px] text-mut mt-0.5">
+                {filteredSummaryRows.length !== tableRows.length ? (
+                  <>
+                    <span className="font-semibold text-ink">
+                      {filteredSummaryRows.length}
+                    </span>{" "}
+                    of {tableRows.length} row
+                    {tableRows.length === 1 ? "" : "s"}
+                  </>
+                ) : (
+                  <>
+                    {tableRows.length} row{tableRows.length === 1 ? "" : "s"}
+                  </>
+                )}{" "}
+                from {rangedTrades.length} settled trade
+                {rangedTrades.length === 1 ? "" : "s"}
+                {isAllTime && visibleTrades.length !== settledTrades.length &&
+                  ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed excluded`}
+                {" · downloads match this table exactly"}
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+              {/* CSV for the data, Excel for the colour-coded copy — plain CSV
+                  cannot carry a fill. */}
+              <button
+                onClick={exportCsv}
+                disabled={filteredSummaryRows.length === 0}
+                className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                Export CSV
+              </button>
+              <button
+                onClick={exportExcel}
+                disabled={exporting || filteredSummaryRows.length === 0}
+                title="Same rows as an .xlsx, colour-coded: amber = still open, green = fully exited, red = needs checking"
+                className="border border-line bg-white rounded-[8px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {exporting ? "Building…" : "Export Excel"}
+              </button>
+            </div>
+          </div>
+
+          {/* The period this table covers, and what that makes it. */}
+          {renderRangeBar()}
+
+          {/* Filter Tabs & Search Controls Bar */}
+          <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
+            <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap border border-line/60">
+              {activeFilters.map((f) => {
+                const active = pnlFilter === f;
+                const count = pnlTabCounts[f];
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => {
+                      setPnlFilter(f);
+                      setPnlPage(1);
+                    }}
+                    className={`flex-1 flex items-center justify-center gap-2 px-2.5 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
+                      active
+                        ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
+                        : "text-mut hover:text-ink font-medium hover:bg-white/50"
+                    }`}
+                  >
+                    <span>{PNL_FILTER_LABELS[f]}</span>
+                    <span
+                      className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
+                        active
+                          ? f === "profit"
+                            ? "bg-gain-bg text-gain"
+                            : f === "loss"
+                              ? "bg-loss-bg text-loss-d"
+                              : "bg-paper-2 text-ink"
+                          : f === "profit"
+                            ? "bg-gain-bg/50 text-gain"
+                            : f === "loss"
+                              ? "bg-loss-bg/50 text-loss-d"
+                              : "bg-line/40 text-mut"
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-0.5">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search ticker or company..."
+                  value={pnlSearch}
+                  onChange={(e) => {
+                    setPnlSearch(e.target.value);
+                    setPnlPage(1);
+                  }}
+                  className="w-full bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
+                />
+                {pnlSearch && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPnlSearch("");
+                      setPnlPage(1);
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
+                    title="Clear search"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {(pnlFilter !== "all" || pnlSearch) && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-mut">
+                    Showing{" "}
+                    <strong className="text-ink">{filteredSummaryRows.length}</strong>{" "}
+                    of {tableRows.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPnlFilter("all");
+                      setPnlSearch("");
+                      setPnlPage(1);
+                    }}
+                    className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
+                  >
+                    <X className="w-3 h-3 text-mut" />
+                    Reset Filter
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-left text-xs font-medium">
+              <thead>
+                <tr className="border-b border-line text-mut select-none">
+                  {SUMMARY_HEADERS.map((h, i) => (
+                    <th
+                      key={h}
+                      className={`px-4.5 py-2.5 ${i >= 2 && i <= 6 ? "text-right" : i === 7 ? "text-center" : ""}`}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredSummaryRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-4.5 py-10 text-center text-mut">
+                      {tableRows.length === 0
+                        ? isAllTime
+                          ? "No figures yet. Your P&L appears once Vitti has processed your first contract notes."
+                          : "Nothing was sold in this period. Widen it, or pick All time to see everything you hold."
+                        : "No company records match the current filter or search."}
+                    </td>
+                  </tr>
+                ) : (
+                  <>
+                    {/* Keyed by position in the list, not by ticker: under All
+                        accounts a client who holds EOS in two accounts has two
+                        EOS rows, and a duplicate key silently drops one of
+                        them. The rows arrive in a stable order (P&L desc, then
+                        ticker) so the index is stable across renders. */}
+                    {page.map((r, i) => (
+                      <PnlRow
+                        key={`${r.ticker}-${(pnlPage - 1) * pnlSize + i}`}
+                        row={r}
+                        money2={money2}
+                        readOnly
+                      />
+                    ))}
+
+                    {/* Grand Total — the same three columns the downloads sum.
+                        Quantities are not totalled: units of different
+                        companies are not the same thing. */}
+                    <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
+                      <td className="px-4.5 py-3" colSpan={2}>
+                        Grand Total
+                        {filteredSummaryRows.length !== tableRows.length
+                          ? ` (${filteredSummaryRows.length} filtered)`
+                          : ""}
+                      </td>
+                      <td className="px-4.5 py-3" />
+                      <td className="px-4.5 py-3" />
+                      <td className="px-4.5 py-3 text-right font-mono">
+                        ${money2(filteredSummaryTotal.buyPrice)}
+                      </td>
+                      <td className="px-4.5 py-3 text-right font-mono">
+                        ${money2(filteredSummaryTotal.sellOrCurrent)}
+                      </td>
+                      <td
+                        className={`px-4.5 py-3 text-right font-mono ${filteredSummaryTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                      >
+                        {filteredSummaryTotal.pnl < 0 ? "-" : ""}$
+                        {money2(Math.abs(filteredSummaryTotal.pnl))}
+                      </td>
+                      <td className="px-4.5 py-3" colSpan={2} />
+                    </tr>
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <TablePagination
+            totalItems={filteredSummaryRows.length}
+            currentPage={pnlPage}
+            pageSize={pnlSize}
+            onPageChange={setPnlPage}
+            onPageSizeChange={(size) => {
+              setPnlSize(size);
+              setPnlPage(1);
+            }}
+            pageSizeOptions={[10, 25, 50, 100, 1000]}
+            itemLabel="tickers"
+          />
+
+          {/* A total that quietly omits a holding is worse than one that says
+              so. `outsideTotal` counts the all-time rows whose cost is unknown,
+              so it is only true of the all-time table. */}
+          {isAllTime && scoped.outsideTotal > 0 && (
+            <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
+              {scoped.outsideTotal} line
+              {scoped.outsideTotal === 1 ? " is" : "s are"} outside the Grand Total
+              while Vitti confirms {scoped.outsideTotal === 1 ? "its" : "their"} cost
+              base. Ask your adviser if you would like the detail.
+            </div>
+          )}
+
+          {/* The same fact for a realised view, where it is per SALE rather than
+              per row. Where profit has no cost behind it the figure is
+              overstated, and saying so is the difference between a number and a
+              misleading one. */}
+          {!isAllTime && window_?.hasUncosted && (
+            <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
+              Some of these sales have no purchase on file yet, so their profit is
+              shown as the full proceeds and this total is higher than the real
+              result. Vitti is confirming the cost base.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  /**
+   * The options register — listed series and unlisted placement grants.
+   *
+   * Identical to the desk's, because it is derived by the same call
+   * (`optionSummaryRows`) off the same rows. The one column worth reading
+   * carefully is Exercise Value: it is intrinsic, `Qty × (Spot − Strike)`
+   * floored at zero, and it is filled for UNLISTED grants only. A listed series
+   * trades on its own market, so Current Value beside it is already what it is
+   * worth and a second figure struck off the underlying would be describing
+   * something else entirely.
+   */
+  const renderOptions = () => {
+    const page = filteredOptionRows.slice(
+      (optionsPage - 1) * optionsSize,
+      (optionsPage - 1) * optionsSize + optionsSize,
+    );
+
+    return (
+      <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden space-y-0">
+        <div className="px-4.5 py-3.5 border-b border-line bg-white select-none flex items-center justify-between flex-wrap gap-2">
           <div>
-            <b className="text-ink text-sm font-semibold">Profit &amp; loss</b>
-            <p className="text-xs text-mut mt-0.5">
-              Every parcel across your accounts — sold and still held.
-            </p>
+            <b className="text-sm font-semibold text-ink">Your option register</b>
+            <div className="text-[11px] text-mut mt-0.5">
+              Listed exchange-traded options, and unlisted placement options carried
+              at intrinsic value
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <input
-              type="search"
-              value={pnlSearch}
-              onChange={(e) => {
-                setPnlSearch(e.target.value);
-                setPnlPage(1);
-              }}
-              placeholder="Search ticker or name"
-              aria-label="Search profit and loss"
-              className="w-46 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
-            />
-            <span className="text-mut text-xs font-medium whitespace-nowrap">{rows.length} lines</span>
+            <span className="text-xs font-mono px-2 py-0.5 rounded-[6px] bg-paper-2 border border-line/60 font-semibold text-ink">
+              {filteredOptionRows.length}{" "}
+              {filteredOptionRows.length === 1 ? "option" : "options"}
+            </span>
+          </div>
+        </div>
+
+        {/* Filter Tabs & Search Controls Bar */}
+        <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
+          <div className="w-full bg-paper-2 rounded-[10px] p-1 flex items-center gap-1 overflow-x-auto flex-wrap sm:flex-nowrap border border-line/60">
+            {OPTION_FILTERS.map((t) => {
+              const active = optionsFilter === t;
+              const count = optionTabCounts[t];
+              return (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => {
+                    setOptionsFilter(t);
+                    setOptionsPage(1);
+                  }}
+                  className={`flex-1 flex items-center justify-center gap-2 px-3 py-1.75 rounded-[7px] text-xs cursor-pointer transition-all whitespace-nowrap ${
+                    active
+                      ? "bg-white text-ink font-semibold shadow-shadow border border-line/60"
+                      : "text-mut hover:text-ink font-medium hover:bg-white/50"
+                  }`}
+                >
+                  <span>{OPTION_FILTER_LABELS[t]}</span>
+                  <span
+                    className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold transition-colors ${
+                      active ? "bg-paper-2 text-ink" : "bg-line/40 text-mut"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between gap-3 pt-0.5">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Search series, company, terms..."
+                value={optionsSearch}
+                onChange={(e) => {
+                  setOptionsSearch(e.target.value);
+                  setOptionsPage(1);
+                }}
+                className="w-full bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] pl-8.5 pr-7 py-1.5 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium"
+              />
+              {optionsSearch && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOptionsSearch("");
+                    setOptionsPage(1);
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
+                  title="Clear search"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            {(optionsFilter !== "all" || optionsSearch) && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-mut">
+                  Showing{" "}
+                  <strong className="text-ink">{filteredOptionRows.length}</strong> of{" "}
+                  {allOptionRows.length}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOptionsFilter("all");
+                    setOptionsSearch("");
+                    setOptionsPage(1);
+                  }}
+                  className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
+                >
+                  <X className="w-3 h-3 text-mut" />
+                  Reset Filter
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-left text-[12.5px] font-medium">
+          <table className="w-full border-collapse text-left text-xs font-medium">
             <thead>
               <tr className="border-b border-line text-mut select-none">
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3">Holding</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Bought</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Sold</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden md:table-cell">Held</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Cost</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Proceeds / value</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">P&amp;L</th>
+                <th className="px-4.5 py-2.5 whitespace-nowrap">Series</th>
+                <th className="px-4.5 py-2.5">Underlying</th>
+                <th className="px-4.5 py-2.5 whitespace-nowrap">Type</th>
+                <th
+                  className="px-4.5 py-2.5 text-right whitespace-nowrap"
+                  title="Options held — the count the exercise value is struck on"
+                >
+                  Buy Qty
+                </th>
+                <th
+                  className="px-4.5 py-2.5 whitespace-nowrap"
+                  title="Exercise price → underlying price. Unlisted grants only — a listed series trades on its own market."
+                >
+                  Strike &rarr; Spot
+                </th>
+                <th
+                  className="px-4.5 py-2.5 text-right whitespace-nowrap"
+                  title="Qty × (Spot − Strike), floored at zero. Unlisted grants only."
+                >
+                  Exercise Value ($)
+                </th>
+                <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Cost ($)</th>
+                <th className="px-4.5 py-2.5 text-right whitespace-nowrap">
+                  Current Value ($)
+                </th>
+                <th className="px-4.5 py-2.5 text-right whitespace-nowrap">
+                  Unreal. P&amp;L ($)
+                </th>
+                <th className="px-4.5 py-2.5 whitespace-nowrap">
+                  Terms / Valuation Notes
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f0ede5]">
-              {rows.length === 0 ? (
+              {filteredOptionRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="text-center text-mut py-6">
-                    {pnlSearch.trim()
-                      ? `Nothing matches "${pnlSearch.trim()}".`
-                      : "No figures yet. Your P&L appears once Vitti has processed your first contract notes."}
+                  <td colSpan={10} className="text-center text-mut py-8">
+                    {allOptionRows.length === 0
+                      ? "No option holdings or placement grants on record."
+                      : "No options match the current filter or search."}
                   </td>
                 </tr>
               ) : (
-                page.map((r) => (
-                  <tr key={`${r.ticker}-${r.type}`} className="hover:bg-[#faf9f5]">
-                    <td className="px-4.5 py-3.5">
-                      <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{r.ticker}</span>
-                      <div className="text-[10.5px] text-mut mt-1">
-                        {r.name}
-                        {r.openPosition && " · open"}
-                        {r.type.toLowerCase().includes("option") && " · option"}
-                      </div>
+                <>
+                  {page.map(({ row: o, qty, strike, spot, money }, i) => {
+                    const isUnlisted = isRowUnlistedOption(o);
+                    const isUp = o.pnl >= 0;
+
+                    return (
+                      <tr
+                        // By position, not by series: the same grant can be held
+                        // in two accounts, and All accounts shows both.
+                        key={`${o.ticker}-${(optionsPage - 1) * optionsSize + i}`}
+                        className={
+                          money.isItm
+                            ? "bg-green-bg/25 hover:bg-green-bg/40"
+                            : "hover:bg-[#faf9f5]"
+                        }
+                      >
+                        <td className="px-4.5 py-3 whitespace-nowrap">
+                          <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink whitespace-nowrap inline-block">
+                            {o.ticker}
+                          </span>
+                        </td>
+                        <td className="px-4.5 py-3 text-ink font-semibold min-w-[200px]">
+                          {o.name}
+                        </td>
+                        <td className="px-4.5 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`pill text-[10.5px] font-semibold rounded-full px-2.5 py-0.5 whitespace-nowrap inline-block ${
+                                isUnlisted
+                                  ? "bg-[#ece9f3] text-[#5c5775]"
+                                  : "bg-paper-2 text-ink border border-line/60"
+                              }`}
+                            >
+                              {isUnlisted ? "Unlisted Option" : "Listed Option"}
+                            </span>
+                            <MoneynessBadge
+                              money={money}
+                              title={
+                                money.isItm
+                                  ? `In the money by $${money4(money.intrinsicPerOption)} per option`
+                                  : undefined
+                              }
+                            />
+                          </div>
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono text-ink whitespace-nowrap">
+                          {qty > 0 ? qty.toLocaleString("en-AU") : "—"}
+                        </td>
+                        <td className="px-4.5 py-3 whitespace-nowrap">
+                          <StrikeSpot strike={strike} spot={spot} money4={money4} />
+                        </td>
+                        {/* Intrinsic, not the model price: what the parcel is
+                            worth exercised today, which is the arithmetic the
+                            ITM badge beside it claims. */}
+                        <td
+                          className={`px-4.5 py-3 text-right font-mono whitespace-nowrap ${
+                            money.isItm ? "text-gain font-semibold" : "text-mut"
+                          }`}
+                          title={
+                            money.moneyness === "unknown"
+                              ? isUnlisted
+                                ? "No strike on record for this grant"
+                                : "Listed series — marked to its own market, see Current Value"
+                              : `${qty.toLocaleString("en-AU")} × $${money4(money.intrinsicPerOption)}`
+                          }
+                        >
+                          {money.moneyness === "unknown"
+                            ? "—"
+                            : `$${money2(money.intrinsicValue)}`}
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono text-mut whitespace-nowrap">
+                          ${money2(o.buyPrice)}
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono font-semibold text-ink whitespace-nowrap">
+                          ${money2(o.sellOrCurrent)}
+                        </td>
+                        <td
+                          className={`px-4.5 py-3 text-right font-mono font-semibold whitespace-nowrap ${
+                            isUp ? "text-gain" : "text-loss-d"
+                          }`}
+                        >
+                          {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
+                        </td>
+                        <td
+                          className="px-4.5 py-3 text-mut text-[11px] font-mono leading-relaxed max-w-sm truncate"
+                          title={o.type}
+                        >
+                          {o.type}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* Options Grand Total */}
+                  <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
+                    <td className="px-4.5 py-3" colSpan={3}>
+                      Grand Total ({filteredOptionRows.length}{" "}
+                      {filteredOptionRows.length === 1 ? "option" : "options"})
                     </td>
-                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">{qty0(r.buyQty)}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono hidden sm:table-cell">{qty0(r.sellQty)}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono hidden md:table-cell">{qty0(r.heldQty)}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono">{money0(r.buyPrice)}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono">{money0(r.sellOrCurrent)}</td>
-                    <td className={`px-4.5 py-3.5 text-right font-mono font-semibold ${r.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-                      {r.pnl >= 0 ? "+" : ""}{money0(r.pnl)}
+                    {/* Option counts DO add up — unlike share quantities, these
+                        are all contracts over the same holder's positions. */}
+                    <td className="px-4.5 py-3 text-right font-mono">
+                      {filteredOptionTotal.qty.toLocaleString("en-AU")}
                     </td>
+                    <td className="px-4.5 py-3" />
+                    <td className="px-4.5 py-3 text-right font-mono text-gain">
+                      ${money2(filteredOptionTotal.intrinsic)}
+                    </td>
+                    <td className="px-4.5 py-3 text-right font-mono">
+                      ${money2(filteredOptionTotal.buyPrice)}
+                    </td>
+                    <td className="px-4.5 py-3 text-right font-mono">
+                      ${money2(filteredOptionTotal.sellOrCurrent)}
+                    </td>
+                    <td
+                      className={`px-4.5 py-3 text-right font-mono ${
+                        filteredOptionTotal.pnl >= 0 ? "text-gain" : "text-loss-d"
+                      }`}
+                    >
+                      {filteredOptionTotal.pnl < 0 ? "-" : "+"}$
+                      {money2(Math.abs(filteredOptionTotal.pnl))}
+                    </td>
+                    <td className="px-4.5 py-3" />
                   </tr>
-                ))
+                </>
               )}
             </tbody>
-            {rows.length > 0 && (
-              <tfoot>
-                <tr className="border-t-2 border-line bg-paper-2 font-semibold">
-                  {/* Always the whole portfolio, never the page or the search
-                      result — a footer that silently totalled 25 of 334 lines
-                      would be a different number every time you paged. */}
-                  <td className="px-4.5 py-3.5 text-ink" colSpan={4}>
-                    Total{rows.length !== portfolio.rows.length ? " (all lines)" : ""}
-                  </td>
-                  <td className="px-4.5 py-3.5 text-right font-mono text-ink hidden sm:table-cell">{money0(portfolio.total.buyPrice)}</td>
-                  <td className="px-4.5 py-3.5 text-right font-mono text-ink">{money0(portfolio.total.sellOrCurrent)}</td>
-                  <td className={`px-4.5 py-3.5 text-right font-mono ${portfolio.total.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-                    {portfolio.total.pnl >= 0 ? "+" : ""}{money0(portfolio.total.pnl)}
-                  </td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         </div>
 
         <TablePagination
-          totalItems={rows.length}
-          currentPage={pnlPage}
-          pageSize={pnlSize}
-          onPageChange={setPnlPage}
+          totalItems={filteredOptionRows.length}
+          currentPage={optionsPage}
+          pageSize={optionsSize}
+          onPageChange={setOptionsPage}
           onPageSizeChange={(size) => {
-            setPnlSize(size);
-            setPnlPage(1);
+            setOptionsSize(size);
+            setOptionsPage(1);
           }}
-          pageSizeOptions={[10, 25, 50, 100, 1000]}
-          itemLabel="lines"
+          pageSizeOptions={[10, 25, 50, 100]}
+          itemLabel="options"
         />
-
-        {/* A total that quietly omits a holding is worse than one that says so. */}
-        {portfolio.outsideTotal > 0 && (
-          <div className="px-4.5 py-3 border-t border-line text-xs text-mut leading-relaxed">
-            {portfolio.outsideTotal} line{portfolio.outsideTotal === 1 ? " is" : "s are"} outside
-            the total while Vitti confirms {portfolio.outsideTotal === 1 ? "its" : "their"} cost
-            base. Ask your adviser if you would like the detail.
-          </div>
-        )}
       </div>
     );
   };
@@ -973,7 +1969,7 @@ export function PositionsClient({
     const allocSegs = [
       { label: "Listed equities", v: tv, col: "#1d202f" },
       { label: "Unlisted / options", v: unlisted, col: "#36bb91" },
-      { label: "Cash", v: cash, col: "#cfc9bb" },
+      { label: "Cash", v: activeCash, col: "#cfc9bb" },
     ];
     const allocTotal = allocSegs.reduce((sum, a) => sum + a.v, 0);
     const alloc = allocSegs.filter((a) => a.v > 0);
@@ -1013,7 +2009,7 @@ export function PositionsClient({
     // put the zero-cost rows — whose percentage was `Infinity` — in every top
     // slot, so the table showed free option grants instead of the positions that
     // actually moved the portfolio.
-    const movers = positions
+    const movers = activePositions
       .map(p => ({
         code: p.code,
         pl: posPL(p),
@@ -1124,10 +2120,14 @@ export function PositionsClient({
               })}
             </div>
 
+            {/* The card's own total, which is client-wide like the three bars
+                above it — NOT the KPI strip's, which follows the account
+                filter. Reading `deskPnl` here would have put a one-account
+                figure under three all-account bars that do not sum to it. */}
             <div className="flex justify-between items-baseline text-xs pt-2 border-t border-line">
               <span className="text-mut font-semibold">Total</span>
-              <b className={`font-mono text-[13px] ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-                {deskPnl >= 0 ? "+" : ""}{money0(deskPnl)}
+              <b className={`font-mono text-[13px] ${portfolio.total.pnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+                {portfolio.total.pnl >= 0 ? "+" : ""}{money0(portfolio.total.pnl)}
               </b>
             </div>
           </div>
@@ -1148,28 +2148,56 @@ export function PositionsClient({
           <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink">Portfolio</h1>
         </div>
 
-        {/* Tabs switcher */}
-        <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75">
-          <button
-            onClick={() => setTab("holdings")}
-            className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "holdings" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
-          >
-            Holdings
-          </button>
-          <button
-            onClick={() => setTab("pnl")}
-            className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "pnl" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
-          >
-            Profit &amp; loss
-          </button>
-          <button
-            onClick={() => setTab("analytics")}
-            className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === "analytics" ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
-          >
-            Analytics
-          </button>
+        {/* Tabs switcher. The first three are the desk's own tabs, in the desk's
+            own order, so a client and their adviser can talk about "the Options
+            tab" and mean one thing. */}
+        <div className="inline-flex bg-paper-2 rounded-[9px] p-0.75 flex-wrap">
+          {(
+            [
+              { id: "holdings", label: "Holdings" },
+              { id: "historical", label: "Historical P&L" },
+              { id: "options", label: "Options" },
+              { id: "analytics", label: "Analytics" },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`text-xs font-semibold px-4 py-2 rounded-[7px] cursor-pointer transition-colors ${tab === t.id ? "bg-white text-ink shadow-shadow" : "text-mut hover:text-ink"}`}
+            >
+              {t.label}
+            </button>
+          ))}
         </div>
       </div>
+
+      {/* Account filter — only where there is more than one account to choose
+          between, exactly as on the staff console.
+
+          Hidden on Analytics, which deliberately sits outside it: that tab's
+          allocation and movers cards are about the account the portal header is
+          on, and its P&L split is about the whole client. Leaving the pills up
+          over figures they do not move would be worse than not offering them. */}
+      {accounts.length > 1 && tab !== "analytics" && (
+        <div className="flex items-center gap-2 flex-wrap select-none">
+          <span className="text-[11px] tracking-wider uppercase text-mut font-semibold mr-1">
+            Account
+          </span>
+          {[{ id: "all", label: "All accounts" }, ...accounts].map((a) => (
+            <button
+              key={a.id}
+              onClick={() => changeAccount(a.id)}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-full border cursor-pointer transition-colors ${
+                acctFilter === a.id
+                  ? "bg-navy text-white border-navy"
+                  : "bg-white text-mut border-line hover:border-navy hover:text-ink"
+              }`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* KPI Cards Grid
 
@@ -1184,11 +2212,11 @@ export function PositionsClient({
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
           <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(deskCost)}</div>
-          <div className="text-xs text-mut mt-1">invested, all accounts</div>
+          <div className="text-xs text-mut mt-1">invested, {scopeLabel}</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Proceeds &amp; value</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(portfolio.total.sellOrCurrent)}</div>
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(scoped.total.sellOrCurrent)}</div>
           <div className="text-xs text-mut mt-1">sold, plus what is still held</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
@@ -1201,10 +2229,17 @@ export function PositionsClient({
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">This account now</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(tv + cash).toLocaleString("en-AU")}</div>
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">
+            {acctFilter === "all" && accounts.length > 1 ? "All accounts now" : "This account now"}
+          </div>
+          {/* Unlisted grants are in this figure now. They are a real, valued
+              position — the Holdings table lists them and the P&L counts their
+              result — so leaving them out made the account read light by exactly
+              what the client had been granted. */}
+          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(scopedTv + scopedCash + unlistedScopedValue).toLocaleString("en-AU")}</div>
           <div className="text-xs text-mut mt-1">
-            {positions.length} holding{positions.length === 1 ? "" : "s"} + cash, at last price
+            {holdingRows.length} holding{holdingRows.length === 1 ? "" : "s"} + cash
+            {unlistedScopedValue > 0 ? ", incl. unlisted options" : ", at last price"}
           </div>
         </div>
       </div>
@@ -1212,20 +2247,19 @@ export function PositionsClient({
       {/* Render selected Tab content */}
       {tab === "analytics" ? (
         renderAnalytics()
-      ) : tab === "pnl" ? (
-        // The dated window first: "what did I make recently" is the question
-        // people arrive on this tab with, and the full parcel-by-parcel table
-        // below it is the reference the answer can be checked against.
-        <div className="space-y-4">
-          {renderRealisedWindow()}
-          {renderPnl()}
-        </div>
+      ) : tab === "historical" ? (
+        renderHistoricalPnl()
+      ) : tab === "options" ? (
+        renderOptions()
       ) : (
         <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
           <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white select-none flex-wrap gap-2">
             <div>
               <b className="text-ink text-sm font-semibold">Holdings</b>
-              <p className="text-xs text-mut mt-0.5">Tap a holding for Vitti&apos;s view</p>
+              <p className="text-xs text-mut mt-0.5">
+                Listed positions and unlisted option grants · tap a listed
+                holding for Vitti&apos;s view
+              </p>
             </div>
             <input
               type="search"
@@ -1265,7 +2299,65 @@ export function PositionsClient({
                 )}
                 {holdingRows
                   .slice((holdPage - 1) * holdSize, (holdPage - 1) * holdSize + holdSize)
-                  .map(p => {
+                  .map((row, i) => {
+                  // Position, not code: under All accounts the same security
+                  // held in two accounts is two rows.
+                  const rowKey = (code: string) =>
+                    `${code}-${(holdPage - 1) * holdSize + i}`;
+
+                  /**
+                   * An unlisted grant. Not clickable, because the modal behind a
+                   * listed row offers the desk's view and this week's note on a
+                   * traded security — neither of which exists for a grant, and an
+                   * empty modal is worse than no modal.
+                   */
+                  if (row.kind === "unlisted") {
+                    const o = row.option;
+                    const isUp = o.pnl >= 0;
+                    // Derived, because the parcel is valued whole. Kept to four
+                    // places: these are quoted in fractions of a cent, and $0.00
+                    // against a real value would look like a bug.
+                    const perOption = o.qty > 0 ? o.value / o.qty : 0;
+
+                    return (
+                      <tr key={rowKey(o.code)} className="hover:bg-[#faf9f5]">
+                        <td className="px-4.5 py-3">
+                          <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">
+                            {o.code}
+                          </span>
+                        </td>
+                        <td className="px-4.5 py-3 hidden sm:table-cell text-mut">
+                          <span className="text-ink font-semibold">{o.name}</span>
+                          <div className="text-[10.5px] mt-0.5">
+                            Unlisted option · carried at modelled value
+                          </div>
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono">{qty0(o.qty)}</td>
+                        <td
+                          className="px-4.5 py-3 text-right font-mono hidden sm:table-cell text-mut"
+                          title="Modelled value per option — an unlisted grant has no market price of its own"
+                        >
+                          ${money4(perOption)}
+                        </td>
+                        <td className="px-4.5 py-3 text-right font-mono font-semibold">
+                          ${Math.round(o.value).toLocaleString("en-AU")}
+                        </td>
+                        <td
+                          className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}
+                        >
+                          ${Math.round(o.pnl).toLocaleString("en-AU")}
+                          {/* No percentage: a grant costs nothing, so a return
+                              on cost is undefined rather than infinite. */}
+                          <div className="text-[10.5px]">
+                            {o.cost > 0 ? pct1(returnPct(o.pnl, o.cost)) : "granted"}
+                          </div>
+                        </td>
+                        <td className="px-4.5 py-3 text-center text-mut text-[11px]">—</td>
+                      </tr>
+                    );
+                  }
+
+                  const p = row.position;
                   const pl = posPL(p);
                   const plp = returnPct(pl, posCost(p));
                   const val = posValue(p);
@@ -1273,7 +2365,7 @@ export function PositionsClient({
                   const sg = signals[p.code];
                   return (
                     <tr
-                      key={p.code}
+                      key={rowKey(p.code)}
                       onClick={() => handleOpenHolding(p.code)}
                       className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
                     >
@@ -1308,6 +2400,34 @@ export function PositionsClient({
                   );
                 })}
               </tbody>
+              {holdingRows.length > 0 && (
+                <tfoot>
+                  <tr className="border-t-2 border-line bg-paper-2 font-semibold">
+                    <td className="px-4.5 py-3.5 text-ink" colSpan={2}>
+                      Total
+                      {holdingRows.length !== visiblePositions.length + unlistedHoldings.length
+                        ? " (all holdings)"
+                        : ""}
+                    </td>
+                    {/* Quantities are not totalled — units of different
+                        companies are not the same thing. */}
+                    <td className="px-4.5 py-3.5" />
+                    <td className="px-4.5 py-3.5 hidden sm:table-cell" />
+                    <td className="px-4.5 py-3.5 text-right font-mono text-ink">
+                      ${Math.round(holdingsTotal.value).toLocaleString("en-AU")}
+                    </td>
+                    <td
+                      className={`px-4.5 py-3.5 text-right font-mono ${holdingsTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+                    >
+                      ${Math.round(holdingsTotal.pnl).toLocaleString("en-AU")}
+                      <div className="text-[10.5px]">
+                        {pct1(returnPct(holdingsTotal.pnl, holdingsTotal.cost))}
+                      </div>
+                    </td>
+                    <td className="px-4.5 py-3.5" />
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
