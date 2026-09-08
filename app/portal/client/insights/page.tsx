@@ -5,6 +5,7 @@ import {
   getNews,
   getResearchReports,
 } from "@/lib/data/queries";
+import { getAsxMarketSensitive } from "@/lib/asx/news";
 
 function newsTime(iso: string): string {
   return new Date(iso).toLocaleString("en-AU", {
@@ -17,19 +18,48 @@ function newsTime(iso: string): string {
   });
 }
 
+function annTime(iso: string): string {
+  if (!iso) return "";
+  return new Date(iso)
+    .toLocaleTimeString("en-AU", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZone: "Australia/Sydney",
+    })
+    .replace(/\s/g, "")
+    .toLowerCase();
+}
+
+const SENTIMENT_PILL: Record<string, string> = {
+  bullish: "bg-green-bg text-green-d",
+  bearish: "bg-loss-bg text-loss-d",
+  neutral: "bg-paper-2 text-mut",
+};
+
 // Server Component: sector momentum, news, and research from the DAL, with the
 // client's holdings highlighted.
 export default async function ClientInsightsPage() {
   const accountId = await getActiveAccountId();
-  const [positions, sectors, news, reports] = await Promise.all([
+  const [positions, sectors, news, reports, announcements] = await Promise.all([
     getPositions(accountId),
     getSectors(),
     getNews(),
     getResearchReports(),
+    getAsxMarketSensitive(),
   ]);
 
   const holdings = positions.map((p) => p.code);
   const maxMom = Math.max(1, ...sectors.map((s) => Math.abs(s.momentum)));
+
+  // Anything the client actually owns comes first. The upstream feed is already
+  // newest-first, and a stable sort keeps that order inside each group — so this
+  // reads as "your names, then the rest of the day" rather than reshuffling it.
+  const held = new Set(holdings);
+  const asxNews = [...announcements].sort(
+    (a, b) => Number(held.has(b.code)) - Number(held.has(a.code)),
+  );
+  const heldCount = asxNews.filter((a) => held.has(a.code)).length;
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -104,6 +134,76 @@ export default async function ClientInsightsPage() {
           })}
         </div>
       </div>
+
+      {/* ASX market-sensitive announcements. Rendered only when the upstream
+          feed answered — an empty section says nothing useful, and the source
+          being briefly unreachable should not leave a hole on the page. */}
+      {asxNews.length > 0 && (
+        <div className="space-y-2">
+          <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
+            ASX market-sensitive announcements
+          </div>
+
+          <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+            <div className="flex justify-between items-center px-4.5 py-3.5 border-b border-line bg-white select-none">
+              <b className="text-sm font-semibold text-ink">Price-sensitive filings today</b>
+              {heldCount > 0 ? (
+                <span className="pill bg-green-bg text-green-d text-[10px] font-bold px-2 py-0.5 rounded-full">
+                  {heldCount} in your book
+                </span>
+              ) : (
+                <span className="text-mut text-xs font-semibold">
+                  {asxNews.length} flagged
+                </span>
+              )}
+            </div>
+
+            <div className="divide-y divide-line">
+              {asxNews.map((a) => {
+                const owned = held.has(a.code);
+                return (
+                  <a
+                    key={a.id}
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block px-4.5 py-3.5 hover:bg-paper transition-colors group"
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`code font-mono text-[11px] px-1 rounded-sm font-bold ${owned ? "text-green-d" : "text-ink"}`}
+                      >
+                        {a.code} {owned && "●"}
+                      </span>
+                      <span
+                        className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${SENTIMENT_PILL[a.sentiment]}`}
+                      >
+                        {a.sentiment}
+                      </span>
+                      <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
+                        {a.company} &middot; {annTime(a.released)}
+                      </span>
+                      <span className="ml-auto text-mut text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
+                        Open on ASX &nearr;
+                      </span>
+                    </div>
+
+                    <div className="font-semibold text-[13.5px] leading-snug mt-1.5 group-hover:underline">
+                      {a.headline}
+                    </div>
+
+                    {a.summary[0] && (
+                      <p className="text-xs text-mut leading-relaxed mt-1 line-clamp-2">
+                        {a.summary[0]}
+                      </p>
+                    )}
+                  </a>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Grid: News & Strategy */}
       <div className="grid md:grid-cols-2 gap-4">

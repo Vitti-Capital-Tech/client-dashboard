@@ -436,9 +436,31 @@ BROKER_SUBJECT_PATTERN=                                  # optional regex
 CRON_SECRET=<a long random string>
 INGEST_BUDGET_MS=40000                                   # optional; default 40s (see below)
 PLACEMENT_API_URL=http://3.25.70.124:8000                # optional; the deal-mail feed (see below)
+ASX_API_URL=https://<asx-dashboard-host>                 # optional; market-sensitive news on Insights (see below)
+ASX_API_KEY=                                             # only if that deployment sets one
 ```
 
 **Regenerating types: `npm run types`.** Not `supabase gen types … > file` typed into a PowerShell prompt — PowerShell 5.1's `>` writes **UTF-16LE**, which doubles the file, makes Git treat it as binary, and leaves `grep`/`awk` finding nothing in a file that looks perfectly fine in an editor. It has caught us twice. The npm script runs through cmd, whose redirect does not transcode.
+
+**Market-sensitive ASX news (`ASX_API_URL`).** The Insights page lists the day's
+price-sensitive ASX filings, each linking to the announcement PDF, with anything
+the client holds pulled to the top and marked. Source is the ASX Intelligence
+dashboard's `/api/market-sensitive`; `lib/asx/news.ts` reads it.
+
+Fetched live rather than ingested into a table, which is the opposite of the
+choice made for placements below. The reason is the join: placement candidates
+have to sit beside client bids and allocations, so they must be rows. This is
+read-only display, the upstream already keeps and serves every day's history,
+and the one cross-reference — which of these does the client own — is a `Set`
+lookup against positions already loaded for the page. A table, a migration and
+a cron would buy nothing until something here needs to query it in SQL. `id` is
+the ASX document id and stable, so that upsert stays available.
+
+Unset is a supported state: the section does not render. It also returns nothing
+rather than throwing if that deployment is down or slow (8s timeout) — Insights
+carries sector momentum and the research library too, and a sibling being
+unreachable should cost one section, not the route. Cached for 5 minutes, which
+matches how often the upstream fetcher runs.
 
 **The deal-mail feed (`PLACEMENT_API_URL`).** Placement and IPO announcements are summarised by a separate system (`Placement_Email` → `placement_api.py` on EC2) and pulled into `placement_candidates` by `/api/ingest/placements`, guarded by the same `CRON_SECRET`. Schedule it like the morning ingest but **separately** — that job is already tight against its ceiling, and a deal summary an hour late costs nothing while a P&L that does not rebuild costs the morning:
 
