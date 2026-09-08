@@ -1381,15 +1381,15 @@ export function PnlCalculatorClient() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header Banner */}
-      <div className="bg-paper-1 border border-paper-border rounded-2xl p-6 sm:p-8 relative overflow-hidden shadow-xs">
+      <div className="bg-card border border-line rounded-2xl p-6 sm:p-8 relative overflow-hidden shadow-xs">
         <div className="absolute -top-12 -right-12 w-64 h-64 bg-green/5 rounded-full blur-3xl pointer-events-none" />
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative z-10">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-navy/5 text-navy text-xs font-semibold uppercase tracking-wider mb-2">
-              <Wrench className="w-3.5 h-3.5" />
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-paper-2 text-ink text-xs font-semibold uppercase tracking-wider mb-2 border border-line/60">
+              <Wrench className="w-3.5 h-3.5 text-green-d" />
               Admin Tool
             </div>
-            <h1 className="text-2.5xl font-disp font-bold text-navy tracking-tight">
+            <h1 className="text-2.5xl font-disp font-bold text-ink tracking-tight">
               In-Memory PNL Calculator
             </h1>
             <p className="text-mut text-sm max-w-2xl mt-1 leading-relaxed">
@@ -1398,7 +1398,7 @@ export function PnlCalculatorClient() {
           </div>
           <button
             onClick={handleDownloadSample}
-            className="inline-flex items-center gap-2 text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-4 py-2.5 rounded-xl transition-all shadow-2xs"
+            className="inline-flex items-center gap-2 text-xs font-semibold text-ink bg-paper-2 hover:bg-paper-2/80 border border-line px-4 py-2.5 rounded-xl transition-all shadow-2xs cursor-pointer"
           >
             <Download className="w-4 h-4 text-mut" />
             Download Sample Template
@@ -1408,17 +1408,17 @@ export function PnlCalculatorClient() {
 
       {/* File Upload Dropzone Section */}
       {!result && (
-        <div className="bg-paper-1 border border-paper-border rounded-2xl p-6 sm:p-10 shadow-xs">
+        <div className="bg-card border border-line rounded-2xl p-6 sm:p-10 shadow-xs">
           <div
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             className={`border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition-all cursor-pointer ${
               isDragOver
-                ? "border-green bg-green/5"
+                ? "border-green bg-green/10"
                 : file
-                ? "border-navy/40 bg-paper-2"
-                : "border-paper-border hover:border-navy/30 bg-paper-2/50"
+                ? "border-green/50 bg-paper-2"
+                : "border-line-2 hover:border-green/40 bg-paper-2/30"
             }`}
             onClick={() => fileInputRef.current?.click()}
           >
@@ -1430,13 +1430,13 @@ export function PnlCalculatorClient() {
               className="hidden"
             />
 
-            <div className="w-14 h-14 rounded-2xl bg-paper-1 border border-paper-border flex items-center justify-center mx-auto mb-4 shadow-2xs text-navy">
-              <Upload className="w-7 h-7 stroke-[1.7]" />
+            <div className="w-14 h-14 rounded-2xl bg-paper-2 border border-line flex items-center justify-center mx-auto mb-4 shadow-2xs text-ink">
+              <Upload className="w-7 h-7 stroke-[1.7] text-green-d" />
             </div>
 
             {file ? (
               <div className="space-y-2">
-                <p className="font-semibold text-navy text-base">{file.name}</p>
+                <p className="font-semibold text-ink text-base">{file.name}</p>
                 <p className="text-xs text-mut">
                   {(file.size / 1024).toFixed(1)} KB · Ready for parsing
                 </p>
@@ -1453,13 +1453,13 @@ export function PnlCalculatorClient() {
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="font-semibold text-navy text-base">
+                <p className="font-semibold text-ink text-base">
                   Choose a trade history spreadsheet or drag &amp; drop
                 </p>
-                <p className="text-xs text-mut">
+                <p className="text-xs text-mut font-medium">
                   Supports modern and legacy Excel formats (.xlsx, .xls) and CSV (.csv)
                 </p>
-                <p className="text-3xs text-mut/80 pt-2 font-mono">
+                <p className="text-xs text-mut/80 pt-2 font-mono">
                   Expects standard ledger headers: Reference, Date, Side, Ticker, Security, Units, Price, Net
                 </p>
               </div>
@@ -1472,7 +1472,7 @@ export function PnlCalculatorClient() {
                 type="button"
                 onClick={handleProcessFile}
                 disabled={isProcessing}
-                className="inline-flex items-center gap-2 font-semibold text-white bg-navy hover:bg-navy-h border border-transparent px-6 py-3 rounded-xl transition-all shadow-sm disabled:opacity-50 cursor-pointer"
+                className="inline-flex items-center gap-2 font-semibold text-white bg-green hover:bg-green-h border border-transparent px-6 py-3 rounded-xl transition-all shadow-sm disabled:opacity-50 cursor-pointer"
               >
                 {isProcessing ? (
                   <>
@@ -1513,8 +1513,8 @@ export function PnlCalculatorClient() {
       {isFetchingUrl && (
         <div className="bg-card border border-line rounded-2xl p-10 sm:p-14 shadow-shadow flex flex-col items-center text-center gap-4">
           <span className="relative flex h-12 w-12">
-            <span className="absolute inline-flex h-full w-full rounded-full bg-navy/20 animate-ping" />
-            <Loader2 className="relative h-12 w-12 animate-spin text-navy" />
+            <span className="absolute inline-flex h-full w-full rounded-full bg-green/20 animate-ping" />
+            <Loader2 className="relative h-12 w-12 animate-spin text-green" />
           </span>
 
           <div className="space-y-1.5">
@@ -1527,7 +1527,7 @@ export function PnlCalculatorClient() {
           </div>
 
           <div className="w-full max-w-xs h-1 rounded-full bg-paper-2 overflow-hidden">
-            <div className="h-full w-1/3 rounded-full bg-navy animate-pulse" />
+            <div className="h-full w-1/3 rounded-full bg-green animate-pulse" />
           </div>
         </div>
       )}
@@ -1538,7 +1538,7 @@ export function PnlCalculatorClient() {
           {/* Metrics Overview */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Total PNL */}
-            <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-1">
+            <div className="bg-card border border-line rounded-2xl p-5 shadow-2xs space-y-1">
               <span className="text-2xs font-semibold uppercase tracking-wider text-mut">
                 Total Net PNL
               </span>
@@ -1561,33 +1561,33 @@ export function PnlCalculatorClient() {
             </div>
 
             {/* Total Trades */}
-            <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-1">
+            <div className="bg-card border border-line rounded-2xl p-5 shadow-2xs space-y-1">
               <span className="text-2xs font-semibold uppercase tracking-wider text-mut">
                 Parsed Trades
               </span>
-              <p className="text-2xl font-bold tracking-tight text-navy">
+              <p className="text-2xl font-bold tracking-tight text-ink">
                 {result.totalTrades}
               </p>
               <p className="text-xs text-mut">Contract notes parsed</p>
             </div>
 
             {/* Total Buy Volume */}
-            <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-1">
+            <div className="bg-card border border-line rounded-2xl p-5 shadow-2xs space-y-1">
               <span className="text-2xs font-semibold uppercase tracking-wider text-mut">
                 Total Buy Expenditure
               </span>
-              <p className="text-2xl font-bold tracking-tight text-navy">
+              <p className="text-2xl font-bold tracking-tight text-ink">
                 {fmtCurrency(totalBuyVolume)}
               </p>
               <p className="text-xs text-mut">Sum of buy consideration</p>
             </div>
 
             {/* Total Sell Volume */}
-            <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-1">
+            <div className="bg-card border border-line rounded-2xl p-5 shadow-2xs space-y-1">
               <span className="text-2xs font-semibold uppercase tracking-wider text-mut">
                 Total Sell Proceeds
               </span>
-              <p className="text-2xl font-bold tracking-tight text-navy">
+              <p className="text-2xl font-bold tracking-tight text-ink">
                 {fmtCurrency(totalSellVolume)}
               </p>
               <p className="text-xs text-mut">Sum of sell proceeds</p>
@@ -1595,12 +1595,12 @@ export function PnlCalculatorClient() {
           </div>
 
           {/* Placement Tracker Integration Card */}
-          <div className="bg-paper-1 border border-paper-border rounded-2xl p-5 shadow-2xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-paper-border pb-3">
+          <div className="bg-card border border-line rounded-2xl p-5 shadow-2xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-line pb-3">
               <div>
-                <h3 className="text-sm font-bold text-navy flex items-center gap-2">
+                <h3 className="text-sm font-bold text-ink flex items-center gap-2">
                   <span>Placement Tracker Integration (Direct Link & File Merge)</span>
-                  <span className="text-3xs px-2 py-0.5 rounded-full bg-navy/10 text-navy font-semibold">
+                  <span className="text-3xs px-2 py-0.5 rounded-full bg-paper-2 text-ink border border-line/60 font-semibold">
                     Auto-Enrichment
                   </span>
                 </h3>
@@ -1621,7 +1621,7 @@ export function PnlCalculatorClient() {
                   type="button"
                   onClick={() => placementFileInputRef.current?.click()}
                   disabled={isMergingPlacementFile}
-                  className="text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3.5 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
+                  className="text-xs font-semibold text-ink bg-paper-2 hover:bg-paper-2/80 border border-line px-3.5 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 inline-flex items-center gap-1.5"
                 >
                   <Plus className="w-3.5 h-3.5 text-mut" />
                   {isMergingPlacementFile ? "Merging Files..." : "Upload Placement (.xlsx)"}
@@ -1638,7 +1638,7 @@ export function PnlCalculatorClient() {
                 {placementFiles.map((pFile) => (
                   <div
                     key={pFile.id}
-                    className="inline-flex items-center gap-1.5 bg-paper-2 border border-paper-border px-2.5 py-1 rounded-lg text-xs text-navy shadow-2xs"
+                    className="inline-flex items-center gap-1.5 bg-paper-2 border border-line px-2.5 py-1 rounded-lg text-xs text-ink shadow-2xs"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-d flex-shrink-0" />
                     <span className="font-semibold text-2xs max-w-[170px] truncate" title={pFile.name}>
@@ -1685,7 +1685,7 @@ export function PnlCalculatorClient() {
                   id="placement-client"
                   value={placementClient}
                   onChange={(e) => handleSelectPlacementClient(e.target.value)}
-                  className="w-full sm:w-auto sm:min-w-[260px] bg-paper-2/60 border border-paper-border rounded-xl px-3 py-1.5 text-xs font-semibold text-navy focus:outline-none focus:border-navy cursor-pointer"
+                  className="w-full sm:w-auto sm:min-w-[260px] bg-paper-2/60 border border-line rounded-xl px-3 py-1.5 text-xs font-semibold text-ink focus:outline-none focus:border-green cursor-pointer"
                 >
                   <option value={AUTO_CLIENT}>
                     Auto-detect from trade file name
@@ -1711,14 +1711,14 @@ export function PnlCalculatorClient() {
                   value={placementUrl}
                   onChange={(e) => setPlacementUrl(e.target.value)}
                   placeholder="Paste Placement Tracker Link (Google Sheets, SharePoint/OneDrive, or direct .xlsx URL)..."
-                  className="w-full bg-paper-2/60 border border-paper-border rounded-xl px-3.5 py-2 text-xs font-mono text-navy focus:outline-none focus:border-navy"
+                  className="w-full bg-paper-2/60 border border-line rounded-xl px-3.5 py-2 text-xs font-mono text-ink focus:outline-none focus:border-green"
                 />
               </div>
               <button
                 type="button"
                 onClick={handleMergeUrl}
                 disabled={isFetchingUrl || !placementUrl.trim()}
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold text-white bg-navy hover:bg-navy-h px-5 py-2 rounded-xl transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 text-xs font-semibold text-white bg-green hover:bg-green-h px-5 py-2 rounded-xl transition-all shadow-2xs disabled:opacity-50 cursor-pointer"
               >
                 {isFetchingUrl ? (
                   <>
@@ -1756,28 +1756,28 @@ export function PnlCalculatorClient() {
           </div>
 
           {/* Action & Filter Toolbar */}
-          <div className="bg-paper-1 border border-paper-border rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
+          <div className="bg-card border border-line rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
             {/* Active Uploaded Trade Files Badges */}
             {tradeFiles.length > 0 && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
-                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
-                  <FileText className="w-4 h-4 text-emerald-600" />
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-line">
+                <div className="flex items-center gap-2 text-xs font-semibold text-ink">
+                  <FileText className="w-4 h-4 text-green-d" />
                   <span>Active Trade File:</span>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
                   {tradeFiles.map((tf) => (
                     <span
                       key={tf.id}
-                      className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-emerald-50 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded-xl"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-green-bg text-green-d border border-green/30 rounded-xl shadow-2xs"
                     >
-                      <span className="truncate max-w-[180px] font-semibold">{tf.name}</span>
-                      <span className="text-[10px] bg-emerald-200/60 dark:bg-emerald-800/60 px-1.5 py-0.5 rounded-md font-mono font-bold">
+                      <span className="truncate max-w-[180px] font-semibold text-ink">{tf.name}</span>
+                      <span className="text-[10px] bg-green/20 text-green-d px-1.5 py-0.5 rounded-md font-mono font-bold">
                         {tf.tradeCount} trades
                       </span>
                       <button
                         type="button"
                         onClick={() => handleRemoveTradeFile(tf.id)}
-                        className="ml-0.5 text-emerald-500 hover:text-red-600 dark:hover:text-red-400 font-bold focus:outline-none cursor-pointer"
+                        className="ml-0.5 text-mut hover:text-loss font-bold focus:outline-none cursor-pointer"
                         title="Remove file"
                       >
                         ✕
@@ -1786,7 +1786,7 @@ export function PnlCalculatorClient() {
                   ))}
                   {/* One trade file at a time — uploading another replaces this one, so
                       there is no "add more" control. */}
-                  <span className="text-[10px] text-mut italic">
+                  <span className="text-xs text-mut">
                     Upload another file to replace it
                   </span>
                 </div>
@@ -1795,18 +1795,18 @@ export function PnlCalculatorClient() {
 
             {/* Account Filter Bar (external_ref / broker account) */}
             {result?.accounts && result.accounts.length > 0 && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
-                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-line">
+                <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                   <User className="w-4 h-4 text-mut" />
                   <span>Client Account (external_ref):</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <button
                     onClick={() => handleSelectAccount("all")}
-                    className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                       selectedAccount === "all"
-                        ? "bg-navy text-white shadow-xs"
-                        : "bg-paper-2 text-mut hover:text-navy border border-paper-border"
+                        ? "bg-green text-white shadow-xs"
+                        : "bg-paper-2 text-ink/80 hover:text-ink border border-line hover:border-line-2"
                     }`}
                   >
                     All Accounts ({result.accounts.length})
@@ -1815,10 +1815,10 @@ export function PnlCalculatorClient() {
                     <button
                       key={accNo}
                       onClick={() => handleSelectAccount(accNo)}
-                      className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                         selectedAccount === accNo
-                          ? "bg-navy text-white shadow-xs"
-                          : "bg-paper-2 text-mut hover:text-navy border border-paper-border hover:border-navy/30"
+                          ? "bg-green text-white shadow-xs"
+                          : "bg-paper-2 text-ink/80 hover:text-ink border border-line hover:border-line-2"
                       }`}
                     >
                       Account #{accNo}
@@ -1833,43 +1833,43 @@ export function PnlCalculatorClient() {
                 on Contract Date and the trackers on placement date, so the options
                 shown are the ones granted in the same period. */}
             {result && (
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-paper-border/70">
-                <div className="flex items-center gap-2 text-xs font-semibold text-navy">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-3 border-b border-line">
+                <div className="flex items-center gap-2 text-xs font-semibold text-ink">
                   <Calendar className="w-4 h-4 text-mut" />
                   <span>Reporting Period (Contract Date):</span>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <label className="flex items-center gap-1.5 text-xs text-mut">
-                    <span className="font-semibold">From</span>
+                    <span className="font-semibold text-ink">From</span>
                     <input
                       type="date"
                       value={dateFrom}
                       max={dateTo || undefined}
                       onChange={(e) => handleDateRangeChange("from", e.target.value)}
-                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-navy bg-paper-2 border border-paper-border focus:border-navy/40 focus:outline-none cursor-pointer"
+                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-ink bg-paper-2 border border-line focus:border-green focus:outline-none cursor-pointer"
                     />
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-mut">
-                    <span className="font-semibold">To</span>
+                    <span className="font-semibold text-ink">To</span>
                     <input
                       type="date"
                       value={dateTo}
                       min={dateFrom || undefined}
                       onChange={(e) => handleDateRangeChange("to", e.target.value)}
-                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-navy bg-paper-2 border border-paper-border focus:border-navy/40 focus:outline-none cursor-pointer"
+                      className="px-2.5 py-1 rounded-xl text-xs font-mono text-ink bg-paper-2 border border-line focus:border-green focus:outline-none cursor-pointer"
                     />
                   </label>
                   {hasDateRange({ from: dateFrom, to: dateTo }) ? (
                     <button
                       type="button"
                       onClick={handleClearDateRange}
-                      className="px-3 py-1 rounded-xl text-xs font-semibold bg-navy text-white shadow-xs cursor-pointer"
+                      className="px-3 py-1 rounded-xl text-xs font-semibold bg-green text-white shadow-xs cursor-pointer"
                       title="Clear the period and report on every trade in the file"
                     >
                       Clear · showing {dateRangeLabel}
                     </button>
                   ) : (
-                    <span className="px-3 py-1 rounded-xl text-xs font-semibold bg-paper-2 text-mut border border-paper-border">
+                    <span className="px-3 py-1 rounded-xl text-xs font-semibold bg-paper-2 text-mut border border-line">
                       All dates (lifetime)
                     </span>
                   )}
@@ -1894,7 +1894,7 @@ export function PnlCalculatorClient() {
             )}
 
             {/* Filter Pills Bar — Full width on Desktop so all tabs fit with ZERO scrolling */}
-            <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-paper-border text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
+            <div className="flex items-center gap-1.5 bg-paper-2/90 p-1.5 rounded-2xl border border-line text-xs font-medium overflow-x-auto lg:overflow-visible flex-wrap sm:flex-nowrap shadow-inner">
               {(
                 [
                   "all",
@@ -1921,23 +1921,32 @@ export function PnlCalculatorClient() {
                   loss: "Loss Only",
                   unmatched: "Unmatched",
                 };
+                // Contextual badge colors matching Historical P&L
+                const countBadgeClass = active
+                  ? "bg-paper-2 text-ink border border-line/60"
+                  : f === "open"
+                  ? "bg-amber-bg text-amber-d border border-amber/30"
+                  : f === "matched" || f === "profit"
+                  ? "bg-green-bg text-green-d border border-green/30"
+                  : f === "loss"
+                  ? "bg-loss-bg text-loss-d border border-loss/30"
+                  : f === "unmatched"
+                  ? "bg-amber-bg text-amber-d border border-amber/30"
+                  : "bg-paper-2 text-ink/70 border border-line/50";
+
                 return (
                   <button
                     key={f}
                     onClick={() => setFilterType(f)}
                     className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl transition-all duration-150 text-xs font-semibold whitespace-nowrap cursor-pointer ${
                       active
-                        ? "bg-navy text-white shadow-xs"
-                        : "text-mut hover:text-navy hover:bg-paper-1/70"
+                        ? "bg-card text-ink shadow-xs border border-line font-bold"
+                        : "text-ink/80 hover:text-ink hover:bg-card/70"
                     }`}
                   >
                     <span>{labels[f]}</span>
                     <span
-                      className={`px-1.5 py-0.5 rounded-md text-3xs font-bold transition-colors ${
-                        active
-                          ? "bg-white/20 text-white"
-                          : "bg-paper-border/80 text-navy/80"
-                      }`}
+                      className={`px-1.5 py-0.5 rounded-md text-3xs font-bold transition-colors ${countBadgeClass}`}
                     >
                       {count}
                     </span>
@@ -1956,12 +1965,12 @@ export function PnlCalculatorClient() {
                   placeholder="Search ticker or company..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-paper-2 border border-paper-border rounded-xl pl-9 pr-8 py-2 text-xs text-navy focus:outline-none focus:border-navy focus:bg-paper-1 transition-all"
+                  className="w-full bg-paper-2 border border-line rounded-xl pl-9 pr-8 py-2 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-green focus:bg-card transition-all"
                 />
                 {searchQuery && (
                   <button
                     onClick={() => setSearchQuery("")}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-navy p-0.5"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-mut hover:text-ink p-0.5 cursor-pointer"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -1973,10 +1982,10 @@ export function PnlCalculatorClient() {
                 <button
                   onClick={() => handleSyncDbHoldings()}
                   disabled={isSyncingDb}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink bg-paper-2 hover:bg-paper-2/80 border border-line px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                   title="Auto-fill Qty & Market Value from Database Portfolio Holdings for open positions"
                 >
-                  <RefreshCw className="w-4 h-4 text-indigo-600" />
+                  <RefreshCw className="w-4 h-4 text-green-d" />
                   {isSyncingDb ? "Syncing DB..." : "Sync DB Market Value"}
                 </button>
 
@@ -1999,7 +2008,7 @@ export function PnlCalculatorClient() {
                 <button
                   onClick={handleDownloadCsv}
                   disabled={isExportingCsv}
-                  className="inline-flex items-center gap-2 text-xs font-semibold text-navy bg-paper-2 hover:bg-paper-border border border-paper-border px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-ink bg-paper-2 hover:bg-paper-2/80 border border-line px-3.5 py-2 rounded-xl transition-all shadow-2xs cursor-pointer disabled:opacity-50"
                   title="Export as CSV (.csv)"
                 >
                   {isExportingCsv ? (
@@ -2014,10 +2023,10 @@ export function PnlCalculatorClient() {
 
                 <button
                   onClick={handleReset}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-mut hover:text-loss border border-paper-border hover:border-loss/30 px-3 py-2 rounded-xl transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink hover:text-loss border border-line hover:border-loss/30 bg-paper-2 hover:bg-paper-2/80 px-3 py-2 rounded-xl transition-all cursor-pointer"
                   title="Reset & upload new trade ledger file"
                 >
-                  <RotateCcw className="w-4 h-4" />
+                  <RotateCcw className="w-4 h-4 text-mut" />
                   New
                 </button>
               </div>
@@ -2025,11 +2034,11 @@ export function PnlCalculatorClient() {
           </div>
 
           {/* Results Summary Table */}
-          <div className="bg-paper-1 border border-paper-border rounded-2xl overflow-hidden shadow-2xs">
+          <div className="bg-card border border-line rounded-2xl overflow-hidden shadow-2xs">
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
-                  <tr className="bg-paper-2 text-navy border-b border-paper-border text-2xs font-semibold uppercase tracking-wider">
+                  <tr className="bg-paper-2 text-ink border-b border-line text-2xs font-bold uppercase tracking-wider select-none">
                     <th className="py-3.5 px-4">Ticker</th>
                     <th className="py-3.5 px-4">Company</th>
                     <th className="py-3.5 px-4 text-right">Buy Qty (Sum)</th>
@@ -2041,7 +2050,7 @@ export function PnlCalculatorClient() {
                     <th className="py-3.5 px-4 text-center">Action</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-paper-border text-xs">
+                <tbody className="divide-y divide-line text-xs">
                   {filteredSummary.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="py-12 text-center text-mut">
@@ -2054,16 +2063,16 @@ export function PnlCalculatorClient() {
 
                       if (isEditing) {
                         return (
-                          <tr key={item.ticker} className="bg-paper-2/90 border-l-4 border-l-navy transition-colors">
-                            <td className="py-3 px-4 font-bold text-navy">
+                          <tr key={item.ticker} className="bg-paper-2/90 border-l-4 border-l-green transition-colors">
+                            <td className="py-3 px-4 font-bold text-ink">
                               <div className="flex items-center gap-1.5">
-                                <span>{item.ticker}</span>
-                                <span className="text-3xs px-1 py-0.5 rounded bg-navy text-white font-semibold">
+                                <span className="font-mono">{item.ticker}</span>
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-green text-white font-semibold">
                                   Editing
                                 </span>
                               </div>
                             </td>
-                            <td className="py-3 px-4 text-mut text-xs max-w-[180px] truncate" title={item.company}>
+                            <td className="py-3 px-4 text-ink/80 text-xs max-w-[180px] truncate" title={item.company}>
                               {item.company}
                             </td>
                             <td className="py-3 px-2 text-right">
@@ -2071,7 +2080,7 @@ export function PnlCalculatorClient() {
                                 type="number"
                                 value={editForm.buyQty}
                                 onChange={(e) => setEditForm({ ...editForm, buyQty: e.target.value })}
-                                className="w-24 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                className="w-24 bg-card border border-line rounded-lg px-2 py-1 text-right text-xs font-mono text-ink focus:outline-none focus:border-green"
                                 placeholder="Buy Qty"
                               />
                             </td>
@@ -2080,7 +2089,7 @@ export function PnlCalculatorClient() {
                                 type="number"
                                 value={editForm.sellQty}
                                 onChange={(e) => setEditForm({ ...editForm, sellQty: e.target.value })}
-                                className="w-24 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                className="w-24 bg-card border border-line rounded-lg px-2 py-1 text-right text-xs font-mono text-ink focus:outline-none focus:border-green"
                                 placeholder="Sell Qty"
                               />
                             </td>
@@ -2090,7 +2099,7 @@ export function PnlCalculatorClient() {
                                 step="0.01"
                                 value={editForm.buyPrice}
                                 onChange={(e) => setEditForm({ ...editForm, buyPrice: e.target.value })}
-                                className="w-28 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                className="w-28 bg-card border border-line rounded-lg px-2 py-1 text-right text-xs font-mono text-ink focus:outline-none focus:border-green"
                                 placeholder="Buy Price $"
                               />
                             </td>
@@ -2101,7 +2110,7 @@ export function PnlCalculatorClient() {
                                   step="0.01"
                                   value={editForm.sellPrice}
                                   onChange={(e) => setEditForm({ ...editForm, sellPrice: e.target.value })}
-                                  className="w-28 bg-paper-1 border border-paper-border rounded-lg px-2 py-1 text-right text-xs font-mono focus:outline-none focus:border-navy"
+                                  className="w-28 bg-card border border-line rounded-lg px-2 py-1 text-right text-xs font-mono text-ink focus:outline-none focus:border-green"
                                   placeholder="Sell Price $"
                                 />
                                 {item.openQty > 0 && (
@@ -2111,7 +2120,7 @@ export function PnlCalculatorClient() {
                                       step="0.01"
                                       value={editForm.marketPrice}
                                       onChange={(e) => setEditForm({ ...editForm, marketPrice: e.target.value })}
-                                      className="w-28 bg-paper-1 border border-paper-border rounded-lg px-1.5 py-0.5 text-right text-3xs font-mono text-navy focus:outline-none focus:border-navy"
+                                      className="w-28 bg-card border border-line rounded-lg px-1.5 py-0.5 text-right text-3xs font-mono text-ink focus:outline-none focus:border-green"
                                       placeholder="Mkt Price ($/u)"
                                       title="Enter current market price per unit to value open position"
                                     />
@@ -2136,7 +2145,7 @@ export function PnlCalculatorClient() {
                                 </button>
                                 <button
                                   onClick={handleCancelEdit}
-                                  className="p-1.5 rounded-lg bg-paper-2 text-mut hover:text-navy border border-paper-border transition-all cursor-pointer"
+                                  className="p-1.5 rounded-lg bg-paper-2 text-mut hover:text-ink border border-line transition-all cursor-pointer"
                                   title="Cancel Edit"
                                 >
                                   <X className="w-4 h-4" />
@@ -2162,14 +2171,16 @@ export function PnlCalculatorClient() {
                               : "hover:bg-paper-2/60 transition-colors"
                           }
                         >
-                          <td className="py-3.5 px-4 font-bold text-navy">
+                          <td className="py-3.5 px-4 font-bold text-ink">
                             <div className="flex items-center gap-2">
-                              <span>{item.ticker}</span>
+                              <span className="code font-mono px-2 py-0.5 rounded-[5px] bg-paper-2 border border-line/70 font-bold text-ink whitespace-nowrap inline-block text-xs">
+                                {item.ticker}
+                              </span>
                               {item.isUnlistedOption && (
                                 <button
                                   type="button"
                                   aria-label={`Unlisted option valuation inputs for ${item.ticker}`}
-                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-bg text-amber-d border border-amber-200 hover:bg-amber-d hover:text-white transition-colors cursor-help shrink-0"
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-bg text-amber-d border border-amber/40 hover:bg-amber-d hover:text-white transition-colors cursor-help shrink-0"
                                   onMouseEnter={(e) =>
                                     // Clamped to the viewport: the card is w-[22rem]
                                     // (352px) and ~300px tall, and `fixed` coords are
@@ -2195,7 +2206,7 @@ export function PnlCalculatorClient() {
                                 </button>
                               )}
                               {item.isEnriched && (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-semibold" title="Buy Qty and Buy Price merged from Placement Tracker">
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/30 font-semibold" title="Buy Qty and Buy Price merged from Placement Tracker">
                                   Enriched
                                 </span>
                               )}
@@ -2203,27 +2214,27 @@ export function PnlCalculatorClient() {
                                   Comments column, not as a badge here. Hover that
                                   cell for the full valuation breakdown. */}
                               {item.isEdited && (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-navy/10 text-navy font-semibold">
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-paper-2 text-ink border border-line font-semibold">
                                   Edited
                                 </span>
                               )}
                               {isOptionRow(item) ? (
                                 <span
-                                  className="text-3xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-semibold"
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 font-semibold"
                                   title={`Option line — reported separately from the ${summaryParentTicker(item)} equity line`}
                                 >
                                   Option
                                 </span>
                               ) : (
                                 <span
-                                  className="text-3xs px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-semibold"
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-paper-2 text-ink border border-line font-semibold"
                                   title="Ordinary equity line (includes non-option derivatives)"
                                 >
                                   Equity
                                 </span>
                               )}
                               {item.isMatched ? (
-                                <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d font-semibold">
+                                <span className="text-3xs px-1.5 py-0.5 rounded bg-green-bg text-green-d border border-green/30 font-semibold">
                                   Matched
                                 </span>
                               ) : isOptionRow(item) ? null : (
@@ -2231,7 +2242,7 @@ export function PnlCalculatorClient() {
                                 // buy and sell legs are not expected to balance, so
                                 // an Unmatched flag on it is noise, not a finding.
                                 <span
-                                  className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d font-semibold"
+                                  className="text-3xs px-1.5 py-0.5 rounded bg-amber-bg text-amber-d border border-amber/30 font-semibold"
                                   title={`Unmatched buy/sell quantities — ${fmtQty(Math.abs(item.openQty))} ${
                                     item.openQty > 0 ? "unsold" : "sold without a recorded buy"
                                   }`}
@@ -2246,11 +2257,11 @@ export function PnlCalculatorClient() {
                               </span>
                             )}
                           </td>
-                          <td className="py-3.5 px-4 text-mut truncate max-w-[200px]" title={item.company}>
+                          <td className="py-3.5 px-4 text-ink font-medium truncate max-w-[200px]" title={item.company}>
                             {item.company}
                           </td>
                           <td
-                            className="py-3.5 px-4 text-right font-mono text-navy"
+                            className="py-3.5 px-4 text-right font-mono text-ink"
                             title={buyUnknown ? item.placementYearNote : undefined}
                           >
                             {buyUnknown ? (
@@ -2261,18 +2272,18 @@ export function PnlCalculatorClient() {
                               fmtQty(item.buyQty)
                             )}
                           </td>
-                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                          <td className="py-3.5 px-4 text-right font-mono text-ink">
                             {isOptionRow(item) && item.sellQty === 0 && item.buyQty > 0
                               ? fmtQty(item.buyQty)
                               : fmtQty(item.sellQty)}
                           </td>
                           <td
-                            className="py-3.5 px-4 text-right font-mono text-navy"
+                            className="py-3.5 px-4 text-right font-mono text-ink"
                             title={buyUnknown ? item.placementYearNote : undefined}
                           >
                             {buyUnknown ? <span className="text-loss-d font-bold">—</span> : fmtCurrency(item.buyPrice)}
                           </td>
-                          <td className="py-3.5 px-4 text-right font-mono text-navy">
+                          <td className="py-3.5 px-4 text-right font-mono text-ink">
                             {fmtCurrency(item.sellPrice)}
                           </td>
                           <td className="py-3.5 px-4 text-right font-mono font-bold">
@@ -2305,10 +2316,10 @@ export function PnlCalculatorClient() {
                                   // all; a plain statement of fact stays neutral;
                                   // the merges get the amber in between.
                                   item.placementYearUnresolved
-                                    ? "bg-loss-bg text-loss-d border-loss-d"
+                                    ? "bg-loss-bg text-loss-d border border-loss/40"
                                     : NEUTRAL_COMMENTS.has(item.comment ?? "")
-                                    ? "bg-paper-2 text-mut border-paper-border"
-                                    : "bg-amber-bg text-amber-d border-amber-200"
+                                    ? "bg-paper-2 text-ink border border-line/60"
+                                    : "bg-amber-bg text-amber-d border border-amber/30"
                                 }`}
                                 title={commentHint(item)}
                               >
@@ -2319,7 +2330,7 @@ export function PnlCalculatorClient() {
                           <td className="py-3.5 px-4 text-center">
                             <button
                               onClick={() => handleStartEdit(item)}
-                              className="inline-flex items-center gap-1 text-xs font-semibold text-mut hover:text-navy px-2.5 py-1 rounded-lg border border-paper-border hover:bg-paper-2 transition-all cursor-pointer"
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-mut hover:text-ink px-2.5 py-1 rounded-lg border border-line hover:bg-paper-2 transition-all cursor-pointer"
                               title="Edit position values manually"
                             >
                               <Pencil className="w-3.5 h-3.5" />
@@ -2343,15 +2354,15 @@ export function PnlCalculatorClient() {
                       .map(({ label, totals }) => (
                         <tr
                           key={label}
-                          className="bg-paper-2/50 font-semibold text-navy border-t border-paper-border text-xs"
+                          className="bg-paper-2/50 font-semibold text-ink border-t border-line text-xs"
                         >
                           <td className="py-3 px-4" colSpan={2}>
                             {label} ({totals.count} ticker{totals.count === 1 ? "" : "s"})
                           </td>
-                          <td className="py-3 px-4 text-right font-mono">{fmtQty(totals.buyQty)}</td>
-                          <td className="py-3 px-4 text-right font-mono">{fmtQty(totals.sellQty)}</td>
-                          <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.buyPrice)}</td>
-                          <td className="py-3 px-4 text-right font-mono">{fmtCurrency(totals.sellPrice)}</td>
+                          <td className="py-3 px-4 text-right font-mono text-ink">{fmtQty(totals.buyQty)}</td>
+                          <td className="py-3 px-4 text-right font-mono text-ink">{fmtQty(totals.sellQty)}</td>
+                          <td className="py-3 px-4 text-right font-mono text-ink">{fmtCurrency(totals.buyPrice)}</td>
+                          <td className="py-3 px-4 text-right font-mono text-ink">{fmtCurrency(totals.sellPrice)}</td>
                           <td className="py-3 px-4 text-right font-mono" colSpan={3}>
                             <span
                               className={`inline-block px-2.5 py-1 rounded-lg ${
@@ -2363,20 +2374,20 @@ export function PnlCalculatorClient() {
                           </td>
                         </tr>
                       ))}
-                    <tr className="bg-paper-2 font-bold text-navy border-t border-paper-border text-xs">
+                    <tr className="bg-paper-2 font-bold text-ink border-t border-line text-xs">
                       <td className="py-4 px-4" colSpan={2}>
                         Grand Total ({summaryList.length} total tickers)
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">
+                      <td className="py-4 px-4 text-right font-mono text-ink">
                         {fmtQty(summaryList.reduce((s, i) => s + i.buyQty, 0))}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">
+                      <td className="py-4 px-4 text-right font-mono text-ink">
                         {fmtQty(summaryList.reduce((s, i) => s + i.sellQty, 0))}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">
+                      <td className="py-4 px-4 text-right font-mono text-ink">
                         {fmtCurrency(totalBuyVolume)}
                       </td>
-                      <td className="py-4 px-4 text-right font-mono">
+                      <td className="py-4 px-4 text-right font-mono text-ink">
                         {fmtCurrency(totalSellVolume)}
                       </td>
                       <td className="py-4 px-4 text-right font-mono" colSpan={3}>
@@ -2412,11 +2423,11 @@ export function PnlCalculatorClient() {
           className="fixed z-[100] w-[22rem] pointer-events-none rounded-xl border border-line bg-card shadow-shadow-lg overflow-hidden"
           style={{ left: unlistedTip.left, top: unlistedTip.top }}
         >
-          <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-navy">
-            <span className="text-[11px] font-bold tracking-wide text-white leading-tight">
+          <div className="flex items-center justify-between gap-2 px-3.5 py-2 bg-paper-2 border-b border-line">
+            <span className="text-[11px] font-bold tracking-wide text-ink leading-tight">
               {unlistedTip.item.ticker} · Unlisted Option
             </span>
-            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-white/20 text-white whitespace-nowrap">
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-green/15 text-green-d border border-green/30 whitespace-nowrap">
               MODEL PRICE
             </span>
           </div>

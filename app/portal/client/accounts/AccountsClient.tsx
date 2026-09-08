@@ -205,9 +205,9 @@ export function AccountsClient({
                 <th className="px-4.5 py-2.5">s708 certificate</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#f0ede5]">
+            <tbody className="divide-y divide-line">
               {accounts.map((a) => (
-                <tr key={a.id} className="hover:bg-[#faf9f5]">
+                <tr key={a.id} className="hover:bg-paper-2/60 transition-colors">
                   <td className="px-4.5 py-3 font-semibold text-ink">{a.label}</td>
                   <td className="px-4.5 py-3 font-mono text-mut whitespace-nowrap">
                     {a.externalRef ?? "—"}

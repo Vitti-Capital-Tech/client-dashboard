@@ -176,14 +176,14 @@ export function MismatchRow({
     on
       ? {
           className:
-            "decoration-dotted decoration-loss underline underline-offset-4 cursor-help font-semibold text-navy",
+            "decoration-dotted decoration-loss underline underline-offset-4 cursor-help font-semibold text-ink",
           title: `Overridden by staff · Computed: ${computed}`,
         }
       : {};
 
   if (!editing) {
     return (
-      <tr className="hover:bg-[#faf9f5] border-t border-line/60 transition-colors">
+      <tr className="hover:bg-paper-2/60 border-t border-line/60 transition-colors">
         {/* Client & Account */}
         <td className="px-4.5 py-3 select-none">
           <div className="flex items-center gap-2">
@@ -247,7 +247,7 @@ export function MismatchRow({
         </td>
 
         {/* Buy Cost */}
-        <td className="px-4.5 py-3 text-right font-mono text-mut whitespace-nowrap">
+        <td className="px-4.5 py-3 text-right font-mono text-ink whitespace-nowrap">
           <span {...mark(row.overridden.buyPrice, `$${money(row.computed.buyPrice)}`)}>
             ${money2(row.buyPrice)}
           </span>

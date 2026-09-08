@@ -42,7 +42,7 @@ export default async function StaffAuditLog() {
                 </tr>
               ) : (
                 audit.map((e) => (
-                  <tr key={e.key} className="hover:bg-[#faf9f5]">
+                  <tr key={e.key} className="hover:bg-paper-2/60 transition-colors">
                     <td className="px-4.5 py-3 font-mono text-mut whitespace-nowrap text-[11.5px]">
                       {new Date(e.ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot;{" "}
                       {new Date(e.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}

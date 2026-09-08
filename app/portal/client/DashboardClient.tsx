@@ -434,7 +434,7 @@ export function DashboardClient({
         <div className="lg:col-span-5 space-y-4">
           {/* Live Placement Card */}
           {liveDeal && (
-            <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3.5 bg-linear-to-b from-green-bg/60 to-white/70">
+            <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3.5 bg-linear-to-b from-green-bg/60 to-card/70">
               <div className="flex justify-between items-center text-xs">
                 <b className="text-green-d text-sm font-semibold flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-green animate-ping" />
@@ -468,7 +468,7 @@ export function DashboardClient({
           )}
 
           {/* Ask Vitti AI Card */}
-          <div className="card bg-linear-to-b from-green-bg to-white/80 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2">
+          <div className="card bg-linear-to-b from-green-bg to-card/80 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2">
             <div className="flex justify-between items-center text-xs">
               <b className="text-ink text-sm font-semibold">Ask Vitti</b>
               <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>

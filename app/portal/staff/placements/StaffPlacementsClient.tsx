@@ -193,7 +193,7 @@ export function StaffPlacementsClient({
                           : 100;
 
                         return (
-                          <tr key={b.clientId} className="hover:bg-[#faf9f5]">
+                          <tr key={b.clientId} className="hover:bg-paper-2/60 transition-colors">
                             <td className="py-3 flex items-center gap-2 select-none">
                               <span className="w-5.5 h-5.5 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[9px] text-ink uppercase">
                                 {cl.initials}
@@ -330,7 +330,7 @@ export function StaffPlacementsClient({
 
               {/* Settlement step */}
               {p.stage === "closed" && isAllocated && (
-                <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3 bg-linear-to-b from-green-bg/60 to-white/70">
+                <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3 bg-linear-to-b from-green-bg/60 to-card/70">
                   <div className="text-xs font-semibold text-green-d select-none">
                     Allocations published
                   </div>
@@ -390,11 +390,11 @@ export function StaffPlacementsClient({
                 <th className="px-4.5 py-3"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#f0ede5]">
+            <tbody className="divide-y divide-line">
               {placements.map(p => {
                 const bidsValSum = p.bids.reduce((sum, b) => sum + b.amount, 0);
                 return (
-                  <tr key={p.id} className="hover:bg-[#faf9f5]">
+                  <tr key={p.id} className="hover:bg-paper-2/60 transition-colors">
                     <td className="px-4.5 py-3.5 font-bold">
                       <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span>
                       <span className="ml-2 font-disp">{p.name}</span>

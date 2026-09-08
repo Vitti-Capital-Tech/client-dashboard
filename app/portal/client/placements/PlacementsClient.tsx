@@ -647,7 +647,7 @@ export function PlacementsClient({
                       <tr
                         key={p.id}
                         onClick={() => handleOpenDeal(p.id)}
-                        className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
+                        className="hover:bg-paper-2/60 cursor-pointer transition-colors"
                       >
                         <td className="px-4.5 py-3.5">
                           <span className="text-ink font-semibold">{p.code} &middot; {p.name}</span>

@@ -1527,3 +1527,54 @@ The desk asked for a delete on the unlisted rows of the firm-wide Options regist
 - **The deletion is an instruction about the ticker, not about the quantity it had.** If the client later buys more shares in that name the entitlement would grow, and the grant stays suppressed. That is the intended reading of "do not report this grant", but it is the kind of thing worth knowing before deleting one.
 - **Restoring is a row delete.** Removing the `deleted_unlisted_options` entry re-mints the grant on the next recompute. No UI for it — the desk did not ask, and the table plus the `audit_log` entry (who, when, the description, the reason) make it recoverable without one.
 - **Tests (`lib/pnl/recompute.test.ts`).** Three, and the first is the one that matters: the tracker *mints* the grant (1:2 on 10,000 shares → 5,000 options), because without that baseline the deletion test would pass just as well against an engine that never granted anything. Then the deletion survives a full run while the shares that earned it stay, and an exclusion naming an ordinary leaves that holding alone.
+
+### 8.44 The Theme Engine, Dynamic CSS Properties, and Contrast Guardrails (`lib/theme/`, `app/components/ThemeProvider.tsx`)
+
+The theme engine translates high-level user preferences into WCAG AA compliant CSS custom properties, providing zero-flash styling across both Client and Staff workspaces.
+
+- **Types & Domain Interfaces (`lib/theme/theme-config.ts`):**
+  ```ts
+  export interface ThemeConfig {
+    id: string;
+    name: string;
+    isDark?: boolean;
+    bgColor: string;       // Canvas background
+    textColor: string;     // Primary typography
+    accentColor: string;   // Brand / highlight accent
+    cardOpacity: number;       // 0.80 to 1.0
+    borderOpacity: number;     // 0.05 to 0.30
+    mutedTextOpacity: number;  // 0.40 to 0.80
+    accentGlowOpacity: number; // 0.08 to 0.35
+    fontFamily: string;
+  }
+  ```
+- **Luminance, Contrast & Token Derivation Math:**
+  - `getLuminance(hex)` calculates ITU-R BT.601 relative luminance:
+    $$L = \frac{0.299 R + 0.587 G + 0.114 B}{255}$$
+  - `getContrastRatio(hex1, hex2)` computes the standard W3C contrast ratio:
+    $$\text{Ratio} = \frac{L_{\text{lighter}} + 0.05}{L_{\text{darker}} + 0.05}$$
+  - `isContrastAdequate(bgColor, textColor)` enforces the minimum 4.5:1 threshold for standard UI body text.
+- **Dedicated Financial Status Tokens:** Rather than relying on simple color inversion, `generateThemeCssVariables` dynamically assigns luminance-tailored financial status tokens:
+  - **Gain / Profit:** Light mode `#1f9d6b` (dark emerald on light ground); Dark mode `#34d399` (light mint with high luminance on dark ground) and `--theme-gain-bg: rgba(52, 211, 153, 0.14)`.
+  - **Loss / Deficit:** Light mode `#d6573a` / `#b8442b`; Dark mode `#f87171` / `#fb7185` and `--theme-loss-bg: rgba(248, 113, 113, 0.14)`.
+  - **Amber / Open:** Light mode `#c98a2b` / `#9a6a1c`; Dark mode `#fbbf24` / `#fde68a` and `--theme-amber-bg: rgba(251, 191, 36, 0.14)`.
+- **Historical P&L High-Contrast Row Differentiation:**
+  To guarantee that open versus closed positions remain instantly distinguishable under dark themes without producing dull cement-gray rows:
+  - `.theme-row-held` (Open / Held): `background-color: rgba(245, 158, 11, 0.12) !important;` with inset accent bar `box-shadow: inset 3.5px 0 0 0 #f59e0b !important;` and hover `rgba(245, 158, 11, 0.22)`.
+  - `.theme-row-exited` (Closed / Realised): `background-color: rgba(16, 185, 129, 0.08) !important;` with inset accent bar `box-shadow: inset 3.5px 0 0 0 #10b981 !important;` and hover `rgba(16, 185, 129, 0.16)`.
+  - Contextual filter pills for "Open", "Matched", "Profit", and "Loss" dynamically match these row indicator hues.
+- **Tailwind v4 Dark Mode Selector Configuration:**
+  In Tailwind CSS v4, the `dark:` variant defaults to OS media queries (`prefers-color-scheme`). To ensure all Tailwind `dark:` utilities activate based on the application's runtime theme mode, `app/globals.css` declares:
+  ```css
+  @custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));
+  ```
+- **Elimination of Dark-Mode Contrast Traps:**
+  - **The `text-navy` trap:** In light mode, `--color-navy` represents `#1d202f` (dark charcoal text). In dark mode, `--theme-sidebar-bg` maps to near-black (`#0f172a` or `#050508`). Applying `text-navy` to table contents (such as PNL Calculator numeric values or Mismatched Qty override fields) produced invisible black text on black backgrounds. These were systematically migrated to `text-ink font-semibold`, supplemented with a global safety net:
+    ```css
+    html[data-theme-mode="dark"] .text-navy { color: var(--color-ink) !important; }
+    ```
+  - **The `#faf9f5` hover flash:** Hardcoded table row hover utilities (`hover:bg-[#faf9f5]`) created blinding white flashes across dark tables. Migrated across all table components to `hover:bg-paper-2/60 transition-colors`.
+  - **Transparent container collapse:** Components in `PnlCalculatorClient.tsx` used legacy classes `bg-paper-1` and `border-paper-border`. These are explicitly mapped in `@theme` in `app/globals.css` (`--color-paper-1: var(--theme-card)` and `--color-paper-border: var(--theme-border)`), guaranteeing that cards, inputs, and dropzones preserve crisp borders and opaque background surfaces.
+- **Zero-Flash Head Execution (`ThemeInitScript`):**
+  An inline `<script id="vitti-theme-init">` is injected in `app/layout.tsx` before any content renders. It synchronously parses `localStorage.getItem("vitti_custom_theme")`, applies CSS custom properties to `document.documentElement`, and sets `data-theme-active` and `data-theme-mode`, preventing flashes of unstyled content during page hydration.
+

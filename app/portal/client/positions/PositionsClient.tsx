@@ -1466,12 +1466,20 @@ export function PositionsClient({
                             ? "bg-gain-bg text-gain"
                             : f === "loss"
                               ? "bg-loss-bg text-loss-d"
-                              : "bg-paper-2 text-ink"
+                              : f === "open"
+                                ? "bg-amber-bg text-amber-d border border-amber/30"
+                                : f === "matched"
+                                  ? "bg-green-bg text-green-d border border-green/30"
+                                  : "bg-paper-2 text-ink"
                           : f === "profit"
                             ? "bg-gain-bg/50 text-gain"
                             : f === "loss"
                               ? "bg-loss-bg/50 text-loss-d"
-                              : "bg-line/40 text-mut"
+                              : f === "open"
+                                ? "bg-amber-bg/50 text-amber-d"
+                                : f === "matched"
+                                  ? "bg-green-bg/50 text-green-d"
+                                  : "bg-line/40 text-mut"
                       }`}
                     >
                       {count}
@@ -1827,7 +1835,7 @@ export function PositionsClient({
                         className={
                           money.isItm
                             ? "bg-green-bg/25 hover:bg-green-bg/40"
-                            : "hover:bg-[#faf9f5]"
+                            : "hover:bg-paper-2/60 transition-colors"
                         }
                       >
                         <td className="px-4.5 py-3 whitespace-nowrap">
@@ -2320,7 +2328,7 @@ export function PositionsClient({
                     const perOption = o.qty > 0 ? o.value / o.qty : 0;
 
                     return (
-                      <tr key={rowKey(o.code)} className="hover:bg-[#faf9f5]">
+                      <tr key={rowKey(o.code)} className="hover:bg-paper-2/60 transition-colors">
                         <td className="px-4.5 py-3">
                           <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">
                             {o.code}
@@ -2367,7 +2375,7 @@ export function PositionsClient({
                     <tr
                       key={rowKey(p.code)}
                       onClick={() => handleOpenHolding(p.code)}
-                      className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
+                      className="hover:bg-paper-2/60 cursor-pointer transition-colors"
                     >
                       <td className="px-4.5 py-3">
                         <span className="code text-[13px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{p.code}</span>

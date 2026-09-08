@@ -106,12 +106,12 @@ export function ClientsTable({ rows }: { rows: ClientRegistryRow[] }) {
               <th className="px-4.5 py-3 font-semibold uppercase tracking-wider text-[10.5px] text-right">s708 expiry</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[#f0ede5]">
+          <tbody className="divide-y divide-line">
             {paginatedRows.map((r) => (
               <tr
                 key={r.id}
                 onClick={() => open(r.id)}
-                className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
+                className="hover:bg-paper-2/60 cursor-pointer transition-colors"
               >
                 <td className="px-4.5 py-3.5 flex items-center gap-2">
                   <span className="w-6.5 h-6.5 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[10.5px] text-ink uppercase">

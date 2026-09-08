@@ -14,6 +14,7 @@ import {
   Star,
   CreditCard,
   Settings,
+  Palette,
   Users,
   Calculator,
   AlertTriangle,
@@ -206,6 +207,7 @@ export function PortalShell({
       { k: "invest", label: "Invest", path: "/portal/client/invest", icon: Zap, tab: true },
       { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: LineChart, tab: true },
       { k: "insights", label: "Insights", path: "/portal/client/insights", icon: BarChart3, tab: true },
+      { k: "customise", label: "Customise", path: "/portal/client/customise", icon: Palette, tab: true },
       { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: MessageSquareMore, tab: true, ai: true },
       { k: "markets", label: "Markets", path: "/portal/client/markets", icon: TrendingUp, tab: false },
       { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: Zap, tab: false },
@@ -225,6 +227,7 @@ export function PortalShell({
       { k: "options", label: "Options", path: "/portal/staff/options", icon: Layers, tab: true },
       { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: Calculator, tab: true },
       { k: "mismatches", label: "Mismatched Qty", path: "/portal/staff/mismatches", icon: AlertTriangle, tab: true },
+      { k: "customise", label: "Customise", path: "/portal/staff/customise", icon: Palette, tab: true },
       { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: Bell, tab: false, badge: "alerts" },
       { k: "merge", label: "Account requests", path: "/portal/staff/merge-requests", icon: GitMerge, tab: false, badge: "pendingMerge" },
       { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: ClipboardCheck, tab: false }
@@ -462,6 +465,16 @@ export function PortalShell({
             )}
 
             <div className="border-t border-line my-1" />
+
+            <Link
+              role="menuitem"
+              href={role === "admin" ? "/portal/staff/customise" : "/portal/client/customise"}
+              onClick={() => setIsProfileOpen(false)}
+              className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
+            >
+              <Palette className="w-4 h-4 stroke-[1.7] flex-none text-green-d" />
+              Customise Theme
+            </Link>
 
             <button
               role="menuitem"

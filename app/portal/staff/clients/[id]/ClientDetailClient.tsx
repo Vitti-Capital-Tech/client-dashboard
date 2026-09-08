@@ -675,7 +675,7 @@ export function ClientDetailClient({
                     const isUp = pl >= 0;
                     const sg = signalsMap[p.code];
                     return (
-                      <tr key={p.code} className="hover:bg-[#faf9f5]">
+                      <tr key={p.code} className="hover:bg-paper-2/60 transition-colors">
                         <td className="px-4.5 py-3"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span></td>
                         <td className="px-4.5 py-3 text-mut">{p.name}</td>
                         <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
@@ -911,12 +911,20 @@ export function ClientDetailClient({
                             ? "bg-gain-bg text-gain"
                             : f === "loss"
                               ? "bg-loss-bg text-loss-d"
-                              : "bg-paper-2 text-ink"
+                              : f === "open"
+                                ? "bg-amber-bg text-amber-d border border-amber/30"
+                                : f === "matched"
+                                  ? "bg-green-bg text-green-d border border-green/30"
+                                  : "bg-paper-2 text-ink"
                           : f === "profit"
                             ? "bg-gain-bg/50 text-gain"
                             : f === "loss"
                               ? "bg-loss-bg/50 text-loss-d"
-                              : "bg-line/40 text-mut"
+                              : f === "open"
+                                ? "bg-amber-bg/50 text-amber-d"
+                                : f === "matched"
+                                  ? "bg-green-bg/50 text-green-d"
+                                  : "bg-line/40 text-mut"
                           }`}
                       >
                         {count}
@@ -1210,7 +1218,7 @@ export function ClientDetailClient({
                       return (
                         <tr
                           key={o.ticker}
-                          className={money.isItm ? "bg-green-bg/25 hover:bg-green-bg/40" : "hover:bg-[#faf9f5]"}
+                          className={money.isItm ? "bg-green-bg/25 hover:bg-green-bg/40 transition-colors" : "hover:bg-paper-2/60 transition-colors"}
                         >
                           <td className="px-4.5 py-3 whitespace-nowrap">
                             <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink whitespace-nowrap inline-block">
@@ -1355,7 +1363,7 @@ export function ClientDetailClient({
                 ) : (
                   paginatedBids.map(({ placement: p, bid }) => {
                     return (
-                      <tr key={`${p.id}-${bid.accountId ?? "x"}`} className="hover:bg-[#faf9f5]">
+                      <tr key={`${p.id}-${bid.accountId ?? "x"}`} className="hover:bg-paper-2/60 transition-colors">
                         <td className="px-4.5 py-3 font-bold"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span> &middot; {p.name}</td>
                         <td className="px-4.5 py-3 text-mut">{p.type}</td>
                         <td className="px-4.5 py-3 text-right font-mono">${bid.amount.toLocaleString("en-AU")}</td>

@@ -158,15 +158,15 @@ export function PnlRow({
     status === "Unknown"
       ? "bg-paper-2/60"
       : isStillHeld(status)
-      ? "bg-amber-bg/45"
-      : "bg-green-bg/45";
+      ? "theme-row-held"
+      : "theme-row-exited";
 
   const statusPill =
     status === "Unknown"
-      ? "bg-paper-2 text-mut"
+      ? "bg-paper-2 text-mut border border-line/60"
       : isStillHeld(status)
-      ? "bg-amber-bg text-amber-d"
-      : "bg-green-bg text-green-d";
+      ? "bg-amber-bg text-amber-d border border-amber/30"
+      : "bg-green-bg text-green-d border border-green/30";
 
   // A dotted underline marks a value set by hand, with the computed figure in
   // the tooltip so the change stays inspectable without opening the editor.
@@ -181,33 +181,33 @@ export function PnlRow({
 
   if (!editing) {
     return (
-      <tr className={`border-t border-[#f0ede5] ${fill}`}>
+      <tr className={`border-t border-line/60 ${fill} ${fill === "bg-paper-2/60" ? "hover:bg-paper-2/80" : ""} transition-colors`}>
         <td className="px-4.5 py-3">
           <span
-            className={`code font-mono px-1.5 py-0.5 rounded-[5px] bg-white/70 font-bold ${row.flagged ? "text-loss-d" : "text-ink"}`}
+            className={`code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 border border-line/60 font-bold ${row.flagged ? "text-loss-d" : "text-ink"}`}
           >
             {row.ticker}
           </span>
         </td>
-        <td className={`px-4.5 py-3 ${row.flagged ? "text-loss-d font-semibold" : "text-mut"}`}>
+        <td className={`px-4.5 py-3 ${row.flagged ? "text-loss-d font-semibold" : "text-ink font-medium"}`}>
           {row.name}
         </td>
-        <td className="px-4.5 py-3 text-right font-mono">
+        <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span {...mark(row.overridden.buyQty, qty(effComputedBuyQty))}>
             {displayBuyQty === 0 && !isOption ? "—" : qty(displayBuyQty)}
           </span>
         </td>
-        <td className="px-4.5 py-3 text-right font-mono">
+        <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span {...mark(row.overridden.sellQty, qty(effComputedSellQty))}>
             {displaySellQty === 0 && !isOption ? "—" : qty(displaySellQty)}
           </span>
         </td>
-        <td className="px-4.5 py-3 text-right font-mono">
+        <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span {...mark(row.overridden.buyPrice, `$${money(row.computed.buyPrice)}`)}>
             ${money2(row.buyPrice)}
           </span>
         </td>
-        <td className="px-4.5 py-3 text-right font-mono">
+        <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span
             {...mark(row.overridden.sellOrCurrent, `$${money(row.computed.sellOrCurrent)}`)}
           >
@@ -215,7 +215,7 @@ export function PnlRow({
           </span>
         </td>
         <td
-          className={`px-4.5 py-3 text-right font-mono font-semibold ${row.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
+          className={`px-4.5 py-3 text-right font-mono font-bold text-xs ${row.pnl >= 0 ? "text-gain" : "text-loss-d"}`}
         >
           {row.pnl < 0 ? "-" : ""}${money2(Math.abs(row.pnl))}
         </td>
@@ -252,7 +252,7 @@ export function PnlRow({
   return (
     <tr className={`border-t border-line-2 ${fill} ring-1 ring-inset ring-navy/25`}>
       <td className="px-4.5 py-2">
-        <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-white/70 font-bold text-ink">
+        <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 border border-line/60 font-bold text-ink">
           {row.ticker}
         </span>
       </td>

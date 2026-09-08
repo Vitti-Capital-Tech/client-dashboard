@@ -197,7 +197,7 @@ export function WatchlistClient({
               ) : (
                 watchlist.map((w, idx) => {
                   return (
-                    <tr key={idx} className="hover:bg-[#faf9f5]">
+                    <tr key={idx} className="hover:bg-paper-2/60 transition-colors">
                       <td className="px-4.5 py-3.5 font-bold">
                         <span className="code text-[12.5px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{w.code}</span>
                       </td>

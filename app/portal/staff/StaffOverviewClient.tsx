@@ -181,12 +181,12 @@ export function StaffOverviewClient({
                   <th className="px-4.5 py-2.5 text-right">s708 expiry</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#f0ede5]">
+              <tbody className="divide-y divide-line">
                 {paginatedRows.map(r => (
                   <tr
                     key={r.id}
                     onClick={() => handleViewClient(r.id)}
-                    className="hover:bg-[#faf9f5] cursor-pointer transition-colors"
+                    className="hover:bg-paper-2/60 cursor-pointer transition-colors"
                   >
                     <td className="px-4.5 py-3 flex items-center gap-2">
                       <span className="w-6 h-6 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[10px] text-ink">

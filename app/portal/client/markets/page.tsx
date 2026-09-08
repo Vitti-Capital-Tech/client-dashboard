@@ -106,11 +106,11 @@ export default async function ClientMarketsPage() {
                   <th className="px-4.5 py-2.5 text-right hidden sm:table-cell">Upside</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#f0ede5]">
+              <tbody className="divide-y divide-line">
                 {recos.map(r => {
                   const ratingColor = r.rating.toLowerCase().includes("buy") ? "bg-green-bg text-green-d" : "bg-paper-2 text-mut";
                   return (
-                    <tr key={r.code} className="hover:bg-[#faf9f5]">
+                    <tr key={r.code} className="hover:bg-paper-2/60 transition-colors">
                       <td className="px-4.5 py-2.5 font-bold"><span className="code text-[12.5px] bg-paper-2 rounded-[5px] px-1.5 py-0.5">{r.code}</span></td>
                       <td className="px-4.5 py-2.5">
                         <span className={`pill text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${ratingColor}`}>
@@ -135,7 +135,7 @@ export default async function ClientMarketsPage() {
         <div className="md:col-span-5 space-y-4">
           <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
             <b className="text-sm font-semibold text-ink block select-none">Latest strategy reports</b>
-            <div className="divide-y divide-[#f0ede5] text-xs font-medium">
+            <div className="divide-y divide-line text-xs font-medium">
               {reports.map((rp) => (
                 <div key={rp.id} className="py-2.5 space-y-0.5">
                   <div className="font-semibold text-ink">{rp.title}</div>
@@ -153,7 +153,7 @@ export default async function ClientMarketsPage() {
             </AlertButton>
           </div>
 
-          <div className="card bg-linear-to-b from-green-bg to-white border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2 select-none">
+          <div className="card bg-linear-to-b from-green-bg to-card border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2 select-none">
             <div className="flex justify-between items-center text-xs">
               <b className="text-ink text-sm font-semibold">Ask Vitti AI</b>
               <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>

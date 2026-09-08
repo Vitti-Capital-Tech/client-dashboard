@@ -1,33 +1,37 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));
+
 @theme {
-  --color-navy: #1d202f;
-  --color-navy-2: #262a3d;
-  --color-navy-3: #2f3447;
-  --color-navy-line: #383d52;
-  --color-green: #36bb91;
-  --color-green-d: #1f8e6b;
-  --color-green-bg: #e4f5ee;
-  --color-green-soft: #d5efe5;
-  --color-paper: #f7f6f3;
-  --color-paper-2: #efece5;
-  --color-card: #ffffff;
-  --color-ink: #1d202f;
-  --color-mut: #6e7180;
+  --color-navy: var(--theme-sidebar-bg, #1d202f);
+  --color-navy-2: var(--theme-sidebar-hover, #262a3d);
+  --color-navy-3: var(--theme-sidebar-active, #2f3447);
+  --color-navy-line: var(--theme-sidebar-border, #383d52);
+  --color-green: var(--theme-accent, #36bb91);
+  --color-green-d: var(--theme-accent-hover, #1f8e6b);
+  --color-green-bg: var(--theme-accent-soft, #e4f5ee);
+  --color-green-soft: var(--theme-accent-soft, #d5efe5);
+  --color-paper: var(--theme-bg, #f7f6f3);
+  --color-paper-2: var(--theme-bg-subtle, #efece5);
+  --color-card: var(--theme-card, #ffffff);
+  --color-ink: var(--theme-text, #1d202f);
+  --color-mut: var(--theme-text-muted, #6e7180);
   --color-mut-d: #9aa0b4;
-  --color-line: #e7e4dc;
-  --color-line-2: #dedacf;
-  --color-gain: #1f9d6b;
-  --color-gain-bg: #e4f5ee;
-  --color-loss: #d6573a;
-  --color-loss-bg: #fae8e2;
-  --color-loss-d: #b8442b;
-  --color-amber: #c98a2b;
-  --color-amber-bg: #f7ecd6;
-  --color-amber-d: #9a6a1c;
+  --color-line: var(--theme-border, #e7e4dc);
+  --color-line-2: var(--theme-border-subtle, #dedacf);
+  --color-paper-1: var(--theme-card, #ffffff);
+  --color-paper-border: var(--theme-border, #e7e4dc);
+  --color-gain: var(--theme-gain, #1f9d6b);
+  --color-gain-bg: var(--theme-gain-bg, #e4f5ee);
+  --color-loss: var(--theme-loss, #d6573a);
+  --color-loss-bg: var(--theme-loss-bg, #fae8e2);
+  --color-loss-d: var(--theme-loss-d, #b8442b);
+  --color-amber: var(--theme-amber, #c98a2b);
+  --color-amber-bg: var(--theme-amber-bg, #f7ecd6);
+  --color-amber-d: var(--theme-amber-d, #9a6a1c);
 
   --font-disp: var(--font-fraunces), Georgia, serif;
-  --font-body: var(--font-hanken-grotesk), system-ui, sans-serif;
+  --font-body: var(--theme-font-body, var(--font-hanken-grotesk), system-ui, sans-serif);
   --font-mono: var(--font-ibm-plex-mono), ui-monospace, monospace;
 
   --shadow-shadow: 0 1px 2px rgba(29,32,47,.04), 0 8px 24px -16px rgba(29,32,47,.18);
@@ -35,8 +39,8 @@
 }
 
 :root {
-  --background: #f7f6f3;
-  --foreground: #1d202f;
+  --background: var(--theme-bg, #f7f6f3);
+  --foreground: var(--theme-text, #1d202f);
 }
 
 body {
@@ -45,6 +49,240 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
 }
+
+/* Custom theme dynamic adaptations */
+html[data-theme-active="true"] body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+}
+
+html[data-theme-active="true"] .bg-paper {
+  background-color: var(--color-paper) !important;
+}
+
+html[data-theme-active="true"] .bg-paper-2 {
+  background-color: var(--color-paper-2) !important;
+}
+
+html[data-theme-active="true"] .bg-white {
+  background-color: var(--color-card) !important;
+}
+
+html[data-theme-active="true"] .text-ink {
+  color: var(--color-ink) !important;
+}
+
+html[data-theme-active="true"] .text-mut {
+  color: var(--color-mut) !important;
+}
+
+html[data-theme-active="true"] .border-line {
+  border-color: var(--color-line) !important;
+}
+
+html[data-theme-active="true"] .border-line-2 {
+  border-color: var(--color-line-2) !important;
+}
+
+html[data-theme-active="true"] .bg-paper-1 {
+  background-color: var(--color-card) !important;
+}
+
+html[data-theme-active="true"] .border-paper-border {
+  border-color: var(--color-line) !important;
+}
+
+html[data-theme-active="true"] aside {
+  background-color: var(--color-navy) !important;
+}
+
+html[data-theme-active="true"] .bg-navy {
+  background-color: var(--color-navy) !important;
+}
+
+html[data-theme-active="true"] .bg-navy-3 {
+  background-color: var(--color-navy-3) !important;
+}
+
+html[data-theme-active="true"] .text-green {
+  color: var(--color-green) !important;
+}
+
+html[data-theme-active="true"] .text-green-d {
+  color: var(--color-green-d) !important;
+}
+
+html[data-theme-active="true"] .bg-green {
+  background-color: var(--color-green) !important;
+}
+
+html[data-theme-active="true"] .bg-green-bg {
+  background-color: var(--color-green-bg) !important;
+}
+
+/* For dark mode specifically: topbar backdrop, inputs and dropdowns */
+html[data-theme-mode="dark"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-theme-mode="dark"] select,
+html[data-theme-mode="dark"] textarea {
+  background-color: var(--color-paper-2);
+  color: var(--color-ink);
+  border-color: var(--color-line);
+}
+
+html[data-theme-mode="dark"] select option {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+}
+
+html[data-theme-mode="dark"] .bg-white\/85 {
+  background-color: var(--color-card) !important;
+}
+
+/* In dark mode, ensure text-navy and navy badges map to legible text */
+html[data-theme-mode="dark"] .text-navy {
+  color: var(--color-ink) !important;
+}
+html[data-theme-mode="dark"] .bg-navy\/5 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+html[data-theme-mode="dark"] .bg-navy\/10 {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+}
+html[data-theme-mode="dark"] .hover\:text-navy:hover {
+  color: var(--color-ink) !important;
+}
+
+/* Fix Table Row Hover in Dark Mode (Eliminates blinding white flash from #faf9f5) */
+html[data-theme-mode="dark"] .hover\:bg-\[\#faf9f5\]:hover,
+html[data-theme-mode="dark"] tr.hover\:bg-\[\#faf9f5\]:hover,
+html[data-theme-mode="dark"] .hover\:bg-paper\/40:hover,
+html[data-theme-mode="dark"] .hover\:bg-paper\/50:hover,
+html[data-theme-mode="dark"] tr.hover\:bg-paper\/40:hover,
+html[data-theme-mode="dark"] tr.hover\:bg-paper\/50:hover {
+  background-color: var(--theme-row-hover, rgba(255, 255, 255, 0.045)) !important;
+}
+
+/* Subtle table dividers in dark mode */
+html[data-theme-mode="dark"] .divide-\[\#f0ede5\] > * + *,
+html[data-theme-mode="dark"] .border-\[\#f0ede5\] {
+  border-color: var(--color-line-2) !important;
+}
+
+/* Ticker chips in dark mode */
+html[data-theme-mode="dark"] .bg-white\/70,
+html[data-theme-mode="dark"] .bg-white\/80 {
+  background-color: var(--theme-chip-bg, rgba(255, 255, 255, 0.08)) !important;
+  color: var(--color-ink) !important;
+  border-color: var(--color-line) !important;
+}
+
+/* Unlisted option pastel pill in dark mode */
+html[data-theme-mode="dark"] .bg-\[\#ece9f3\] {
+  background-color: rgba(168, 85, 247, 0.15) !important;
+  color: #d8b4fe !important;
+  border-color: rgba(168, 85, 247, 0.3) !important;
+}
+
+/* Fix tab and button hover in dark mode */
+html[data-theme-mode="dark"] .hover\:bg-white\/50:hover,
+html[data-theme-mode="dark"] .hover\:bg-white\/40:hover {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* --- Historical P&L Rows (Light Mode) --- */
+.theme-row-held,
+tr.theme-row-held {
+  background-color: rgba(247, 236, 214, 0.50) !important;
+  box-shadow: inset 3.5px 0 0 0 #d97706 !important;
+}
+.theme-row-held:hover,
+tr.theme-row-held:hover {
+  background-color: rgba(247, 236, 214, 0.85) !important;
+}
+
+.theme-row-exited,
+tr.theme-row-exited {
+  background-color: rgba(228, 245, 238, 0.45) !important;
+  box-shadow: inset 3.5px 0 0 0 #10b981 !important;
+}
+.theme-row-exited:hover,
+tr.theme-row-exited:hover {
+  background-color: rgba(228, 245, 238, 0.80) !important;
+}
+
+/* --- Historical P&L Rows (Dark Mode) ---
+ * Distinct, vibrant, and NEVER cement-gray:
+ * - Open/Held rows: Rich deep gold/amber hue (rgba(245, 158, 11, 0.12)) with a 3.5px gold left accent bar.
+ * - Closed/Exited rows: Rich deep emerald hue (rgba(16, 185, 129, 0.08)) with a 3.5px emerald left accent bar.
+ */
+html[data-theme-mode="dark"] .theme-row-held,
+html[data-theme-mode="dark"] tr.theme-row-held,
+html[data-theme-mode="dark"] tr.bg-amber-bg\/45 {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+  box-shadow: inset 3.5px 0 0 0 #f59e0b !important;
+}
+html[data-theme-mode="dark"] .theme-row-held:hover,
+html[data-theme-mode="dark"] tr.theme-row-held:hover,
+html[data-theme-mode="dark"] tr.bg-amber-bg\/45:hover {
+  background-color: rgba(245, 158, 11, 0.22) !important;
+}
+
+html[data-theme-mode="dark"] .theme-row-exited,
+html[data-theme-mode="dark"] tr.theme-row-exited,
+html[data-theme-mode="dark"] tr.bg-green-bg\/45 {
+  background-color: rgba(16, 185, 129, 0.08) !important;
+  box-shadow: inset 3.5px 0 0 0 #10b981 !important;
+}
+html[data-theme-mode="dark"] .theme-row-exited:hover,
+html[data-theme-mode="dark"] tr.theme-row-exited:hover,
+html[data-theme-mode="dark"] tr.bg-green-bg\/45:hover {
+  background-color: rgba(16, 185, 129, 0.16) !important;
+}
+
+/* Crisp high-contrast financial tokens in dark mode */
+html[data-theme-mode="dark"] .text-gain {
+  color: #34d399 !important;
+  font-weight: 700;
+}
+html[data-theme-mode="dark"] .text-loss-d,
+html[data-theme-mode="dark"] .text-loss {
+  color: #f87171 !important;
+  font-weight: 700;
+}
+html[data-theme-mode="dark"] .text-amber-d {
+  color: #fbbf24 !important;
+}
+html[data-theme-mode="dark"] .text-green-d {
+  color: #34d399 !important;
+}
+html[data-theme-mode="dark"] .bg-gain-bg {
+  background-color: rgba(52, 211, 153, 0.15) !important;
+  color: #34d399 !important;
+}
+html[data-theme-mode="dark"] .bg-loss-bg {
+  background-color: rgba(248, 113, 113, 0.15) !important;
+  color: #f87171 !important;
+}
+html[data-theme-mode="dark"] .bg-amber-bg {
+  background-color: rgba(245, 158, 11, 0.15) !important;
+  color: #fbbf24 !important;
+  border-color: rgba(245, 158, 11, 0.35) !important;
+}
+html[data-theme-mode="dark"] .bg-green-bg {
+  background-color: rgba(34, 197, 94, 0.15) !important;
+  color: #34d399 !important;
+  border-color: rgba(34, 197, 94, 0.35) !important;
+}
+
+html[data-theme-mode="dark"] tr.bg-green-bg\/25 {
+  background-color: rgba(52, 211, 153, 0.08) !important;
+}
+html[data-theme-mode="dark"] tr.bg-green-bg\/25:hover,
+html[data-theme-mode="dark"] tr.hover\:bg-green-bg\/40:hover {
+  background-color: rgba(52, 211, 153, 0.15) !important;
+}
+
 
 .mono {
   font-family: var(--font-mono);
