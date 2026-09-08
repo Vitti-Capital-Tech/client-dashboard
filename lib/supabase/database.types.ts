@@ -558,6 +558,51 @@ export type Database = {
         }
         Relationships: []
       }
+      deleted_unlisted_options: {
+        Row: {
+          account_id: string
+          client_id: string
+          company: string | null
+          deleted_at: string
+          deleted_by: string
+          reason: string | null
+          ticker: string
+        }
+        Insert: {
+          account_id: string
+          client_id: string
+          company?: string | null
+          deleted_at?: string
+          deleted_by: string
+          reason?: string | null
+          ticker: string
+        }
+        Update: {
+          account_id?: string
+          client_id?: string
+          company?: string | null
+          deleted_at?: string
+          deleted_by?: string
+          reason?: string | null
+          ticker?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "deleted_unlisted_options_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "deleted_unlisted_options_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       ingest_attachments: {
         Row: {
           account_refs: string[]

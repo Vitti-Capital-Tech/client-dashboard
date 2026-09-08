@@ -1,13 +1,15 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
-import { Download, Search, X } from "lucide-react";
+import React, { useState, useMemo, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { Download, Search, Trash2, X } from "lucide-react";
 import type { ClientRow, AccountRow, OptionRow } from "@/lib/data/queries";
 import type { StoredPnlRow } from "@/lib/data/pnl";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
 import { TablePagination } from "@/app/components/TablePagination";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import { optionsFromSources, type OptionTableItem } from "@/lib/options/from-stored-pnl";
+import { deleteUnlistedOption } from "@/app/actions/options";
 
 // `OptionTableItem` and the derivation now live in lib/options/from-stored-pnl.ts,
 // so the client portal's Options tab reads the same register off the same rules.
@@ -123,6 +125,55 @@ export function StaffOptionsClient({
   // Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(15);
+
+  // ── Deleting an unlisted grant ─────────────────────────────────────────────
+  // The row being confirmed IS the state: holding the item rather than its id
+  // means the modal can describe what is about to go — ticker, terms, whose
+  // account — without looking anything back up, and closing it is one setState.
+  const router = useRouter();
+  const [isDeleting, startDelete] = useTransition();
+  const [pendingDelete, setPendingDelete] = useState<OptionTableItem | null>(null);
+  const [deleteReason, setDeleteReason] = useState<string>("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const openDeleteModal = (item: OptionTableItem) => {
+    setDeleteError(null);
+    setDeleteReason("");
+    setPendingDelete(item);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeleting) return; // Mid-write: closing would hide the outcome.
+    setPendingDelete(null);
+    setDeleteError(null);
+    setDeleteReason("");
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const item = pendingDelete;
+    setDeleteError(null);
+
+    startDelete(async () => {
+      try {
+        const res = await deleteUnlistedOption(item.id, deleteReason);
+        if (!res.ok) {
+          // The action's refusals are written to be read — "no longer on the
+          // register", "only unlisted grants" — so they are shown as they are.
+          setDeleteError(res.error);
+          return;
+        }
+        setPendingDelete(null);
+        setDeleteReason("");
+        // The register is server-derived, so the row leaves the table when the
+        // page's data does. Nothing is spliced out of local state: doing both
+        // would briefly show a count that disagrees with the rows under it.
+        router.refresh();
+      } catch (e) {
+        setDeleteError(e instanceof Error ? e.message : "Something went wrong.");
+      }
+    });
+  };
 
   // Options scoped to currently selected account
   const scopedAccountItems = useMemo(() => {
@@ -582,12 +633,18 @@ export function StaffOptionsClient({
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L</th>
                 <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
+                <th
+                  className="px-4 py-2.5 text-right whitespace-nowrap"
+                  title="Unlisted grants only — a listed series is a fact about the broker feed, not a desk judgement"
+                >
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line/60">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={selectedAccount === "all" ? 10 : 9} className="text-center text-mut py-12">
+                  <td colSpan={selectedAccount === "all" ? 11 : 10} className="text-center text-mut py-12">
                     <p className="font-semibold text-ink">No options found</p>
                     <p className="text-xs text-mut mt-0.5">
                       {scopedAccountItems.length === 0
@@ -724,6 +781,28 @@ export function StaffOptionsClient({
                         <td className="px-4 py-3 text-mut text-[11px] font-mono max-w-sm truncate" title={o.termsNote || o.company}>
                           {o.termsNote || o.pricingMethod || "—"}
                         </td>
+
+                        {/* Delete — unlisted grants only.
+                            A listed series is quoted on its own market and sits
+                            here because the broker feed says the client holds
+                            it; there is nothing for the desk to decide, so
+                            there is no button. */}
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {o.isUnlisted ? (
+                            <button
+                              type="button"
+                              onClick={() => openDeleteModal(o)}
+                              disabled={isDeleting}
+                              title={`Delete ${o.ticker} from the options register`}
+                              aria-label={`Delete ${o.ticker} from the options register`}
+                              className="inline-flex items-center justify-center w-7 h-7 rounded-lg border border-line text-mut bg-white hover:text-loss-d hover:border-loss-d/50 hover:bg-loss-bg/40 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <span className="text-mut/50">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -753,6 +832,7 @@ export function StaffOptionsClient({
                       {filteredTotals.pnl < 0 ? "-" : "+"}${money2(Math.abs(filteredTotals.pnl))}
                     </td>
                     <td className="px-4 py-3" />
+                    <td className="px-4 py-3" />
                   </tr>
                 </>
               )}
@@ -771,6 +851,197 @@ export function StaffOptionsClient({
           itemLabel="options"
         />
       </div>
+
+      {/* ── Delete confirmation ──────────────────────────────────────
+          Worth a modal rather than a `window.confirm`, because the question is
+          not "are you sure" — it is "is THIS the grant you meant". The tranche
+          codes on one underlying differ by a single digit (`GRV-UO`, `GRV-UO2`)
+          and their terms differ by a strike, so the row is restated in full and
+          whose account it belongs to is stated with it. */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/40 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto"
+          onClick={closeDeleteModal}
+        >
+          <div
+            className="relative w-full max-w-md bg-white border border-line rounded-[16px] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4.5 bg-paper border-b border-line flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-loss-bg border border-loss/30 text-loss-d flex items-center justify-center shadow-2xs">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-ink">Delete Unlisted Option</h3>
+                  <p className="text-xs text-mut">Removes the grant from the register</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="w-7 h-7 rounded-full border border-line flex items-center justify-center text-mut hover:text-ink hover:bg-paper-2 transition-colors cursor-pointer text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Close"
+              >
+                &times;
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4 text-xs text-ink">
+              {/* The row, restated. */}
+              <div className="rounded-[10px] border border-line/70 bg-paper-2/60 p-3.5 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono px-1.5 py-0.5 rounded bg-white border border-line/60 font-bold text-ink text-[11.5px]">
+                    {pendingDelete.ticker}
+                  </span>
+                  <MoneynessBadge money={pendingDelete.money} />
+                </div>
+
+                <div className="text-[11.5px] font-medium text-ink leading-snug">
+                  {pendingDelete.company}
+                </div>
+
+                <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] pt-1 border-t border-line/60">
+                  <div>
+                    <dt className="text-mut">Client</dt>
+                    <dd className="font-semibold text-ink truncate">
+                      {clientMap.get(pendingDelete.clientId)?.name || "Client"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-mut">Account</dt>
+                    <dd className="font-semibold text-ink truncate">
+                      {accountMap.get(pendingDelete.accountId)?.label || "Account"}
+                      {accountMap.get(pendingDelete.accountId)?.externalRef
+                        ? ` · #${accountMap.get(pendingDelete.accountId)?.externalRef}`
+                        : ""}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-mut">Options held</dt>
+                    <dd className="font-mono font-semibold text-ink">
+                      {pendingDelete.quantity > 0 ? fmtQty(pendingDelete.quantity) : "—"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-mut">Strike</dt>
+                    <dd className="font-mono font-semibold text-ink">
+                      {pendingDelete.strike == null
+                        ? "—"
+                        : `$${money4(pendingDelete.strike)}`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-mut">Current value</dt>
+                    <dd className="font-mono font-semibold text-ink">
+                      ${money2(pendingDelete.marketValue)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-mut">Unrealized P&amp;L</dt>
+                    <dd
+                      className={`font-mono font-semibold ${
+                        pendingDelete.pnl >= 0 ? "text-gain" : "text-loss-d"
+                      }`}
+                    >
+                      {pendingDelete.pnl < 0 ? "-" : "+"}$
+                      {money2(Math.abs(pendingDelete.pnl))}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {/* What the operator is actually agreeing to. The modelled value
+                  is P&L in full — these grants cost nothing — so deleting one
+                  moves the client's stored total by exactly that figure, and it
+                  moves on their screen too. Saying so here is cheaper than
+                  explaining it afterwards. */}
+              <div className="rounded-[8px] bg-loss-bg/60 border border-loss/25 p-3 text-[11.5px] text-ink/90 space-y-1.5">
+                <div className="font-semibold text-loss-d">
+                  This grant stops being reported.
+                </div>
+                <ul className="space-y-1 text-mut">
+                  <li>It leaves this register and the client&apos;s own Options tab.</li>
+                  <li>
+                    Its ${money2(pendingDelete.marketValue)} comes out of their stored
+                    P&amp;L — an unlisted grant is free, so the whole modelled value is
+                    gain.
+                  </li>
+                  <li>
+                    The deletion is recorded, so the next recompute will not bring it
+                    back from the Placement Tracker.
+                  </li>
+                </ul>
+              </div>
+
+              {/* Optional, and left optional on purpose: the usual reasons are
+                  legible from the description above, and a required field would
+                  collect "n/a" rather than anything worth auditing. */}
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="delete-option-reason"
+                  className="text-[11px] font-semibold text-mut uppercase tracking-wider"
+                >
+                  Reason{" "}
+                  <span className="font-medium normal-case tracking-normal">(optional)</span>
+                </label>
+                <input
+                  id="delete-option-reason"
+                  type="text"
+                  value={deleteReason}
+                  onChange={(e) => setDeleteReason(e.target.value)}
+                  disabled={isDeleting}
+                  placeholder="e.g. duplicate tranche in the tracker, lapsed unexercised"
+                  className="w-full bg-paper/60 hover:bg-paper focus:bg-white border border-line rounded-lg px-3 py-2 text-xs text-ink placeholder:text-mut focus:outline-none focus:border-navy transition-all font-medium disabled:opacity-50"
+                />
+                <p className="text-[10.5px] text-mut">
+                  Kept with the audit entry, alongside who deleted it and when.
+                </p>
+              </div>
+
+              {deleteError && (
+                <div className="rounded-[8px] bg-loss-bg border border-loss/40 p-3 text-[11.5px] font-medium text-loss-d">
+                  {deleteError}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-paper border-t border-line flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={closeDeleteModal}
+                disabled={isDeleting}
+                className="border border-line bg-white rounded-lg px-3.5 py-1.5 text-xs font-semibold text-mut hover:text-ink hover:border-line-2 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                disabled={isDeleting}
+                className="inline-flex items-center gap-1.5 border border-loss-d bg-loss-d rounded-lg px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-loss transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? (
+                  <>
+                    <span className="inline-block w-3 h-3 border-2 border-white/70 border-t-transparent rounded-full animate-spin" />
+                    Deleting…
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete option
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

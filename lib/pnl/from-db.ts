@@ -372,3 +372,33 @@ export async function loadAccountHolders(
   }
   return [...names];
 }
+
+/**
+ * The unlisted grants the desk has struck off this account's register.
+ *
+ * Returned as a set of register tickers (`GRV-UO`, `GRV-UO2`) so the recompute
+ * can drop the synthetic rows it has just built. Read live on every run, which
+ * is the whole point: the rows are rebuilt from the Placement Tracker each
+ * time, so a deletion that is not consulted here is a deletion that lasts until
+ * the next ingest and no longer.
+ *
+ * Loaded PER ACCOUNT rather than injected with the shared inputs, unlike the
+ * trackers and the spot prices. Those are identical across a batch and cost
+ * seconds; this is one indexed lookup on a table that holds a handful of rows,
+ * and keeping it here means a caller cannot forget to pass it and silently
+ * resurrect every deleted grant in the firm.
+ */
+export async function loadDeletedUnlistedOptions(
+  db: AdminDb,
+  accountId: string,
+): Promise<Set<string>> {
+  const { data, error } = await db
+    .from("deleted_unlisted_options")
+    .select("ticker")
+    .eq("account_id", accountId);
+  if (error) throw error;
+
+  return new Set(
+    ((data ?? []) as unknown as { ticker: string }[]).map((r) => r.ticker),
+  );
+}

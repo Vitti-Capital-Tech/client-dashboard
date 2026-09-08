@@ -460,3 +460,138 @@ test("recompute: every run is appended, so a figure's history survives", async (
     ["ingest", "manual"],
   );
 });
+
+// ---------------------------------------------------------------------------
+// Deleting an unlisted grant
+// ---------------------------------------------------------------------------
+
+/**
+ * One account holding 10,000 ABE shares out of a placement that attached a
+ * 1:2 unlisted grant — so a recompute mints `ABE-UO` for 5,000 options.
+ *
+ * The fixture exists to prove the deletion, so it is the smallest thing that
+ * makes the engine produce a `-UO` row at all.
+ */
+function grantingPlacement() {
+  const { db, tables } = seeded();
+
+  tables.trades.length = 0;
+  tables.trades.push({
+    cnote: "4001",
+    account_id: ACCOUNT,
+    raw_security: "ABE",
+    security_code: "ABE",
+    parent_code: "ABE",
+    instrument: "FPO",
+    side: "BUY",
+    trade_date: "2026-05-19",
+    units: "10000",
+    avg_price: "0.10",
+    consideration: "1000",
+    value: "1000",
+    status: "SETTLED",
+  });
+  tables.securities.push({ code: "ABE", parent_code: null, name: "ABE MINERALS", last_price: 0.2 });
+
+  const placements = new Map([
+    [
+      "ABE",
+      {
+        ticker: "ABE",
+        issueYear: 2026,
+        issueDate: "2026-05-01",
+        totalShares: 10000,
+        totalActualDollar: 1000,
+        clientAllocations: [
+          {
+            clientName: "SMITH JOHN",
+            advisor: "VTC",
+            askingBid: 0,
+            allocationDollar: 1000,
+            roundShares: 10000,
+            actualDollar: 1000,
+          },
+        ],
+        addOns: [
+          {
+            raw: "1:2@0.1 Unlisted",
+            tranche: 1,
+            piggyback: false,
+            ratioOptions: 1,
+            ratioPerShares: 2,
+            strike: 0.1,
+            expiry: "2027-06-30",
+            listed: false,
+          },
+        ],
+      },
+    ],
+  ]);
+
+  const fetchSpots = async () =>
+    new Map([["ABE", { price: 0.2, source: "yahoo" as const }]]);
+
+  return { db, tables, placements, fetchSpots };
+}
+
+test("recompute: the tracker mints an unlisted grant every run", async () => {
+  // The baseline the deletion is measured against. Without it, the test below
+  // would pass just as well against an engine that never granted anything.
+  const { db, tables, placements, fetchSpots } = grantingPlacement();
+
+  await recomputeAccountPnl(db, ACCOUNT, { placements, fetchSpots });
+
+  const uo = tables.pnl_summary.find((r) => r.ticker === "ABE-UO");
+  assert.ok(uo, "1:2 on 10,000 shares grants 5,000 options");
+  assert.equal(Number(uo.sell_qty), 5000);
+  assert.equal(uo.is_unlisted_option, true);
+});
+
+test("recompute: a grant the desk deleted stays deleted through the next run", async () => {
+  // The point of `deleted_unlisted_options`, and the reason a plain DELETE on
+  // `pnl_summary` was never enough: the row is REBUILT from the tracker on every
+  // run, so a deletion nobody consults lasts until the next morning's ingest and
+  // then quietly undoes itself.
+  const { db, tables, placements, fetchSpots } = grantingPlacement();
+  tables.deleted_unlisted_options = [
+    {
+      account_id: ACCOUNT,
+      client_id: "c1",
+      ticker: "ABE-UO",
+      company: "ABE MINERALS — Unlisted Option 1:2 @$0.1 exp 2027-06-30",
+      reason: "duplicate tranche in the tracker",
+      deleted_by: "S. Goyal (staff)",
+    },
+  ];
+
+  const res = await recomputeAccountPnl(db, ACCOUNT, { placements, fetchSpots });
+
+  assert.equal(
+    tables.pnl_summary.some((r) => r.ticker === "ABE-UO"),
+    false,
+    "the grant is not stored again",
+  );
+  // The shares it was granted on are untouched — a deletion takes the option
+  // off the register, not the holding that earned it.
+  assert.ok(tables.pnl_summary.some((r) => r.ticker === "ABE"));
+  assert.ok(res.warnings.some((w) => w.includes("deleted from the register")));
+});
+
+test("recompute: an exclusion can only ever take an unlisted grant", async () => {
+  // A stale exclusion is keyed at (account, ticker) and nothing else in the
+  // summary is keyed that loosely, so the flag is checked as well as the code.
+  // Without that guard an entry naming an ordinary would take a real holding off
+  // a client's P&L, silently, on the next run.
+  const { db, tables, placements, fetchSpots } = grantingPlacement();
+  tables.deleted_unlisted_options = [
+    { account_id: ACCOUNT, client_id: "c1", ticker: "ABE", deleted_by: "S. Goyal (staff)" },
+  ];
+
+  await recomputeAccountPnl(db, ACCOUNT, { placements, fetchSpots });
+
+  assert.ok(
+    tables.pnl_summary.some((r) => r.ticker === "ABE"),
+    "the ordinary holding survives an exclusion that names it",
+  );
+  assert.ok(tables.pnl_summary.some((r) => r.ticker === "ABE-UO"));
+});

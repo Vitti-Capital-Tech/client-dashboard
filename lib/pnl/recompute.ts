@@ -37,6 +37,7 @@ import {
   loadAccountHolders,
   loadCalculatorTrades,
   loadDbHoldings,
+  loadDeletedUnlistedOptions,
   type SecurityCatalogue,
 } from "./from-db.ts";
 
@@ -134,10 +135,11 @@ export async function recomputeAccountPnl(
 
   const accountIds = [accountId];
 
-  const [loaded, holdings, holders] = await Promise.all([
+  const [loaded, holdings, holders, deletedOptions] = await Promise.all([
     loadCalculatorTrades(db, accountIds, securities),
     loadDbHoldings(db, accountIds, new Map(), securities),
     loadAccountHolders(db, accountIds),
+    loadDeletedUnlistedOptions(db, accountId),
   ]);
 
   const clientId = loaded.clientIdByAccountId.get(accountId);
@@ -248,6 +250,35 @@ export async function recomputeAccountPnl(
             `feed — as stale as the last import.`,
         );
       }
+    }
+  }
+
+  // 5. Grants the desk has struck off the register are dropped again.
+  //
+  //    This has to happen AFTER step 4, not instead of it. The rows are built
+  //    from the Placement Tracker on every run, so there is nothing to skip at
+  //    source — the tracker still describes the grant and will keep describing
+  //    it. `deleted_unlisted_options` is the desk's standing instruction not to
+  //    report it, and this is where that instruction is carried out.
+  //
+  //    Only `-UO` rows are eligible. A deletion is recorded at (account,
+  //    ticker) grain and nothing else in the summary is keyed that loosely, so
+  //    the guard stops a stale exclusion from ever taking an ordinary holding
+  //    off a client's P&L.
+  if (deletedOptions.size > 0) {
+    const before = summary.length;
+    summary = summary.filter(
+      (s) => !(s.isUnlistedOption && deletedOptions.has(s.ticker)),
+    );
+    const dropped = before - summary.length;
+
+    // Reported on the run rather than passed over in silence: a total that is
+    // lower than the tracker implies needs to say why, months later, to
+    // somebody who was not the person who pressed Delete.
+    if (dropped > 0) {
+      warnings.push(
+        `${dropped} unlisted option grant(s) excluded — deleted from the register by staff.`,
+      );
     }
   }
 

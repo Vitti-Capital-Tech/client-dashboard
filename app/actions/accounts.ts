@@ -206,6 +206,37 @@ export async function decideAccountMerge(requestId: string, approve: boolean) {
     .eq("account_id", sourceId);
   if (optErr) throw optErr;
 
+  // 3b. Deleted unlisted grants — the exclusions move with the shares.
+  //
+  //     They have to, and the reason is step 5. The source account row is
+  //     DELETED at the end of this merge, and `deleted_unlisted_options`
+  //     cascades on `account_id` — so leaving these behind destroys them,
+  //     while the positions that earn the grants have just moved to the
+  //     target. The next recompute of the target would then re-mint every
+  //     grant the desk had struck off, which is the exact failure the
+  //     exclusion table exists to prevent, arriving by the one route nobody
+  //     would think to check.
+  //
+  //     Keyed (account_id, ticker), so an exclusion the target already holds
+  //     is a primary-key collision rather than something to combine: both rows
+  //     say "do not report this grant" and one of them is enough. The target's
+  //     is kept — it is the one that will still be pointed at a live account —
+  //     and the source's is dropped rather than reassigned.
+  const [{ data: srcExcl }, { data: tgtExcl }] = await Promise.all([
+    supabase.from("deleted_unlisted_options").select("ticker").eq("account_id", sourceId),
+    supabase.from("deleted_unlisted_options").select("ticker").eq("account_id", targetId),
+  ]);
+  const tgtTickers = new Set((tgtExcl ?? []).map((e) => e.ticker));
+  for (const se of srcExcl ?? []) {
+    if (tgtTickers.has(se.ticker)) continue;
+    const { error } = await supabase
+      .from("deleted_unlisted_options")
+      .update({ account_id: targetId })
+      .eq("account_id", sourceId)
+      .eq("ticker", se.ticker);
+    if (error) throw error;
+  }
+
   // 4. Bids — combine bids on the same placement (unique per placement+account).
   const [{ data: srcBids }, { data: tgtBids }] = await Promise.all([
     supabase.from("bids").select("*").eq("account_id", sourceId),
