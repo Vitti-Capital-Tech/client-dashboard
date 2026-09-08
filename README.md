@@ -436,7 +436,7 @@ BROKER_SUBJECT_PATTERN=                                  # optional regex
 CRON_SECRET=<a long random string>
 INGEST_BUDGET_MS=40000                                   # optional; default 40s (see below)
 PLACEMENT_API_URL=http://3.25.70.124:8000                # optional; the deal-mail feed (see below)
-ASX_API_URL=https://<asx-dashboard-host>                 # optional; market-sensitive news on Insights (see below)
+ASX_API_URL=https://asx.vitticapital.ai                  # optional; market-sensitive news on Insights (see below)
 ASX_API_KEY=                                             # only if that deployment sets one
 ```
 
