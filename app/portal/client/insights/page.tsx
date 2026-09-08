@@ -6,6 +6,7 @@ import {
   getResearchReports,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
+import { ArrowUpRight } from "lucide-react";
 
 function newsTime(iso: string): string {
   return new Date(iso).toLocaleString("en-AU", {
@@ -282,9 +283,17 @@ export default async function ClientInsightsPage() {
                       <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
                         {a.company} &middot; {annTime(a.released)}
                       </span>
-                      <span className="ml-auto text-mut text-[10px] opacity-0 group-hover:opacity-100 transition-opacity">
-                        Open on ASX &nearr;
-                      </span>
+                      {/* An icon rather than a text label that appears on
+                          hover. The label was doing two jobs badly: it told you
+                          the row was a link only once you had already guessed
+                          and pointed at it, and it popped in at the end of a
+                          row of pills, which reads as the row changing shape.
+                          This is always there, quiet, and only warms up. */}
+                      <ArrowUpRight
+                        aria-hidden
+                        className="ml-auto w-3.5 h-3.5 shrink-0 text-mut-d transition-all
+                                   group-hover:text-green-d group-hover:-translate-y-px"
+                      />
                     </div>
 
                     <div className="font-semibold text-[13.5px] leading-snug mt-1.5 group-hover:underline">
