@@ -66,7 +66,22 @@ export default async function ClientInsightsPage() {
   // over the page it returned. Counting them here instead is what made the
   // strip claim "12 price-sensitive filings" on a day that had 59 — it was
   // describing its own fetch limit.
-  const { total: asxTotal, bySentiment, topTags } = asxFeed;
+  const { total: asxTotal, bySentiment, topTags, sourceGeneratedAt } = asxFeed;
+
+  // When the ASX data was last collected, not when this page rendered. A filing
+  // waits on a 5-minute cron and a rebuild upstream before it can appear here,
+  // so "as at" is the difference between a quiet feed and a stale one.
+  const asAt = sourceGeneratedAt
+    ? new Date(sourceGeneratedAt)
+        .toLocaleTimeString("en-AU", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: "Australia/Sydney",
+        })
+        .replace(/\s/g, "")
+        .toLowerCase()
+    : null;
 
   // "Other" is the upstream tagger's fallback bucket and ranks high on volume
   // alone. "Mostly mining, other and results" says less than naming two real
@@ -238,8 +253,15 @@ export default async function ClientInsightsPage() {
           being briefly unreachable should not leave a hole on the page. */}
       {asxNews.length > 0 && (
         <div className="space-y-2">
-          <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
-            ASX market-sensitive announcements
+          <div className="flex items-baseline justify-between gap-3">
+            <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
+              ASX market-sensitive announcements
+            </div>
+            {asAt && (
+              <div className="font-mono text-[10.5px] text-mut-d shrink-0">
+                as at {asAt}
+              </div>
+            )}
           </div>
 
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">

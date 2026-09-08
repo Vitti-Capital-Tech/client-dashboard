@@ -51,6 +51,12 @@ export type AsxFeed = {
   bySentiment: { bullish: number; bearish: number; neutral: number };
   /** The day's heaviest tags, most filings first. */
   topTags: string[];
+  /**
+   * When the upstream collector last wrote this day, ISO, or null if unknown.
+   * Deliberately the collector's clock and not ours: a client asking "how
+   * fresh is this" means the ASX data, not when this page rendered.
+   */
+  sourceGeneratedAt: string | null;
 };
 
 const EMPTY: AsxFeed = {
@@ -58,6 +64,7 @@ const EMPTY: AsxFeed = {
   total: 0,
   bySentiment: { bullish: 0, bearish: 0, neutral: 0 },
   topTags: [],
+  sourceGeneratedAt: null,
 };
 
 type ApiItem = {
@@ -133,9 +140,14 @@ function toAnnouncement(raw: ApiItem): AsxAnnouncement | null {
  * not the whole route.
  *
  * `cache` dedupes within a render; the fetch's own `revalidate` is what keeps
- * this off the network across requests. Five minutes matches the upstream
- * fetcher, which runs every ~5 minutes through the Sydney morning — polling
- * faster than the source updates only spends requests.
+ * this off the network across requests.
+ *
+ * Sixty seconds, not five minutes. The upstream fetcher only runs every ~5
+ * minutes, so most of these revalidations find nothing new — but the endpoint
+ * serves an ETag, so an unchanged feed answers with a bodyless 304 and the
+ * extra checks cost a conditional request rather than a payload. Since a new
+ * filing already waits on that cron and a Vercel rebuild, this is the one part
+ * of the delay worth not adding to.
  */
 export const getAsxMarketSensitive = cache(
   async (limit = 250): Promise<AsxFeed> => {
@@ -151,7 +163,7 @@ export const getAsxMarketSensitive = cache(
         // Next 16 does not cache fetch by default — `force-cache` is what opts
         // in, and `revalidate` alone would silently fetch on every request.
         cache: "force-cache",
-        next: { revalidate: 300, tags: ["asx-news"] },
+        next: { revalidate: 60, tags: ["asx-news"] },
         signal: AbortSignal.timeout(8000),
       });
     } catch (err) {
@@ -170,6 +182,7 @@ export const getAsxMarketSensitive = cache(
         total?: unknown;
         by_sentiment?: Partial<Record<"bullish" | "bearish" | "neutral", unknown>>;
         top_tags?: unknown;
+        source_generated_at?: unknown;
       };
       if (!Array.isArray(body.items)) return EMPTY;
 
@@ -195,6 +208,8 @@ export const getAsxMarketSensitive = cache(
               .map((t) => (t as { tag?: unknown })?.tag)
               .filter((t): t is string => typeof t === "string")
           : [],
+        sourceGeneratedAt:
+          typeof body.source_generated_at === "string" ? body.source_generated_at : null,
       };
     } catch (err) {
       console.error("[asx-news] unparseable response:", err);
