@@ -190,17 +190,21 @@ export async function runHoldingsImport(
   // So ownership is written when the account is CREATED and never afterwards.
   // The broker still owns everything it is actually the authority on — label,
   // adviser, status — and those keep updating on every run.
+  // `client_id` is selected, not just the ref, and that is load-bearing — see
+  // the known-accounts upsert below.
   const { data: knownAccountRows, error: knownErr } = await db
     .from("accounts")
-    .select("external_ref")
+    .select("external_ref, client_id")
     .in("external_ref", accountRefs);
   if (knownErr) throw knownErr;
 
-  const existingRefs = new Set(
-    ((knownAccountRows ?? []) as unknown as { external_ref: string }[]).map(
-      (a) => a.external_ref,
-    ),
+  const currentOwnerByRef = new Map(
+    ((knownAccountRows ?? []) as unknown as {
+      external_ref: string;
+      client_id: string;
+    }[]).map((a) => [a.external_ref, a.client_id]),
   );
+  const existingRefs = new Set(currentOwnerByRef.keys());
 
   const brokerOwned = (a: (typeof accounts)[number]) => ({
     external_ref: a.externalRef,
@@ -213,6 +217,19 @@ export async function runHoldingsImport(
 
   const newAccounts = accounts.filter((a) => !existingRefs.has(a.externalRef));
   if (newAccounts.length > 0) {
+    // The clients upsert above created a row for every ref in this file, so a
+    // miss here is impossible — and worth naming anyway. `undefined` is dropped
+    // by JSON serialisation, which turns it into the same NOT NULL rejection
+    // described below, reported against a column nobody chose to omit.
+    const ownerless = newAccounts.filter((a) => !clientIdByRef.get(a.externalRef));
+    if (ownerless.length > 0) {
+      throw new ImportError(
+        "UNKNOWN_ACCOUNTS",
+        "No client row resolved for account(s) the snapshot introduces.",
+        ownerless.map((a) => a.externalRef + " (" + a.displayName + ")"),
+      );
+    }
+
     await upsertChunked(
       db,
       "accounts",
@@ -224,11 +241,33 @@ export async function runHoldingsImport(
     );
   }
 
+  // ── Why the CURRENT owner is sent back, on a path that never changes it ────
+  //
+  // `brokerOwned` alone looks right — the column is absent, so the DO UPDATE
+  // half leaves it alone — and it broke every holdings import for four days.
+  //
+  // A PostgREST upsert is `INSERT ... ON CONFLICT DO UPDATE`, and Postgres
+  // builds and VALIDATES the proposed insert tuple before it consults the
+  // arbiter index. An absent `client_id` is NULL in that tuple, `accounts`
+  // declares the column NOT NULL, and the statement is rejected — the conflict
+  // that would have made it an update never gets a chance to happen. The whole
+  // 43-row chunk failed, so `positions` went stale while the mail kept arriving
+  // and every run still reported "partial" rather than "broken".
+  //
+  // So the value is carried from the row that is already there. It is the same
+  // id being written back to itself, which keeps an approved account claim
+  // exactly where it is — the entire point of splitting this upsert in two.
   const knownAccounts = accounts.filter((a) => existingRefs.has(a.externalRef));
   if (knownAccounts.length > 0) {
-    await upsertChunked(db, "accounts", knownAccounts.map(brokerOwned), {
-      onConflict: "external_ref",
-    });
+    await upsertChunked(
+      db,
+      "accounts",
+      knownAccounts.map((a) => ({
+        ...brokerOwned(a),
+        client_id: currentOwnerByRef.get(a.externalRef),
+      })),
+      { onConflict: "external_ref" },
+    );
   }
 
   const { data: accountRows, error: accountErr } = await db
