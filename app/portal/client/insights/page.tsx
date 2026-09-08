@@ -6,7 +6,7 @@ import {
   getResearchReports,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
-import { ArrowUpRight } from "lucide-react";
+import { AsxNewsClient } from "./AsxNewsClient";
 
 function newsTime(iso: string): string {
   return new Date(iso).toLocaleString("en-AU", {
@@ -18,25 +18,6 @@ function newsTime(iso: string): string {
     timeZone: "Australia/Sydney",
   });
 }
-
-function annTime(iso: string): string {
-  if (!iso) return "";
-  return new Date(iso)
-    .toLocaleTimeString("en-AU", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: "Australia/Sydney",
-    })
-    .replace(/\s/g, "")
-    .toLowerCase();
-}
-
-const SENTIMENT_PILL: Record<string, string> = {
-  bullish: "bg-green-bg text-green-d",
-  bearish: "bg-loss-bg text-loss-d",
-  neutral: "bg-paper-2 text-mut",
-};
 
 // Server Component: sector momentum, news, and research from the DAL, with the
 // client's holdings highlighted.
@@ -248,91 +229,12 @@ export default async function ClientInsightsPage() {
 
       )}
 
-      {/* ASX market-sensitive announcements. Rendered only when the upstream
-          feed answered — an empty section says nothing useful, and the source
-          being briefly unreachable should not leave a hole on the page. */}
+      {/* The day's price-sensitive filings. Rendered by a client component
+          because filtering and paging are interactions; the fetch and the day's
+          figures stay here. Hidden when the upstream returned nothing — an
+          empty filter bar over an empty list says less than no section. */}
       {asxNews.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between gap-3">
-            <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
-              ASX market-sensitive announcements
-            </div>
-            {asAt && (
-              <div className="font-mono text-[10.5px] text-mut-d shrink-0">
-                as at {asAt}
-              </div>
-            )}
-          </div>
-
-          <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-            <div className="flex justify-between items-center px-4.5 py-3.5 border-b border-line bg-white select-none">
-              <b className="text-sm font-semibold text-ink">Price-sensitive filings today</b>
-              {heldCount > 0 ? (
-                <span className="pill bg-green-bg text-green-d text-[10px] font-bold px-2 py-0.5 rounded-full">
-                  {heldCount} in your book
-                </span>
-              ) : (
-                <span className="text-mut text-xs font-semibold">
-                  {asxNews.length < asxTotal
-                    ? `${asxNews.length} of ${asxTotal}`
-                    : `${asxTotal} flagged`}
-                </span>
-              )}
-            </div>
-
-            <div className="divide-y divide-line">
-              {asxNews.map((a) => {
-                const owned = held.has(a.code);
-                return (
-                  <a
-                    key={a.id}
-                    href={a.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block px-4.5 py-3.5 hover:bg-paper transition-colors group"
-                  >
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`code font-mono text-[11px] px-1 rounded-sm font-bold ${owned ? "text-green-d" : "text-ink"}`}
-                      >
-                        {a.code} {owned && "●"}
-                      </span>
-                      <span
-                        className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${SENTIMENT_PILL[a.sentiment]}`}
-                      >
-                        {a.sentiment}
-                      </span>
-                      <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
-                        {a.company} &middot; {annTime(a.released)}
-                      </span>
-                      {/* An icon rather than a text label that appears on
-                          hover. The label was doing two jobs badly: it told you
-                          the row was a link only once you had already guessed
-                          and pointed at it, and it popped in at the end of a
-                          row of pills, which reads as the row changing shape.
-                          This is always there, quiet, and only warms up. */}
-                      <ArrowUpRight
-                        aria-hidden
-                        className="ml-auto w-3.5 h-3.5 shrink-0 text-mut-d transition-all
-                                   group-hover:text-green-d group-hover:-translate-y-px"
-                      />
-                    </div>
-
-                    <div className="font-semibold text-[13.5px] leading-snug mt-1.5 group-hover:underline">
-                      {a.headline}
-                    </div>
-
-                    {a.summary[0] && (
-                      <p className="text-xs text-mut leading-relaxed mt-1 line-clamp-2">
-                        {a.summary[0]}
-                      </p>
-                    )}
-                  </a>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <AsxNewsClient items={asxNews} heldCodes={holdings} total={asxTotal} asAt={asAt} />
       )}
 
       {/* Grid: News & research. Each card is gated on having rows, and the grid
