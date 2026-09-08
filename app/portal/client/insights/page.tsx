@@ -41,7 +41,7 @@ const SENTIMENT_PILL: Record<string, string> = {
 // client's holdings highlighted.
 export default async function ClientInsightsPage() {
   const accountId = await getActiveAccountId();
-  const [positions, sectors, news, reports, announcements] = await Promise.all([
+  const [positions, sectors, news, reports, asxFeed] = await Promise.all([
     getPositions(accountId),
     getSectors(),
     getNews(),
@@ -56,26 +56,21 @@ export default async function ClientInsightsPage() {
   // newest-first, and a stable sort keeps that order inside each group — so this
   // reads as "your names, then the rest of the day" rather than reshuffling it.
   const held = new Set(holdings);
-  const asxNews = [...announcements].sort(
+  const asxNews = [...asxFeed.items].sort(
     (a, b) => Number(held.has(b.code)) - Number(held.has(a.code)),
   );
   const heldCount = asxNews.filter((a) => held.has(a.code)).length;
 
-  const bullish = asxNews.filter((a) => a.sentiment === "bullish").length;
-  const bearish = asxNews.filter((a) => a.sentiment === "bearish").length;
-  const neutral = asxNews.length - bullish - bearish;
+  // Straight off the API, which counts these over the whole day rather than
+  // over the page it returned. Counting them here instead is what made the
+  // strip claim "12 price-sensitive filings" on a day that had 59 — it was
+  // describing its own fetch limit.
+  const { total: asxTotal, bySentiment, topTags } = asxFeed;
 
-  // What the day was actually about, by weight of filings. Three is enough to
-  // read as a sentence; more turns into a tag cloud nobody parses.
-  const themes = Object.entries(
-    asxNews.flatMap((a) => a.tags).reduce<Record<string, number>>((acc, t) => {
-      acc[t] = (acc[t] ?? 0) + 1;
-      return acc;
-    }, {}),
-  )
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([tag]) => tag);
+  // "Other" is the upstream tagger's fallback bucket and ranks high on volume
+  // alone. "Mostly mining, other and results" says less than naming two real
+  // themes, so it is dropped before the top three are taken.
+  const themes = topTags.filter((t) => t.toLowerCase() !== "other").slice(0, 3);
 
   // The date the page is actually about. It read "Friday 12 Jun" hardcoded,
   // which is the DAL's demo anchor — fine next to demo rows, actively wrong
@@ -92,7 +87,7 @@ export default async function ClientInsightsPage() {
   // empty in an unseeded environment — an empty bordered card is worse than no
   // card, and this way they reappear on their own once seeded.
   const nothingToShow =
-    asxNews.length === 0 && sectors.length === 0 && news.length === 0 && reports.length === 0;
+    asxTotal === 0 && sectors.length === 0 && news.length === 0 && reports.length === 0;
 
   return (
     <div className="space-y-4 text-ink font-body select-none">
@@ -112,15 +107,15 @@ export default async function ClientInsightsPage() {
         <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow space-y-4">
           <div className="flex flex-wrap items-baseline gap-x-8 gap-y-3">
             <div>
-              <div className="font-mono text-2xl font-bold text-ink leading-none">{asxNews.length}</div>
+              <div className="font-mono text-2xl font-bold text-ink leading-none">{asxTotal}</div>
               <div className="text-[11px] text-mut mt-1">price-sensitive filings</div>
             </div>
             <div>
-              <div className="font-mono text-2xl font-bold text-gain leading-none">{bullish}</div>
+              <div className="font-mono text-2xl font-bold text-gain leading-none">{bySentiment.bullish}</div>
               <div className="text-[11px] text-mut mt-1">read bullish</div>
             </div>
             <div>
-              <div className="font-mono text-2xl font-bold text-loss-d leading-none">{bearish}</div>
+              <div className="font-mono text-2xl font-bold text-loss-d leading-none">{bySentiment.bearish}</div>
               <div className="text-[11px] text-mut mt-1">read bearish</div>
             </div>
             <div>
@@ -137,14 +132,17 @@ export default async function ClientInsightsPage() {
               direct-labelled by the numbers above — green and red are close
               enough under colour blindness that the bar alone would not do. */}
           <div className="flex gap-[2px] h-1.5" aria-hidden>
-            {bullish > 0 && (
-              <div className="bg-green rounded-full" style={{ width: `${(bullish / asxNews.length) * 100}%` }} />
+            {bySentiment.bullish > 0 && (
+              <div className="bg-green rounded-full"
+                style={{ width: `${(bySentiment.bullish / asxTotal) * 100}%` }} />
             )}
-            {bearish > 0 && (
-              <div className="bg-loss rounded-full" style={{ width: `${(bearish / asxNews.length) * 100}%` }} />
+            {bySentiment.bearish > 0 && (
+              <div className="bg-loss rounded-full"
+                style={{ width: `${(bySentiment.bearish / asxTotal) * 100}%` }} />
             )}
-            {neutral > 0 && (
-              <div className="bg-line-2 rounded-full" style={{ width: `${(neutral / asxNews.length) * 100}%` }} />
+            {bySentiment.neutral > 0 && (
+              <div className="bg-line-2 rounded-full"
+                style={{ width: `${(bySentiment.neutral / asxTotal) * 100}%` }} />
             )}
           </div>
 
@@ -252,7 +250,9 @@ export default async function ClientInsightsPage() {
                 </span>
               ) : (
                 <span className="text-mut text-xs font-semibold">
-                  {asxNews.length} flagged
+                  {asxNews.length < asxTotal
+                    ? `${asxNews.length} of ${asxTotal}`
+                    : `${asxTotal} flagged`}
                 </span>
               )}
             </div>

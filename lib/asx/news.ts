@@ -37,6 +37,29 @@ export type AsxAnnouncement = {
   summary: string[];
 };
 
+/** What the page needs: the list, plus figures describing the whole day. */
+export type AsxFeed = {
+  items: AsxAnnouncement[];
+  /**
+   * Price-sensitive filings that day, before any page limit. Distinct from
+   * `items.length` — a summary built on the array length reports its own page
+   * size as the size of the day, which is exactly the bug this replaced: it
+   * said "12 filings" on a day with 59.
+   */
+  total: number;
+  /** Split across the whole day, so it sums to `total`. */
+  bySentiment: { bullish: number; bearish: number; neutral: number };
+  /** The day's heaviest tags, most filings first. */
+  topTags: string[];
+};
+
+const EMPTY: AsxFeed = {
+  items: [],
+  total: 0,
+  bySentiment: { bullish: 0, bearish: 0, neutral: 0 },
+  topTags: [],
+};
+
 type ApiItem = {
   id?: unknown;
   date?: unknown;
@@ -101,7 +124,8 @@ function toAnnouncement(raw: ApiItem): AsxAnnouncement | null {
 }
 
 /**
- * The most recent trading day's market-sensitive announcements, newest first.
+ * The most recent trading day's market-sensitive announcements, newest first,
+ * with day-level figures alongside them.
  *
  * Returns `[]` rather than throwing when the source is unreachable or slow.
  * This renders inside Insights alongside sector momentum and the research
@@ -114,9 +138,9 @@ function toAnnouncement(raw: ApiItem): AsxAnnouncement | null {
  * faster than the source updates only spends requests.
  */
 export const getAsxMarketSensitive = cache(
-  async (limit = 12): Promise<AsxAnnouncement[]> => {
+  async (limit = 250): Promise<AsxFeed> => {
     const base = process.env.ASX_API_URL?.trim().replace(/\/+$/, "");
-    if (!base) return [];
+    if (!base) return EMPTY;
 
     const key = process.env.ASX_API_KEY?.trim();
 
@@ -132,24 +156,49 @@ export const getAsxMarketSensitive = cache(
       });
     } catch (err) {
       console.error("[asx-news] unreachable:", err);
-      return [];
+      return EMPTY;
     }
 
     if (!res.ok) {
       console.error(`[asx-news] ${res.status} ${res.statusText}`);
-      return [];
+      return EMPTY;
     }
 
     try {
-      const body: unknown = await res.json();
-      const items = (body as { items?: unknown })?.items;
-      if (!Array.isArray(items)) return [];
-      return items
+      const body = (await res.json()) as {
+        items?: unknown;
+        total?: unknown;
+        by_sentiment?: Partial<Record<"bullish" | "bearish" | "neutral", unknown>>;
+        top_tags?: unknown;
+      };
+      if (!Array.isArray(body.items)) return EMPTY;
+
+      const items = body.items
         .map((i) => toAnnouncement(i as ApiItem))
         .filter((a): a is AsxAnnouncement => a !== null);
+
+      const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      const split = {
+        bullish: n(body.by_sentiment?.bullish),
+        bearish: n(body.by_sentiment?.bearish),
+        neutral: n(body.by_sentiment?.neutral),
+      };
+
+      return {
+        items,
+        // Never claim fewer than were actually rendered, in case an older
+        // upstream has no `total` to report.
+        total: Math.max(n(body.total), items.length),
+        bySentiment: split,
+        topTags: Array.isArray(body.top_tags)
+          ? body.top_tags
+              .map((t) => (t as { tag?: unknown })?.tag)
+              .filter((t): t is string => typeof t === "string")
+          : [],
+      };
     } catch (err) {
       console.error("[asx-news] unparseable response:", err);
-      return [];
+      return EMPTY;
     }
   },
 );
