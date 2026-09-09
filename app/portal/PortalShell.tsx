@@ -376,11 +376,20 @@ export function PortalShell({
   );
 
   const topbar = (
-    <header className="flex items-center gap-4 bg-white/85 backdrop-blur-sm border-b border-line px-6 h-14.5 sticky top-0 z-30 select-none">
-      <div className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-green-d bg-green-bg py-1.5 px-3.5 rounded-full" title="Broker front-office feed">
-        <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse shadow-[0_0_0_3px_rgba(54,187,145,0.18)]" />
-        <span>Broker feed &middot; live</span>
-      </div>
+    <header className="topbar flex items-center gap-3 sm:gap-4 bg-white/85 backdrop-blur-sm border-b border-line px-4 sm:px-6 sticky top-0 z-30 select-none">
+      {/*
+        The brand, on phones only.
+
+        The sidebar carries it on a desktop and is hidden below `md`, so a phone
+        had no wordmark anywhere — the top of the app simply was not there. What
+        occupied this space instead was a green "Broker feed · live" pill, which
+        is a status light for a pipeline the client does not own, on a screen
+        about their money. It said nothing they could act on and nothing they
+        would miss.
+      */}
+      <Link href="/portal/client" className="md:hidden flex-none">
+        <Wordmark className="text-base text-ink" markSize={22} />
+      </Link>
 
       <input
         className="hidden md:block w-57.5 border border-line bg-white rounded-[9px] text-[12.5px] text-mut px-3.5 py-2 placeholder-mut-d focus:outline-none focus:border-green"

@@ -638,3 +638,15 @@ body.is-mobile {
     padding-bottom: 0;
   }
 }
+
+/*
+ * The header, under a notch.
+ *
+ * `sticky top-0` puts it at the top of the viewport, which on a notched phone
+ * in landscape — and in some in-app browsers in portrait — is underneath the
+ * status bar rather than below it. The inset is 0 on everything else.
+ */
+.topbar {
+  padding-top: env(safe-area-inset-top);
+  height: calc(3.625rem + env(safe-area-inset-top));
+}
