@@ -43,13 +43,9 @@ type AccountOption = { id: string; label: string; accountType: string };
  * `group-hover` rather than `hover`, so it reacts to the whole row: pointing at
  * a nav item means pointing at the row, not at eighteen pixels of icon.
  *
- * Applied only to items that actually go somewhere. A disabled button still
- * matches `group-hover` — the pointer is over it either way, only the click is
- * stopped — so a coming-soon item would otherwise spring to meet the cursor
- * and then refuse to open, which is the opposite of what the greyed-out row is
- * there to say. Interpolated per item rather than expressed as a stacked
+ * Interpolated into the class list rather than written as a stacked
  * `group-enabled:group-hover:` variant, which compiles to a selector wanting
- * two separate ancestors and quietly never matches.
+ * two separate ancestors and so quietly never matches.
  *
  * 110%, 200ms, and nothing under `prefers-reduced-motion`. Big enough to feel
  * deliberate on a row you are already pointing at, small enough not to shift
@@ -75,15 +71,6 @@ interface NavItem {
   badge?: string;
 }
 
-/**
- * Still being built? The entry stays in the nav — taking it out would read as
- * "this product does not have that", which is not what is being said — but it
- * does not navigate anywhere, because the page behind it is half-written.
- * Rendered flat, unclickable and marked SOON in all three navs.
- *
- * Read from the shared list rather than flagged on each item, so the nav and
- * the dashboard's links into the same pages cannot disagree.
- */
 
 export function PortalShell({
   role,
@@ -206,7 +193,7 @@ export function PortalShell({
       { k: "dashboard", label: "Home", path: "/portal/client", icon: Home, tab: true },
       { k: "invest", label: "Invest", path: "/portal/client/invest", icon: Zap, tab: true },
       { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: LineChart, tab: true },
-      { k: "insights", label: "Insights", path: "/portal/client/insights", icon: BarChart3, tab: true },
+      { k: "insights", label: "Market", path: "/portal/client/insights", icon: BarChart3, tab: true },
       { k: "customise", label: "Customise", path: "/portal/client/customise", icon: Palette, tab: true },
       { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: MessageSquareMore, tab: true, ai: true },
       { k: "markets", label: "Markets", path: "/portal/client/markets", icon: TrendingUp, tab: false },
@@ -234,7 +221,20 @@ export function PortalShell({
     ]
   };
 
-  const items = role === "admin" ? navItems.admin : navItems.client;
+  /**
+   * The nav, minus the pages that are not finished.
+   *
+   * They used to be listed and greyed with a SOON chip, on the argument that
+   * removing an entry reads as "this product does not have that". It reads
+   * worse the other way round: a nav is a list of places you can go, and four
+   * rows out of eleven that refuse to go anywhere is a menu mostly made of
+   * disappointments. They come back by deleting their line from
+   * lib/nav/coming-soon.ts, which is the same edit that re-enables the
+   * dashboard's links into them.
+   */
+  const items = (role === "admin" ? navItems.admin : navItems.client).filter(
+    (it) => !isComingSoon(it.path),
+  );
 
   const unreadAlerts = alerts.filter((a) => !a.ack);
   const alertsCount = unreadAlerts.length;
@@ -289,18 +289,11 @@ export function PortalShell({
         {items.map((it) => {
           const isActive = pathname === it.path;
           const badgeVal = getBadgeValue(it.badge);
-          const soon = isComingSoon(it.path);
-          // Only where a click will do something: see `iconMotion`.
-          const motion = soon ? "" : ICON_MOTION;
           const body = (
             <>
-              <it.icon className={`w-4.5 h-4.5 stroke-[1.7] flex-none ${motion}`} />
+              <it.icon className={`w-4.5 h-4.5 stroke-[1.7] flex-none ${ICON_MOTION}`} />
               <span>{it.label}</span>
-              {soon ? (
-                <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-white/10 text-mut-d px-1.5 py-0.5 rounded-[5px]">SOON</span>
-              ) : (
-                it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>
-              )}
+              {it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>}
               {badgeVal !== null && (
                 <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
                   {badgeVal}
@@ -308,22 +301,6 @@ export function PortalShell({
               )}
             </>
           );
-
-          // A `soon` item is a div, not a disabled link: an <a href> that does
-          // nothing is still focusable, still middle-clickable and still shows
-          // its target in the status bar.
-          if (soon) {
-            return (
-              <div
-                key={it.k}
-                aria-disabled="true"
-                title={`${it.label} is coming soon`}
-                className="flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] text-mut-d/45 cursor-not-allowed select-none"
-              >
-                {body}
-              </div>
-            );
-          }
 
           return (
             <Link
@@ -520,20 +497,15 @@ export function PortalShell({
       {items.filter(it => it.tab).map(it => {
         const isActive = pathname === it.path;
         const badgeVal = getBadgeValue(it.badge);
-        const soon = isComingSoon(it.path);
         return (
           <button
             key={it.k}
             onClick={() => router.push(it.path)}
-            disabled={soon}
-            title={soon ? `${it.label} is coming soon` : undefined}
-            className={`group flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative ${
-              soon
-                ? "text-mut-d/45 cursor-not-allowed"
-                : `cursor-pointer ${isActive ? "text-green-d" : "text-mut hover:text-ink"}`
+            className={`group flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative cursor-pointer ${
+              isActive ? "text-green-d" : "text-mut hover:text-ink"
             }`}
           >
-            <it.icon className={`w-5 h-5 stroke-[1.8] ${soon ? "" : ICON_MOTION}`} />
+            <it.icon className={`w-5 h-5 stroke-[1.8] ${ICON_MOTION}`} />
             <span>{it.label}</span>
             {badgeVal !== null && (
               <span className="absolute -top-0.75 right-[50%] -mr-4 bg-loss text-white text-[8.5px] font-bold rounded-full px-1 min-w-3.5 text-center">
@@ -635,7 +607,6 @@ export function PortalShell({
             {items.filter(it => !it.tab).map(it => {
               const isActive = pathname === it.path;
               const badgeVal = getBadgeValue(it.badge);
-              const soon = isComingSoon(it.path);
               return (
                 <button
                   key={it.k}
@@ -643,18 +614,12 @@ export function PortalShell({
                     setIsMoreOpen(false);
                     router.push(it.path);
                   }}
-                  disabled={soon}
-                  className={`group flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors ${
-                    soon
-                      ? "text-mut-d cursor-not-allowed"
-                      : `hover:bg-paper-2 ${isActive ? "text-green-d bg-paper-2" : "text-ink"}`
+                  className={`group flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors hover:bg-paper-2 ${
+                    isActive ? "text-green-d bg-paper-2" : "text-ink"
                   }`}
                 >
-                  <it.icon className={`w-4.75 h-4.75 stroke-[1.7] flex-none ${soon ? "" : ICON_MOTION}`} />
+                  <it.icon className={`w-4.75 h-4.75 stroke-[1.7] flex-none ${ICON_MOTION}`} />
                   <span>{it.label}</span>
-                  {soon && (
-                    <span className="ml-auto text-[9px] font-bold tracking-wider bg-paper-2 text-mut px-1.5 py-0.5 rounded-[5px]">SOON</span>
-                  )}
                   {badgeVal !== null && (
                     <span className="ml-auto bg-loss text-white text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center">
                       {badgeVal}

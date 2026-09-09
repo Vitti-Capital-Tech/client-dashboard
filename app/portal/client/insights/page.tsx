@@ -90,8 +90,8 @@ export default async function ClientInsightsPage() {
     <div className="space-y-4 text-ink font-body select-none">
       {/* Page Header */}
       <div>
-        <div className="font-mono text-xs tracking-wider uppercase text-mut">Market intelligence &middot; {today}</div>
-        <h1 className="font-disp font-medium text-[26px] mt-0.5">Insights</h1>
+        <div className="font-mono text-xs tracking-wider uppercase text-mut">Intelligence &middot; {today}</div>
+        <h1 className="font-disp font-medium text-[26px] mt-0.5">Market</h1>
         <p className="text-xs text-mut mt-1">
           Where the money is moving, what’s driving it, and how it reads across your book.
         </p>
