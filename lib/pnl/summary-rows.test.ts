@@ -16,6 +16,8 @@ import {
   optionTotals,
   PNL_FILTERS,
   OPTION_FILTERS,
+  CLIENT_PNL_FILTERS,
+  PNL_FILTER_LABELS,
 } from "./summary-rows.ts";
 import type { PnlSummaryRow } from "../export/order-history.ts";
 
@@ -207,6 +209,7 @@ test("options: strike and spot are filled for grants and withheld from listed se
   assert.equal(grant.strike, 0.02);
   assert.equal(grant.spot, 0.05);
   assert.equal(grant.money.isItm, true);
+  assert.equal(grant.money.isExercisable, true);
   // 100,000 × (0.05 − 0.02)
   assert.equal(Math.round(grant.money.intrinsicValue), 3_000);
 
@@ -285,4 +288,27 @@ test("options: the grand total sums quantities, which for contracts DO add up", 
   assert.equal(totals.pnl, 3_300);
   // Only the grant contributes an exercise value; the listed series has none.
   assert.equal(Math.round(totals.intrinsic), 3_000);
+});
+
+test("filters: a client is not shown the desk's reconciliation pills", () => {
+  // `matched` / `unmatched` say whether OUR ledger's two legs account for each
+  // other, not what the client made. Same category as the "Calculated at" stamp
+  // and the run warnings their tab already leaves out.
+  assert.ok(!CLIENT_PNL_FILTERS.includes("matched" as never));
+  assert.ok(!CLIENT_PNL_FILTERS.includes("unmatched" as never));
+
+  // Everything else the desk has stays — these ARE facts about their holdings.
+  for (const f of ["all", "equity", "options", "unlisted", "open", "profit", "loss"]) {
+    assert.ok(CLIENT_PNL_FILTERS.includes(f as never), `client should keep ${f}`);
+  }
+});
+
+test("filters: every client pill is a real filter with a label", () => {
+  // The list is written out by hand so a new desk pill does not leak to clients
+  // by default. The cost of that is it can drift from `PNL_FILTERS`, so a typo
+  // or a renamed filter has to fail here rather than render a dead pill.
+  for (const f of CLIENT_PNL_FILTERS) {
+    assert.ok(PNL_FILTERS.includes(f), `${f} is not a real filter`);
+    assert.ok(PNL_FILTER_LABELS[f], `${f} has no label`);
+  }
 });

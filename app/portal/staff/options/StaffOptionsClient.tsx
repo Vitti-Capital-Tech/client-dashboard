@@ -227,10 +227,15 @@ export function StaffOptionsClient({
       if (it.pnl > 0) gainCount++;
       else if (it.pnl < 0) lossCount++;
 
-      // Exercise value is summed over the ITM rows ONLY. An OTM option's
+      // Summed over the rows that are AT or in the money. An OTM option's
       // intrinsic is zero, so including it would not change the figure — but
       // the count beside it would then say something different from the tab.
-      if (it.money.isItm) {
+      //
+      // ATM is in this set deliberately: a grant sitting on its strike is one
+      // tick from being worth something, and it adds ~nothing to the money
+      // (its intrinsic is under a twentieth of a cent) while making the COUNT
+      // honest. See `isExercisable`.
+      if (it.money.isExercisable) {
         itmCount++;
         itmUnits += it.quantity;
         itmIntrinsic += it.money.intrinsicValue;
@@ -261,7 +266,7 @@ export function StaffOptionsClient({
       // 1. Category tab filter
       if (filterTab === "listed" && !it.isListed) return false;
       if (filterTab === "unlisted" && !it.isUnlisted) return false;
-      if (filterTab === "itm" && !it.money.isItm) return false;
+      if (filterTab === "itm" && !it.money.isExercisable) return false;
       if (filterTab === "gain" && it.pnl <= 0) return false;
       if (filterTab === "loss" && it.pnl >= 0) return false;
 
@@ -484,7 +489,7 @@ export function StaffOptionsClient({
             setFilterTab(filterTab === "itm" ? "all" : "itm");
             setCurrentPage(1);
           }}
-          title="Underlying trading above the strike — click to filter"
+          title="Underlying at or above the strike — click to filter"
           className={`text-left bg-white border rounded-xl p-3.5 shadow-2xs cursor-pointer transition-colors hover:border-green-d/40 ${
             filterTab === "itm" ? "border-green-d/60 ring-1 ring-green-d/20" : "border-line"
           }`}
@@ -626,7 +631,7 @@ export function StaffOptionsClient({
                 </th>
                 <th
                   className="px-4 py-2.5 text-right whitespace-nowrap"
-                  title="Qty × (Spot − Strike), floored at zero. Unlisted grants only."
+                  title="Qty × (Spot − Strike), floored at zero — so a grant at its strike reads $0.00. Unlisted grants only."
                 >
                   Exercise Value
                 </th>
@@ -673,7 +678,7 @@ export function StaffOptionsClient({
                       <tr
                         key={o.id}
                         className={`transition-colors ${
-                          o.money.isItm
+                          o.money.isExercisable
                             ? "bg-green-bg/25 hover:bg-green-bg/40"
                             : "hover:bg-paper/50"
                         }`}
@@ -729,7 +734,9 @@ export function StaffOptionsClient({
                               title={
                                 o.money.isItm
                                   ? `In the money by $${money4(o.money.intrinsicPerOption)} per option`
-                                  : undefined
+                                  : o.money.moneyness === "ATM"
+                                    ? "Sitting on its strike — exercising today is worth nothing yet"
+                                    : undefined
                               }
                             />
                           </div>
@@ -748,7 +755,7 @@ export function StaffOptionsClient({
                         {/* Exercise value: qty × (spot − strike), floored at zero */}
                         <td
                           className={`px-4 py-3 text-right font-mono whitespace-nowrap ${
-                            o.money.isItm ? "text-gain font-semibold" : "text-mut"
+                            o.money.isExercisable ? "text-gain font-semibold" : "text-mut"
                           }`}
                           title={
                             o.money.moneyness === "unknown"

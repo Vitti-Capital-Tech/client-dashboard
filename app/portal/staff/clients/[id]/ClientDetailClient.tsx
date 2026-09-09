@@ -1218,7 +1218,7 @@ export function ClientDetailClient({
                       return (
                         <tr
                           key={o.ticker}
-                          className={money.isItm ? "bg-green-bg/25 hover:bg-green-bg/40 transition-colors" : "hover:bg-paper-2/60 transition-colors"}
+                          className={money.isExercisable ? "bg-green-bg/25 hover:bg-green-bg/40 transition-colors" : "hover:bg-paper-2/60 transition-colors"}
                         >
                           <td className="px-4.5 py-3 whitespace-nowrap">
                             <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2 font-bold text-ink whitespace-nowrap inline-block">
@@ -1242,7 +1242,9 @@ export function ClientDetailClient({
                                 title={
                                   money.isItm
                                     ? `In the money by $${money4(money.intrinsicPerOption)} per option`
-                                    : undefined
+                                    : money.moneyness === "ATM"
+                                      ? "Sitting on its strike — exercising today is worth nothing yet"
+                                      : undefined
                                 }
                               />
                             </div>
@@ -1258,7 +1260,7 @@ export function ClientDetailClient({
                               ITM badge beside it claims. */}
                           <td
                             className={`px-4.5 py-3 text-right font-mono whitespace-nowrap ${
-                              money.isItm ? "text-gain font-semibold" : "text-mut"
+                              money.isExercisable ? "text-gain font-semibold" : "text-mut"
                             }`}
                             title={
                               money.moneyness === "unknown"

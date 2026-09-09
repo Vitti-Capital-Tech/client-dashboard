@@ -81,6 +81,35 @@ export const PNL_FILTERS = [
 
 export type PnlFilter = (typeof PNL_FILTERS)[number];
 
+/**
+ * The pills a CLIENT is offered.
+ *
+ * `matched` and `unmatched` are withheld, and the reason is the one §8.41
+ * already applies to the rest of the tab: they are not facts about the client's
+ * money. `isRowUnmatched` means "neither reconciled nor an option" — it says
+ * whether OUR ledger's two legs account for each other, the same category as
+ * the "Calculated at" stamp and the run warnings the client's tab leaves out. A
+ * client cannot act on "this row is unmatched", and what the gap actually costs
+ * them is already said in words on the row: a line whose cost base is still
+ * being confirmed says so under the table.
+ *
+ * Listed out in full rather than derived from `PNL_FILTERS` by subtraction, so
+ * that the default for a NEWLY added pill is that a client does not see it until
+ * somebody decides they should. Deriving it the other way round gets that
+ * backwards — a pill invented for the desk would appear on the client's screen
+ * the moment it was added, which is exactly the accident this boundary exists
+ * to prevent.
+ */
+export const CLIENT_PNL_FILTERS = [
+  "all",
+  "equity",
+  "options",
+  "unlisted",
+  "open",
+  "profit",
+  "loss",
+] as const;
+
 export const PNL_FILTER_LABELS: Record<PnlFilter, string> = {
   all: "All Tickers",
   equity: "Equity",
@@ -232,7 +261,9 @@ export function matchesOptionFilter(
     case "unlisted":
       return isRowUnlistedOption(o.row);
     case "itm":
-      return o.money.isItm;
+      // At OR in the money — see `isExercisable`. A grant on its strike belongs
+      // with the live ones, not filed beside the out-of-the-money rows.
+      return o.money.isExercisable;
     case "all":
       return true;
   }

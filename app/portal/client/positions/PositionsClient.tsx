@@ -38,7 +38,7 @@ import {
   filterOptionRows,
   optionFilterCounts,
   optionTotals,
-  PNL_FILTERS,
+  CLIENT_PNL_FILTERS,
   PNL_FILTER_LABELS,
   OPTION_FILTERS,
   OPTION_FILTER_LABELS,
@@ -511,7 +511,7 @@ export function PositionsClient({
    * all read zero and invite the reader to click something that cannot work.
    */
   const activeFilters = isAllTime
-    ? PNL_FILTERS
+    ? CLIENT_PNL_FILTERS
     : (["all", "profit", "loss"] as const);
 
   const pnlTabCounts = useMemo(() => pnlFilterCounts(tableRows), [tableRows]);
@@ -1109,18 +1109,14 @@ export function PositionsClient({
                               ? "bg-loss-bg text-loss-d"
                               : f === "open"
                                 ? "bg-amber-bg text-amber-d border border-amber/30"
-                                : f === "matched"
-                                  ? "bg-green-bg text-green-d border border-green/30"
-                                  : "bg-paper-2 text-ink"
+                                : "bg-paper-2 text-ink"
                           : f === "profit"
                             ? "bg-gain-bg/50 text-gain"
                             : f === "loss"
                               ? "bg-loss-bg/50 text-loss-d"
                               : f === "open"
                                 ? "bg-amber-bg/50 text-amber-d"
-                                : f === "matched"
-                                  ? "bg-green-bg/50 text-green-d"
-                                  : "bg-line/40 text-mut"
+                                : "bg-line/40 text-mut"
                       }`}
                     >
                       {count}
@@ -1474,7 +1470,7 @@ export function PositionsClient({
                         // in two accounts, and All accounts shows both.
                         key={`${o.ticker}-${(optionsPage - 1) * optionsSize + i}`}
                         className={
-                          money.isItm
+                          money.isExercisable
                             ? "bg-green-bg/25 hover:bg-green-bg/40"
                             : "hover:bg-paper-2/60 transition-colors"
                         }
@@ -1503,7 +1499,9 @@ export function PositionsClient({
                               title={
                                 money.isItm
                                   ? `In the money by $${money4(money.intrinsicPerOption)} per option`
-                                  : undefined
+                                  : money.moneyness === "ATM"
+                                    ? "Sitting on its strike — exercising today is worth nothing yet"
+                                    : undefined
                               }
                             />
                           </div>
@@ -1519,7 +1517,7 @@ export function PositionsClient({
                             ITM badge beside it claims. */}
                         <td
                           className={`px-4.5 py-3 text-right font-mono whitespace-nowrap ${
-                            money.isItm ? "text-gain font-semibold" : "text-mut"
+                            money.isExercisable ? "text-gain font-semibold" : "text-mut"
                           }`}
                           title={
                             money.moneyness === "unknown"
@@ -1757,13 +1755,12 @@ export function PositionsClient({
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Last</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Value</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Unreal. P&amp;L</th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-center">Vitti View</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
                 {holdingRows.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="text-center text-mut py-6">
+                    <td colSpan={6} className="text-center text-mut py-6">
                       {holdSearch.trim()
                         ? `Nothing matches "${holdSearch.trim()}".`
                         : "No holdings in this account."}
@@ -1825,7 +1822,6 @@ export function PositionsClient({
                             {o.cost > 0 ? pct1(returnPct(o.pnl, o.cost)) : ""}
                           </div>
                         </td>
-                        <td className="px-4.5 py-3 text-center text-mut text-[11px]">—</td>
                       </tr>
                     );
                   }
@@ -1835,7 +1831,6 @@ export function PositionsClient({
                   const plp = returnPct(pl, posCost(p));
                   const val = posValue(p);
                   const isUp = pl >= 0;
-                  const sg = signals[p.code];
                   return (
                     <tr
                       key={rowKey(p.code)}
@@ -1866,9 +1861,6 @@ export function PositionsClient({
                         ${Math.round(pl).toLocaleString("en-AU")}
                         <div className="text-[10.5px]">{pct1(plp)}</div>
                       </td>
-                      <td className="px-4.5 py-3 text-center">
-                        {getActionPill(sg ? sg.action : "Hold")}
-                      </td>
                     </tr>
                   );
                 })}
@@ -1897,7 +1889,6 @@ export function PositionsClient({
                         {pct1(returnPct(holdingsTotal.pnl, holdingsTotal.cost))}
                       </div>
                     </td>
-                    <td className="px-4.5 py-3.5" />
                   </tr>
                 </tfoot>
               )}

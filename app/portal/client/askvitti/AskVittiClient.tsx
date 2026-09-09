@@ -30,7 +30,15 @@ export function AskVittiClient({
   const pnl = portfolio.total.pnl;
   const cost = portfolio.total.buyPrice;
 
-  /** In the money AND inside the window — the only options worth naming. */
+  /**
+   * In the money AND inside the window — the only options worth naming.
+   *
+   * `isItm` and NOT `isExercisable`, which is the one place that distinction
+   * earns its keep. The registers count an at-the-money grant as live at the
+   * strike, and should. Here the message is "this expires in days and is worth
+   * exercising" — and an ATM grant days from expiry is worth ~nothing, so
+   * naming it would be an urgent-looking prompt about $0.00.
+   */
   const urgentOptions = options.filter(
     (o) => o.status === "live" && o.money.isItm && o.dte !== null && o.dte <= 14 && o.dte >= 0,
   );

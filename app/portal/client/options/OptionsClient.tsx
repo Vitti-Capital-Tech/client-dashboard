@@ -44,7 +44,7 @@ function matchesTab(o: OptionTableItem, tab: FilterTab): boolean {
     case "unlisted":
       return o.isUnlisted;
     case "itm":
-      return o.money.isItm;
+      return o.money.isExercisable;
     case "gain":
       return o.pnl > 0;
     case "loss":
@@ -276,7 +276,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                             <MoneynessBadge
                               money={o.money}
                               title={
-                                o.money.isItm
+                                o.money.isExercisable
                                   ? `In the money by $${money4(o.money.intrinsicPerOption)} per option`
                                   : undefined
                               }
@@ -297,7 +297,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                         {/* Exercise value */}
                         <td
                           className={`px-4 py-3 text-right font-mono whitespace-nowrap ${
-                            o.money.isItm ? "text-gain font-semibold" : "text-mut"
+                            o.money.isExercisable ? "text-gain font-semibold" : "text-mut"
                           }`}
                           title={
                             o.money.moneyness === "unknown"

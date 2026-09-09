@@ -19,8 +19,34 @@ export type Moneyness = "ITM" | "ATM" | "OTM" | "unknown";
 
 export type OptionMoneyness = {
   moneyness: Moneyness;
-  /** Convenience for the common test — false whenever moneyness is unknown. */
+  /**
+   * STRICTLY in the money — exercising today turns a profit.
+   *
+   * Kept separate from `isExercisable` rather than widened to include ATM,
+   * because one of the two callers genuinely means this and only this: the
+   * near-expiry prompt in Ask Vitti, where an at-the-money grant days from
+   * expiry is worth ~nothing and naming it is noise, not an action.
+   *
+   * False whenever moneyness is unknown.
+   */
   isItm: boolean;
+  /**
+   * At OR in the money — exercising today is not a loss.
+   *
+   * What the registers count, filter and colour on. The desk's question there
+   * is "which grants are live at the strike", and a grant sitting exactly on
+   * its strike belongs in that set: it is one tick from being worth something,
+   * and reporting it beside the out-of-the-money rows hid it.
+   *
+   * The exercise-value arithmetic never depended on this — `intrinsicPerOption`
+   * is `max(edge, 0)` and has always applied to ATM, which is why an ATM row
+   * already showed `$0.00` rather than a dash. `$0.00` IS `qty × (spot −
+   * strike)` when spot equals strike; what ATM was missing was membership of
+   * the ITM set, not the formula.
+   *
+   * False whenever moneyness is unknown.
+   */
+  isExercisable: boolean;
   /** Exercise value of ONE option, floored at zero. */
   intrinsicPerOption: number;
   /** `qty × intrinsicPerOption` — the whole parcel's exercise value. */
@@ -36,6 +62,7 @@ export type OptionMoneyness = {
 export const UNKNOWN_MONEYNESS: OptionMoneyness = {
   moneyness: "unknown",
   isItm: false,
+  isExercisable: false,
   intrinsicPerOption: 0,
   intrinsicValue: 0,
 };
@@ -87,6 +114,7 @@ export function moneynessOf({
   return {
     moneyness,
     isItm: moneyness === "ITM",
+    isExercisable: moneyness === "ITM" || moneyness === "ATM",
     intrinsicPerOption,
     intrinsicValue: intrinsicPerOption * units,
   };

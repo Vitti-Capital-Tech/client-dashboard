@@ -3269,18 +3269,43 @@ test("buildUnlistedOptionRows - out of the money still prices off Black-Scholes"
   assert.ok(row.pnlCalculated > 0, "an OTM option 1.4 years out is not worthless");
 });
 
-test("buildUnlistedOptionRows - spot exactly AT the strike is not intrinsic", async () => {
-  // The rule is `spot > strike`, strictly. At the money there is nothing to gain
-  // by exercising, so intrinsic would be exactly $0 and would wipe out a grant
-  // that still has 1.4 years to run.
+test("buildUnlistedOptionRows - spot exactly AT the strike is intrinsic, not modelled", async () => {
+  // Reversed on the desk's instruction: Black-Scholes is now for OUT-of-the-money
+  // rows only, and everything at or above the strike reports `qty × (spot −
+  // strike)`.
+  //
+  // The rule used to be `spot > strike` strictly, on the reading that a grant on
+  // its strike still has time value worth reporting — 1.4 years of it here, and
+  // intrinsic wipes it to $0. The desk's position is the one this whole branch
+  // rests on: time value in a security with no market is the least defensible
+  // part of the number, and it does not become defensible because the price
+  // happens to sit exactly on the strike. So ATM reports what exercising pays.
   const asOf = new Date("2026-08-04T00:00:00Z");
   const spots = new Map([["GRV", { price: 0.14, source: "yahoo" as const }]]);
 
   const built = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
   const row = built.summary.find((s) => s.isUnlistedOption);
 
-  assert.equal(row!.unlistedOption!.pricingMethod, "black-scholes");
-  assert.ok(row!.pnlCalculated > 0);
+  assert.equal(row!.unlistedOption!.pricingMethod, "intrinsic");
+  assert.equal(row!.pnlCalculated, 0, "qty × (spot − strike), with spot on the strike");
+});
+
+test("buildUnlistedOptionRows - inside the tick, a grant is never worth less than nothing", async () => {
+  // The ATM band has a tick of tolerance either side (`|spot − strike| < 0.0005`,
+  // so `0.1 + 0.04` does not read as ITM by 2e-17). Below the strike the edge is
+  // NEGATIVE, and `qty × (spot − strike)` taken literally would hand the client a
+  // negative valuation on a free option. `intrinsicPerOption` floors at zero,
+  // which is the whole reason this branch asks `moneynessOf` rather than
+  // subtracting inline.
+  const asOf = new Date("2026-08-04T00:00:00Z");
+  const spots = new Map([["GRV", { price: 0.1398, source: "yahoo" as const }]]);
+
+  const built = buildUnlistedOptionRows(grvEquityRow(10000), unlistedPlacementMap(), spots, asOf);
+  const row = built.summary.find((s) => s.isUnlistedOption);
+
+  assert.equal(row!.unlistedOption!.pricingMethod, "intrinsic", "inside the tick is ATM");
+  assert.equal(row!.pnlCalculated, 0);
+  assert.ok(row!.pnlCalculated >= 0, "never negative");
 });
 
 test("buildUnlistedOptionRows - a zero strike never takes the intrinsic branch", async () => {

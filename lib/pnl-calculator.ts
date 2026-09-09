@@ -10,6 +10,10 @@ import {
 // disagreeing about what a security IS is exactly the kind of split that shows
 // up as a P&L discrepancy nobody can explain.
 import { isExchangeQualified } from "./import/normalize.ts";
+// The SAME rule the badge uses. Deciding "is this at or above the strike" twice
+// is how a row comes to be labelled ATM on screen and priced as out-of-the-money
+// underneath — see the note at `useIntrinsic`.
+import { moneynessOf } from "./options/moneyness.ts";
 
 export interface ParsedTradeRow {
   cnote?: string;
@@ -3736,29 +3740,62 @@ export function buildUnlistedOptionRows(
       const { volatility, riskFreeRate, dividendYield } = UNLISTED_OPTION_ASSUMPTIONS;
 
       /**
-       * IN THE MONEY: value the grant at what exercising it is worth TODAY —
-       * `spot - strike` — rather than at the model price.
+       * AT OR IN THE MONEY: value the grant at what exercising it is worth
+       * TODAY — `qty × (spot − strike)` — rather than at the model price.
+       * Black-Scholes is left to the OUT-of-the-money rows alone.
        *
        * Desk policy, and it cuts the figure rather than flattering it: for a
-       * call, Black-Scholes is intrinsic value PLUS time value, so an ITM grant
+       * call, Black-Scholes is intrinsic value PLUS time value, so a grant
        * reported this way is worth less than the model says. That is the point.
        * The time value of an option that does not trade is the least defensible
        * part of the number — there is no market in which to realise it — while
        * `spot - strike` is what the holder could actually get by exercising.
        *
        * Out of the money there is no intrinsic value to fall back on (exercising
-       * is worthless), so the model is the only answer available and nothing
-       * changes: those rows are still Black-Scholes.
+       * is worthless), so the model is the only answer available: those rows are
+       * still Black-Scholes.
        *
-       * `strike > 0` is required before taking this branch. A missing or zero
-       * strike is a tracker data error, and `spot - 0` would report the whole
-       * share price as option value; `blackScholesCall` already returns 0 for a
-       * non-positive strike, so the guard keeps that refusal intact.
+       * ── Why ATM is on the intrinsic side ────────────────────────────────────
+       * It was on the model's side until the desk said otherwise, on the reading
+       * that a grant sitting on its strike is not yet worth exercising and its
+       * value is therefore all time value. The desk's position is the one above:
+       * time value in a security with no market is not a figure to report to a
+       * client, and it does not become one because the strike happens to be
+       * exactly where the price is. So ATM reports what exercising pays, which
+       * at the strike is nothing.
+       *
+       * Measured before the change: 5 of 170 stored grants were ATM, carrying
+       * $2,877.61 of modelled value between them. Those go to ~zero. The 27 ITM
+       * rows ($240,023) and the 127 OTM rows ($21,957) are untouched.
+       *
+       * ── Why `moneynessOf` and not `spot >= addOn.strike` ───────────────────
+       * Because the badge already decides this, with a tick of tolerance —
+       * `|spot − strike| < 0.0005`, so `0.1 + 0.04` does not read as ITM by
+       * 2e-17. A bare `>=` here would agree with it above the strike and
+       * disagree just below: a grant a hundredth of a cent under its strike
+       * would be badged ATM on screen and priced as out-of-the-money
+       * underneath. One rule, asked once.
+       *
+       * `intrinsicPerOption` is `max(edge, 0)`, which is what makes the ATM
+       * case safe: inside the tolerance the edge can be very slightly NEGATIVE,
+       * and paying a client for a negative intrinsic is not a rounding error.
+       *
+       * A missing or zero strike still refuses this branch — `moneynessOf`
+       * returns `unknown` for a non-positive strike or spot, so `spot - 0`
+       * never reports the whole share price as option value, and
+       * `blackScholesCall` already returns 0 in that case.
        */
-      const useIntrinsic = addOn.strike > 0 && spot > addOn.strike;
+      const money = moneynessOf({
+        spot,
+        strike: addOn.strike,
+        qty: optionQty,
+        // Placement grants are calls by construction, as above.
+        kind: "Call",
+      });
+      const useIntrinsic = money.isExercisable;
 
       const optionPrice = useIntrinsic
-        ? spot - addOn.strike
+        ? money.intrinsicPerOption
         : blackScholesCall({
             spot,
             strike: addOn.strike,
