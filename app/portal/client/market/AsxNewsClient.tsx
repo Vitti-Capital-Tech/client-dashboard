@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { TablePagination } from "@/app/components/TablePagination";
+import { WatchButton } from "@/app/components/WatchButton";
 import type { AsxAnnouncement, AsxSentiment } from "@/lib/asx/news";
 
 const SENTIMENT_PILL: Record<AsxSentiment, string> = {
@@ -31,6 +32,8 @@ interface Props {
   items: AsxAnnouncement[];
   /** Tickers in the client's book, for the marker and the "in my book" filter. */
   heldCodes: string[];
+  /** Tickers already on the client's watchlist, so the star starts filled. */
+  watchedCodes: string[];
   /** Filings that day, which can exceed `items.length` if the fetch was capped. */
   total: number;
   asAt: string | null;
@@ -45,13 +48,14 @@ interface Props {
  * reads in one column, but the answer is not to show fewer and hide the rest:
  * it is to let someone say which ones they want.
  */
-export function AsxNewsClient({ items, heldCodes, total, asAt }: Props) {
+export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: Props) {
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
   const held = useMemo(() => new Set(heldCodes), [heldCodes]);
+  const watched = useMemo(() => new Set(watchedCodes), [watchedCodes]);
 
   const counts = useMemo(
     () => ({
@@ -177,11 +181,21 @@ export function AsxNewsClient({ items, heldCodes, total, asAt }: Props) {
                     <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
                       {a.company} &middot; {annTime(a.released)}
                     </span>
-                    <ArrowUpRight
-                      aria-hidden
-                      className="ml-auto w-3.5 h-3.5 shrink-0 text-mut-d transition-all
-                                 group-hover:text-green-d group-hover:-translate-y-px"
-                    />
+                    <span className="ml-auto flex items-center gap-2 shrink-0">
+                      {/* Reading a filing is where somebody decides to follow a
+                          company, so the control belongs on the filing rather
+                          than on a page they would have to go and find. */}
+                      <WatchButton
+                        code={a.code}
+                        name={a.company || a.code}
+                        initiallyWatching={watched.has(a.code)}
+                      />
+                      <ArrowUpRight
+                        aria-hidden
+                        className="w-3.5 h-3.5 text-mut-d transition-all
+                                   group-hover:text-green-d group-hover:-translate-y-px"
+                      />
+                    </span>
                   </div>
 
                   <div className="font-semibold text-[13.5px] leading-snug mt-1.5 group-hover:underline">

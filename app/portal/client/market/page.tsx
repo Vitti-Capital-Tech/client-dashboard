@@ -1,9 +1,10 @@
-import { getActiveAccountId } from "@/lib/session";
+import { getActiveAccountId, getActiveClientId } from "@/lib/session";
 import {
   getPositions,
   getSectors,
   getNews,
   getResearchReports,
+  getWatchlist,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
 import { AsxNewsClient } from "./AsxNewsClient";
@@ -21,17 +22,26 @@ function newsTime(iso: string): string {
 
 // Server Component: sector momentum, news, and research from the DAL, with the
 // client's holdings highlighted.
-export default async function ClientInsightsPage() {
-  const accountId = await getActiveAccountId();
-  const [positions, sectors, news, reports, asxFeed] = await Promise.all([
+export default async function ClientMarketPage() {
+  const [accountId, clientId] = await Promise.all([
+    getActiveAccountId(),
+    getActiveClientId(),
+  ]);
+  const [positions, sectors, news, reports, asxFeed, watchlist] = await Promise.all([
     getPositions(accountId),
     getSectors(),
     getNews(),
     getResearchReports(),
     getAsxMarketSensitive(),
+    // For the star on each filing: which of these companies is already
+    // followed. The list is the client's own and short.
+    clientId ? getWatchlist(clientId) : Promise.resolve([]),
   ]);
 
   const holdings = positions.map((p) => p.code);
+  const watchedCodes = watchlist
+    .map((w) => w.code)
+    .filter((c): c is string => Boolean(c));
   const maxMom = Math.max(1, ...sectors.map((s) => Math.abs(s.momentum)));
 
   // Anything the client actually owns comes first. The upstream feed is already
@@ -234,7 +244,13 @@ export default async function ClientInsightsPage() {
           figures stay here. Hidden when the upstream returned nothing — an
           empty filter bar over an empty list says less than no section. */}
       {asxNews.length > 0 && (
-        <AsxNewsClient items={asxNews} heldCodes={holdings} total={asxTotal} asAt={asAt} />
+        <AsxNewsClient
+          items={asxNews}
+          heldCodes={holdings}
+          watchedCodes={watchedCodes}
+          total={asxTotal}
+          asAt={asAt}
+        />
       )}
 
       {/* Grid: News & research. Each card is gated on having rows, and the grid
