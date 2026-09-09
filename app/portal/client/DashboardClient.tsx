@@ -424,7 +424,7 @@ export function DashboardClient({
                         <td className={`px-4 py-3 text-right font-mono text-[13px] ${isUp ? "text-gain" : "text-loss-d"}`}>
                           ${Math.round(pl).toLocaleString("en-AU")}
                           <div className="text-[10.5px]">
-                            {plp === null ? "granted" : `${isUp ? "+" : ""}${plp.toFixed(1)}%`}
+                            {plp === null ? "" : `${isUp ? "+" : ""}${plp.toFixed(1)}%`}
                           </div>
                         </td>
                         {/* Was a "Day" column reading `p.code === "PLS" ? "+2.1%" : "+0.4%"`

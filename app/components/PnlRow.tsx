@@ -194,7 +194,7 @@ export function PnlRow({
         </td>
         <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span {...mark(row.overridden.buyQty, qty(effComputedBuyQty))}>
-            {displayBuyQty === 0 && !isOption ? "—" : qty(displayBuyQty)}
+            {displayBuyQty === 0 ? "—" : qty(displayBuyQty)}
           </span>
         </td>
         <td className="px-4.5 py-3 text-right font-mono text-ink">
@@ -227,7 +227,7 @@ export function PnlRow({
           </span>
         </td>
         <td className={`px-4.5 py-3 text-[11px] ${row.flagged ? "text-loss-d font-semibold" : "text-mut"}`}>
-          {row.type}
+          {readOnly && row.type === "Matched" ? "" : row.type}
           {/* The note is the reason the DESK typed against a figure, kept on the
               audit trail. It is addressed to us, so it stays on our screen. */}
           {row.note && !readOnly && (

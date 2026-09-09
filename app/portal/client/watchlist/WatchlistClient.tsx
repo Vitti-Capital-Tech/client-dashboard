@@ -11,13 +11,13 @@ import { addCustomAlert } from "@/app/actions/alerts";
 import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
 import { useToast } from "@/app/components/Toast";
 
-// Local view shape for a watchlist row. Add-security items are never persisted,
-// so they carry only the fields the table renders. Note: the DAL has no
-// daily-change field, so there is no `chg` here.
+// Local view shape for a watchlist row.
 type WatchItem = {
   code: string | null;
   name: string;
   last: number | null;
+  /** The day's move, from the live quote. Null for anything not quoted. */
+  changePct: number | null;
   alert: number | null;
   dir: "above" | "below" | null;
   unlisted: boolean;
@@ -29,7 +29,7 @@ export function WatchlistClient({
   recos,
   clientId,
 }: {
-  watchlist: WatchRow[];
+  watchlist: (WatchRow & { changePct: number | null })[];
   placements: PlacementRow[];
   recos: RecoRow[];
   clientId: string;
@@ -41,6 +41,7 @@ export function WatchlistClient({
       code: w.code,
       name: w.name,
       last: w.last,
+      changePct: w.changePct,
       alert: w.alert,
       dir: w.dir,
       unlisted: w.unlisted,
@@ -94,7 +95,8 @@ export function WatchlistClient({
     const item: WatchItem = {
       code,
       name: newName.trim() || code,
-      last: reco && reco.target ? reco.target * 0.9 : 1.0,
+      last: reco && reco.target ? reco.target * 0.9 : null,
+      changePct: null,
       alert: null,
       dir: null,
       unlisted: false,
@@ -275,8 +277,18 @@ export function WatchlistClient({
                       <td className="px-4.5 py-3.5 text-right font-mono text-[13px]">
                         {w.last !== null ? `$${w.last.toFixed(w.last < 10 ? 3 : 2)}` : "—"}
                       </td>
-                      <td className="px-4.5 py-3.5 text-right font-mono text-[13px] text-mut">
-                        —
+                      <td
+                        className={`px-4.5 py-3.5 text-right font-mono text-[13px] ${
+                          w.changePct === null
+                            ? "text-mut"
+                            : w.changePct >= 0
+                            ? "text-gain"
+                            : "text-loss-d"
+                        }`}
+                      >
+                        {w.changePct === null
+                          ? "—"
+                          : `${w.changePct >= 0 ? "+" : ""}${w.changePct.toFixed(2)}%`}
                       </td>
                       <td className="px-4.5 py-3.5">
                         {w.alert ? (

@@ -2357,7 +2357,7 @@ export function PositionsClient({
                           {/* No percentage: a grant costs nothing, so a return
                               on cost is undefined rather than infinite. */}
                           <div className="text-[10.5px]">
-                            {o.cost > 0 ? pct1(returnPct(o.pnl, o.cost)) : "granted"}
+                            {o.cost > 0 ? pct1(returnPct(o.pnl, o.cost)) : ""}
                           </div>
                         </td>
                         <td className="px-4.5 py-3 text-center text-mut text-[11px]">—</td>
@@ -2484,7 +2484,7 @@ export function PositionsClient({
                   {posCost(selectedStock) > 0 &&
                   Number.isFinite(posPL(selectedStock) / posCost(selectedStock))
                     ? ` (${((posPL(selectedStock) / posCost(selectedStock)) * 100).toFixed(1)}%)`
-                    : " (granted)"}
+                    : ""}
                 </b>
               </div>
               {advice && (
