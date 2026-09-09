@@ -15,6 +15,8 @@ import {
   type SignalRow,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
+import { getSecurityMap } from "@/lib/data/queries";
+import { unlistedValue } from "@/lib/data/compute";
 import { DashboardClient } from "./DashboardClient";
 
 // Server Component: resolves the active client + account from the session,
@@ -59,6 +61,42 @@ export default async function ClientDashboardPage() {
   ]);
 
   const cash = account?.cash ?? 0;
+  const portfolio = clientPortfolio(storedPnl, overrides);
+
+  /**
+   * Ticker → sector, for the sector chart that now lives on this page.
+   *
+   * The derivative-to-ordinary rollup is resolved HERE rather than in the
+   * browser, the same way `toPosition` does it: an option series has no sector
+   * of its own — no data source classifies 'EOSXX' — but the exposure a client
+   * has through a grant is exposure to the underlying's sector, which is the
+   * question a sector breakdown is asking. Built from the tickers actually in
+   * the portfolio rather than from the whole catalogue, so the payload is the
+   * client's own holdings.
+   */
+  const securityMap = await getSecurityMap();
+  const parentOf = new Map(storedPnl.map((r) => [r.ticker, r.parentTicker ?? r.ticker]));
+  const sectorByTicker: Record<string, string | null> = {};
+  for (const row of portfolio.rows) {
+    const parent = parentOf.get(row.ticker) ?? row.ticker;
+    sectorByTicker[row.ticker] =
+      securityMap.get(row.ticker)?.sector ?? securityMap.get(parent)?.sector ?? null;
+  }
+
+  /**
+   * Carry on unlisted grants — neither a listed position nor cash.
+   *
+   * Two terms, and the second is the one that ever has a value: `option_holdings`
+   * has never held a row, so the allocation slice read $0 for every client
+   * including those holding grants the recompute had priced. The grants
+   * themselves live in the stored P&L rows, which is where the second term
+   * reads them from.
+   */
+  const unlisted =
+    unlistedValue(options) +
+    portfolio.rows
+      .filter((r) => r.type.toLowerCase().includes("unlisted option"))
+      .reduce((sum, r) => sum + r.sellOrCurrent, 0);
 
   const signalMap: Record<string, SignalRow> = Object.fromEntries(
     signals.map((s) => [s.code, s]),
@@ -92,8 +130,10 @@ export default async function ClientDashboardPage() {
       alerts={alerts}
       signals={signalMap}
       noteTime={noteTime}
+      sectorByTicker={sectorByTicker}
+      unlisted={unlisted}
       filings={asxFeed.items.filter((a) => positions.some((p) => p.parent === a.code || p.code === a.code))}
-      portfolio={clientPortfolio(storedPnl, overrides)}
+      portfolio={portfolio}
     />
   );
 }

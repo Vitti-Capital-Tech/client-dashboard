@@ -3,9 +3,7 @@ import {
   getAccounts,
   getClientPositions,
   getSignals,
-  getClientOptions,
   getClientTrades,
-  getSecurityMap,
   getSecurityCommentary,
   type SignalRow,
 } from "@/lib/data/queries";
@@ -62,24 +60,20 @@ export default async function ClientPositionsPage() {
   const [
     accounts,
     positions,
-    options,
     signals,
     storedPnl,
     overrides,
     trades,
-    securityMap,
     commentaryByCode,
   ] = await Promise.all([
     getAccounts(clientId),
     // The client's WHOLE book, not one account's: the account filter lives in
     // the island now, so the page cannot know which account is being asked for.
     clientId ? getClientPositions(clientId) : Promise.resolve([]),
-    getClientOptions(clientId),
     getSignals(),
     clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
     clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
     clientId ? getClientTrades(clientId) : Promise.resolve([]),
-    getSecurityMap(),
     getSecurityCommentary(),
   ]);
 
@@ -129,41 +123,15 @@ export default async function ClientPositionsPage() {
     }
   }
 
-  /**
-   * Ticker → sector, for every ticker the sector chart can be asked about.
-   *
-   * The derivative-to-ordinary rollup is resolved HERE rather than in the
-   * browser, the same way `toPosition` does it: an option series has no sector
-   * of its own — no data source classifies 'EOSXX' — but the exposure a client
-   * has through a grant is exposure to the underlying's sector, which is the
-   * question a sector breakdown is asking. `parentTicker` comes off the stored
-   * row; where it is absent the code IS the ordinary.
-   *
-   * Built from the tickers actually in the portfolio rather than from the whole
-   * 775-row catalogue, so the payload is the client's own holdings. Taken over
-   * the `all` scope because the chart reading it covers all accounts.
-   */
-  const parentOf = new Map(
-    storedPnl.map((r) => [r.ticker, r.parentTicker ?? r.ticker]),
-  );
-  const sectorByTicker: Record<string, string | null> = {};
-  for (const row of summaryByScope.all.rows) {
-    const parent = parentOf.get(row.ticker) ?? row.ticker;
-    sectorByTicker[row.ticker] =
-      securityMap.get(row.ticker)?.sector ?? securityMap.get(parent)?.sector ?? null;
-  }
-
   return (
     <PositionsClient
       accounts={accounts}
       activeAccountId={activeAccountId}
       positions={positions}
-      options={options}
       signals={signalMap}
       summaryByScope={summaryByScope}
       offLedgerByScope={offLedgerByScope}
       trades={trades}
-      sectorByTicker={sectorByTicker}
       commentary={Object.fromEntries(commentaryByCode)}
     />
   );

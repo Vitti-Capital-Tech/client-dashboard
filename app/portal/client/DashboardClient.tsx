@@ -30,6 +30,7 @@ import {
 } from "@/lib/data/compute";
 import { ackAlert } from "@/app/actions/alerts";
 import { isComingSoon } from "@/lib/nav/coming-soon";
+import { PortfolioAnalytics } from "@/app/components/PortfolioAnalytics";
 
 export function DashboardClient({
   clientId,
@@ -44,6 +45,8 @@ export function DashboardClient({
   noteTime,
   portfolio,
   filings,
+  sectorByTicker,
+  unlisted,
 }: {
   clientId: string;
   clientName: string;
@@ -59,6 +62,10 @@ export function DashboardClient({
   portfolio: ClientPortfolio;
   /** Today's price-sensitive ASX filings, already narrowed to this book. */
   filings: AsxAnnouncement[];
+  /** Ticker → sector, derivatives already rolled up. For the sector split. */
+  sectorByTicker: Record<string, string | null>;
+  /** Carry on unlisted grants — neither a listed position nor cash. */
+  unlisted: number;
 }) {
   const router = useRouter();
   const [countdown, setCountdown] = useState("closes 4:00:00");
@@ -371,6 +378,21 @@ export function DashboardClient({
           </div>
         </div>
       </div>
+
+      {/*
+        What the money looks like — allocation, sector split, and where the P&L
+        came from. This was a fifth tab on the Portfolio page, behind Holdings,
+        which meant Home showed a table of holdings and Portfolio showed the
+        same table again, with the one view that actually answers "how is my
+        money arranged" buried underneath both.
+      */}
+      <PortfolioAnalytics
+        positions={positions}
+        cash={cash}
+        unlisted={unlisted}
+        portfolio={portfolio}
+        sectorByTicker={sectorByTicker}
+      />
 
       {/*
         Two columns on a desk, one on a phone — and the order below is the order
