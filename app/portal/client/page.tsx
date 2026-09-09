@@ -9,7 +9,6 @@ import {
   getOptions,
   getMarketIndices,
   getPlacements,
-  getResearchNotes,
   getAlerts,
   getSignals,
   type SignalRow,
@@ -33,7 +32,6 @@ export default async function ClientDashboardPage() {
     options,
     indices,
     placements,
-    notes,
     alerts,
     signals,
     asxFeed,
@@ -44,7 +42,6 @@ export default async function ClientDashboardPage() {
     getOptions(accountId),
     getMarketIndices(),
     getPlacements(),
-    getResearchNotes(),
     getAlerts(clientId),
     getSignals(),
     // Cached upstream for five minutes and shared with Market and Insights,
@@ -102,22 +99,6 @@ export default async function ClientDashboardPage() {
     signals.map((s) => [s.code, s]),
   );
 
-  // Morning-note time: derive from the latest research note's published ISO
-  // stamp, formatted like the markets page (en-AU, Sydney, lowercased, no
-  // spaces). Falls back gracefully when no note exists.
-  const note = notes[0];
-  const noteTime = note
-    ? new Date(note.published)
-        .toLocaleTimeString("en-AU", {
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-          timeZone: "Australia/Sydney",
-        })
-        .replace(/\s/g, "")
-        .toLowerCase()
-    : "—";
-
   return (
     <DashboardClient
       clientId={clientId}
@@ -129,7 +110,6 @@ export default async function ClientDashboardPage() {
       placements={placements}
       alerts={alerts}
       signals={signalMap}
-      noteTime={noteTime}
       sectorByTicker={sectorByTicker}
       unlisted={unlisted}
       filings={asxFeed.items.filter((a) => positions.some((p) => p.parent === a.code || p.code === a.code))}
