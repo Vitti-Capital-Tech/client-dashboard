@@ -194,14 +194,15 @@ export function PortalShell({
       { k: "invest", label: "Invest", path: "/portal/client/invest", icon: Zap, tab: true },
       { k: "positions", label: "Portfolio", path: "/portal/client/positions", icon: LineChart, tab: true },
       { k: "insights", label: "Market", path: "/portal/client/insights", icon: BarChart3, tab: true },
-      { k: "customise", label: "Customise", path: "/portal/client/customise", icon: Palette, tab: true },
       { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: MessageSquareMore, tab: true, ai: true },
       { k: "markets", label: "Markets", path: "/portal/client/markets", icon: TrendingUp, tab: false },
       { k: "placements", label: "Placement Bidder", path: "/portal/client/placements", icon: Zap, tab: false },
       { k: "options", label: "Options", path: "/portal/client/options", icon: Layers, tab: false },
-      { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: Star, tab: false },
-      { k: "accounts", label: "Accounts", path: "/portal/client/accounts", icon: CreditCard, tab: false },
-      { k: "settings", label: "Settings", path: "/portal/client/settings", icon: Settings, tab: false }
+      { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: Star, tab: false }
+      // Accounts and Settings are not here: they are about the person
+      // signed in rather than about their money, and they now sit under the
+      // avatar with the address and the way out. Customise is not here
+      // either — it lives inside Settings, one door rather than two.
       // No "Alerts" entry: the bell in the top bar opens the same list, from
       // every page, with the same unread count on it. Two doors to one drawer
       // is one door too many, and the nav one was the slower of the two.
@@ -214,7 +215,6 @@ export function PortalShell({
       { k: "options", label: "Options", path: "/portal/staff/options", icon: Layers, tab: true },
       { k: "pnl-calculator", label: "PNL Calculator", path: "/portal/staff/pnl-calculator", icon: Calculator, tab: true },
       { k: "mismatches", label: "Mismatched Qty", path: "/portal/staff/mismatches", icon: AlertTriangle, tab: true },
-      { k: "customise", label: "Customise", path: "/portal/staff/customise", icon: Palette, tab: true },
       { k: "alerts", label: "Alerts", path: "/portal/staff/alerts", icon: Bell, tab: false, badge: "alerts" },
       { k: "merge", label: "Account requests", path: "/portal/staff/merge-requests", icon: GitMerge, tab: false, badge: "pendingMerge" },
       { k: "audit", label: "Audit log", path: "/portal/staff/audit", icon: ClipboardCheck, tab: false }
@@ -443,15 +443,46 @@ export function PortalShell({
 
             <div className="border-t border-line my-1" />
 
-            <Link
-              role="menuitem"
-              href={role === "admin" ? "/portal/staff/customise" : "/portal/client/customise"}
-              onClick={() => setIsProfileOpen(false)}
-              className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
-            >
-              <Palette className="w-4 h-4 stroke-[1.7] flex-none text-green-d" />
-              Customise Theme
-            </Link>
+            {/* Where the person, rather than the portfolio, is managed.
+                Client-only: neither page exists on the staff console. */}
+            {role === "client" && (
+              <>
+                <Link
+                  role="menuitem"
+                  href="/portal/client/accounts"
+                  onClick={() => setIsProfileOpen(false)}
+                  className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
+                >
+                  <CreditCard className="w-4 h-4 stroke-[1.7] flex-none" />
+                  Accounts
+                </Link>
+                <Link
+                  role="menuitem"
+                  href="/portal/client/settings"
+                  onClick={() => setIsProfileOpen(false)}
+                  className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
+                >
+                  <Settings className="w-4 h-4 stroke-[1.7] flex-none" />
+                  Settings
+                </Link>
+              </>
+            )}
+
+            {/* Staff keep the theme link here because there is no staff
+                Settings page for it to live inside. A client reaches the same
+                page through Settings, so offering it twice would be the second
+                door this menu was built to remove. */}
+            {role === "admin" && (
+              <Link
+                role="menuitem"
+                href="/portal/staff/customise"
+                onClick={() => setIsProfileOpen(false)}
+                className="flex items-center gap-2.5 w-full text-left text-[13px] font-medium text-ink hover:bg-paper-2 p-2.5 rounded-[9px] cursor-pointer transition-colors"
+              >
+                <Palette className="w-4 h-4 stroke-[1.7] flex-none text-green-d" />
+                Customise theme
+              </Link>
+            )}
 
             <button
               role="menuitem"

@@ -2,7 +2,8 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { KeyRound, Mail, MonitorSmartphone, CheckCircle2 } from "lucide-react";
+import { KeyRound, Mail, MonitorSmartphone, CheckCircle2, Palette, ChevronRight } from "lucide-react";
+import Link from "next/link";
 import {
   changePassword,
   startEmailChange,
@@ -69,10 +70,40 @@ export function SettingsClient({
       )}
 
       <Details name={name} email={email} accounts={accounts} />
+      <Appearance />
       {hasPassword ? <ChangePassword /> : <SetFirstPassword email={email} />}
       <ChangeEmail current={email} />
       <Sessions />
     </div>
+  );
+}
+
+/**
+ * The way in to the theme editor.
+ *
+ * Customise used to be its own nav tab. It is a preference, not a place you
+ * work, and it belongs with the other preferences — so the tab is gone and this
+ * is how a client reaches it. A link rather than the editor inlined here: the
+ * editor is a live preview of the whole shell, which is not something to render
+ * inside a settings card.
+ */
+function Appearance() {
+  return (
+    <Card title="Appearance" icon={<Palette className="w-4 h-4" aria-hidden="true" />}>
+      <Link
+        href="/portal/client/customise"
+        className="flex items-center gap-3 -m-1 p-1 rounded-[9px] hover:bg-paper-2 transition-colors group"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-ink">Customise theme</div>
+          <p className="text-[11.5px] text-mut mt-0.5 leading-normal">
+            Colours and typeface for this browser. Saved on this device, not to
+            your login.
+          </p>
+        </div>
+        <ChevronRight className="w-4 h-4 stroke-[1.7] flex-none text-mut transition-transform group-hover:translate-x-0.5" />
+      </Link>
+    </Card>
   );
 }
 
