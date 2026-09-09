@@ -348,7 +348,16 @@ test("touched accounts are queued BEFORE the recompute is attempted", async () =
   assert.equal(tables.pnl_recompute_queue.length, 1, "still owed");
   assert.match(report.notes.join(" "), /left queued/);
   assert.equal(report.ok, false, "work still owed is not a clean morning");
-  assert.equal(tables.ingest_runs[0].watermark, null, "and the watermark waits");
+
+  // The watermark does NOT wait on it, and used to. Owed work is durable in
+  // the queue above — that is what this test is about — so holding the mail
+  // window open for it protected nothing and froze the ingest for two days.
+  // See "the watermark advances even while the recompute is still owed".
+  assert.equal(
+    tables.ingest_runs[0].watermark,
+    new Date("2026-08-07T23:05:00Z").toISOString(),
+    "the mail was read, so the window moves",
+  );
 });
 
 test("work owed from a previous run is picked up even if today touched nothing", async () => {
@@ -476,4 +485,114 @@ test("different content is never treated as a duplicate", async () => {
   const report = await go();
   assert.deepEqual(report.attachments.map((a) => a.outcome), ["imported", "imported"]);
   assert.equal(tables.trades.length, 4);
+});
+
+// ---------------------------------------------------------------------------
+// The watermark tracks the mail, and only the mail
+// ---------------------------------------------------------------------------
+
+test("the watermark advances even while the recompute is still owed", async () => {
+  // The regression that took the morning ingest down for two days. The
+  // watermark used to be gated on `status === "ok"`, and `status` goes
+  // `partial` when the recompute budget leaves accounts owed — so one slow
+  // morning froze the mail window permanently: every following run re-read a
+  // window one day larger, took longer, deferred more, and stayed `partial`.
+  // It climbed 24.8s -> 51.6s -> 54.3s and then died at the 58s ceiling
+  // mid-run, which writes no run row at all and put the watermark beyond
+  // recovery.
+  //
+  // Deferred work is durable in `pnl_recompute_queue` and is picked up by the
+  // next run whatever the watermark says, so the mail window was never the
+  // thing protecting it.
+  const att = attachment({ receivedAt: "2026-09-07T23:00:14Z" });
+  const { go, tables } = run({}, [att], { deferAll: true });
+
+  await go();
+
+  const recorded = tables.ingest_runs[0];
+  assert.equal(recorded.status, "partial", "the morning is genuinely unfinished");
+  assert.equal(
+    recorded.watermark,
+    new Date("2026-09-07T23:00:14Z").toISOString(),
+    "but the mail was fully read, so the window moves",
+  );
+});
+
+test("a file left unread still pins the watermark, deferred or not", async () => {
+  // The other half of the same rule: decoupling the recompute must not weaken
+  // the protection that exists for MAIL. A quarantined snapshot holds the
+  // window open even though the recompute also has work owed.
+  const accountIds = Array.from({ length: 10 }, (_, i) => `a${i}`);
+  const { go, tables } = run(
+    {
+      accounts: accountIds.map((id, i) => ({
+        id,
+        external_ref: `1000${i}`,
+        client_id: `c${i}`,
+      })),
+      securities: [{ code: "EOS", parent_code: null }],
+      positions: accountIds.map((id, i) => ({
+        account_id: id,
+        client_id: `c${i}`,
+        security_code: "EOS",
+        qty: 100,
+      })),
+    },
+    [attachment({ content: holdingsCsv(["10000"]) })],
+    { deferAll: true },
+  );
+
+  await go();
+
+  assert.equal(tables.ingest_runs[0].quarantined, 1);
+  assert.equal(tables.ingest_runs[0].watermark, null, "still where it was");
+});
+
+// ---------------------------------------------------------------------------
+// A duplicate is finished with
+// ---------------------------------------------------------------------------
+
+test("a file already ruled duplicate is not fetched through again", async () => {
+  // An attachment id addresses one immutable set of bytes, so `duplicate` can
+  // never become anything else. Leaving it out of the settled set meant the
+  // broker's frozen 784 KB export was re-hashed and re-upserted every single
+  // run — which is what the morning budget was actually being spent on.
+  const att = attachment();
+  const { go, tables } = run(
+    {
+      ingest_attachments: [
+        { message_id: att.messageId, attachment_id: att.attachmentId, outcome: "duplicate" },
+      ],
+    },
+    [att],
+  );
+
+  const report = await go();
+
+  assert.equal(report.attachments.length, 0, "not processed a second time");
+  assert.equal(tables.positions.length, 0, "and nothing re-applied");
+});
+
+test("a duplicate settles the window it sits in", async () => {
+  // Following from the above: if the only mail in the window is a file already
+  // ruled duplicate, the morning IS finished and the watermark must move. This
+  // is the state the mailbox was actually in — a frozen contract-note export
+  // arriving daily — and the run that could not get past it is what stalled.
+  const att = attachment({ receivedAt: "2026-09-07T23:00:37Z" });
+  const { go, tables } = run(
+    {
+      ingest_attachments: [
+        { message_id: att.messageId, attachment_id: att.attachmentId, outcome: "duplicate" },
+      ],
+    },
+    [att],
+  );
+
+  await go();
+
+  assert.equal(tables.ingest_runs[0].status, "ok");
+  assert.equal(
+    tables.ingest_runs[0].watermark,
+    new Date("2026-09-07T23:00:37Z").toISOString(),
+  );
 });

@@ -107,8 +107,27 @@ async function alreadySettled(
     sha256: string | null;
   }[];
 
+  /**
+   * Terminal outcomes only. `failed` and `quarantined` are deliberately absent
+   * — those are retried, which is the whole point of recording them.
+   *
+   * `duplicate` belongs here and was missing, at a cost that took a month to
+   * show up. An attachment id addresses one immutable set of bytes, so a file
+   * ruled byte-identical to something already imported can never be ruled
+   * anything else — yet leaving it out meant every such file was re-fetched,
+   * re-hashed and re-upserted on every subsequent run, forever. With the
+   * broker's contract-note export frozen at the same 784 KB for four weeks
+   * (§8.42), that was the bulk of what each morning spent its budget on.
+   *
+   * The check at the end of the run already counted `duplicate` as settled when
+   * deciding the watermark. The two disagreed, and this is the one that was
+   * wrong.
+   */
   const settled = rows.filter(
-    (r) => r.outcome === "imported" || r.outcome === "unrecognised",
+    (r) =>
+      r.outcome === "imported" ||
+      r.outcome === "unrecognised" ||
+      r.outcome === "duplicate",
   );
 
   return {
@@ -124,6 +143,11 @@ async function alreadySettled(
      *
      * Identical bytes cannot produce a different outcome, so the second copy is
      * skipped outright. This is why the hash is stored at all.
+     */
+    /**
+     * Still `imported` only, now that `settled` is wider: this set means
+     * "content we have actually applied", and a duplicate applied nothing. Its
+     * bytes are already here under the row that did import them.
      */
     hashes: new Set(
       settled
@@ -355,27 +379,48 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
     }
 
     // A quarantined or failed file, or work left owed, all mean this morning is
-    // not finished. Saying "ok" would be a lie the watermark then makes
-    // permanent by skipping past what was never done.
+    // not finished. The status says so; what it must NOT do any more is decide
+    // the watermark — see below.
     const failed = reports.filter(
       (r) => r.outcome === "failed" || r.outcome === "quarantined",
     ).length;
     const status = failed > 0 || deferredCount > 0 ? "partial" : "ok";
 
     /**
-     * The watermark advances only when EVERY attachment in the window is
-     * settled — imported or unrecognised — and nothing is still owed.
+     * The watermark advances when EVERY attachment in the window reached a
+     * terminal outcome, and on nothing else.
      *
-     * The status check alone is not enough, and the gap is not hypothetical: a
-     * run that skipped three previously-failed files as "already processed" did
-     * no work, reported `ok`, and moved the watermark past them. They then fell
+     * ── What it must keep refusing ──────────────────────────────────────────
+     * A file that was quarantined or failed. The gap is not hypothetical: a run
+     * that skipped three previously-failed files as "already processed" did no
+     * work, reported `ok`, and moved the watermark past them. They then fell
      * outside the mail window entirely and could not be retried even after the
-     * bug that failed them was fixed.
+     * bug that failed them was fixed. The attachment table is what guarantees
+     * correctness; the watermark is only an optimisation to avoid re-listing old
+     * mail. When the two disagree the watermark yields — re-reading a message
+     * costs a Graph call, skipping one costs the day's data.
      *
-     * The attachment table is what guarantees correctness; the watermark is only
-     * an optimisation to avoid re-listing old mail. So when the two disagree,
-     * the watermark yields — re-reading a message costs a Graph call, and
-     * skipping one costs the day's data.
+     * ── What it must STOP refusing, and why ─────────────────────────────────
+     * A deferred recompute. This used to be gated on `status === "ok"`, which
+     * folds `deferredCount` into the decision — and a deferred account has
+     * nothing to do with whether the mail was read. The two are independent by
+     * construction: owed recompute work lives in `pnl_recompute_queue`, is
+     * enqueued BEFORE the batch is attempted, and `pendingRecomputes` returns
+     * everything owed regardless of which accounts today's file mentioned.
+     * Re-reading a message does not advance it by one row.
+     *
+     * Conflating them made the failure self-reinforcing rather than transient,
+     * and it took the morning ingest down for two days:
+     *
+     *   one slow run spends its recompute budget on imports
+     *     -> accounts deferred -> status `partial` -> watermark frozen
+     *     -> tomorrow re-reads today's mail as well -> slower still
+     *     -> more deferred -> ... -> past the 58s ceiling, killed mid-run,
+     *        no run row written at all, and the watermark can now never move.
+     *
+     * Observed exactly so: frozen at 2026-09-02T23:00:38, runs climbing
+     * 24.8s -> 51.6s -> 54.3s, then two days of silence. A ratchet with no
+     * release, from a condition that was only ever meant to protect unread mail.
      */
     const unsettled = fresh.filter(
       (a) =>
@@ -388,8 +433,12 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
         ),
     ).length;
 
+    // Deliberately NOT `status === "ok"`: that would put the recompute back in
+    // charge of the mail window. Only the mail decides the mail.
+    const mailFullyConsumed = failed === 0 && unsettled === 0;
+
     const watermark =
-      status === "ok" && unsettled === 0 && mail.attachments.length > 0
+      mailFullyConsumed && mail.attachments.length > 0
         ? new Date(mail.attachments[mail.attachments.length - 1].receivedAt)
         : since;
 
