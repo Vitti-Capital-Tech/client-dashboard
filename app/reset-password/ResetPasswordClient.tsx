@@ -47,8 +47,6 @@ export function ResetPasswordClient({ initialEmail }: { initialEmail: string }) 
   const [confirmation, setConfirmation] = useState("");
 
   const [error, setError] = useState<string | null>(null);
-  /** Staff have no password to reset — the link to where they do sign in. */
-  const [wrongDoor, setWrongDoor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
@@ -61,13 +59,11 @@ export function ResetPasswordClient({ initialEmail }: { initialEmail: string }) 
   const send = async (address: string) => {
     setBusy(true);
     setError(null);
-    setWrongDoor(null);
     const result = await requestPasswordResetCode(address);
     setBusy(false);
 
     if (!result.ok) {
       setError(result.error);
-      setWrongDoor(result.wrongDoor ?? null);
       if (result.retryAfter) setCooldown(result.retryAfter);
       return false;
     }
@@ -145,17 +141,6 @@ export function ResetPasswordClient({ initialEmail }: { initialEmail: string }) 
           {error && (
             <FormError id="reset-error">
               {error}
-              {wrongDoor && (
-                <>
-                  {" "}
-                  <Link
-                    href={wrongDoor}
-                    className="underline underline-offset-2 font-semibold"
-                  >
-                    Go to the staff sign-in →
-                  </Link>
-                </>
-              )}
             </FormError>
           )}
 
@@ -218,17 +203,6 @@ export function ResetPasswordClient({ initialEmail }: { initialEmail: string }) 
           {error && (
             <FormError id="reset-error">
               {error}
-              {wrongDoor && (
-                <>
-                  {" "}
-                  <Link
-                    href={wrongDoor}
-                    className="underline underline-offset-2 font-semibold"
-                  >
-                    Go to the staff sign-in →
-                  </Link>
-                </>
-              )}
             </FormError>
           )}
 

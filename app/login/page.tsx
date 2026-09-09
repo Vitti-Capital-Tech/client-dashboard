@@ -26,25 +26,31 @@ import { LeavingOverlay } from "@/app/components/LeavingOverlay";
 import { SIGN_IN_TIPS } from "@/lib/ui/leaving";
 
 /**
- * Client sign-in. Staff have their own page at /staff/login.
+ * Sign in. One page, everybody.
  *
- * ── The split is about the page, not the permission ─────────────────────────
- * An older version took a `?role=` and dressed itself as either console, which
- * was rightly removed: it asked people to categorise themselves before proving
- * anything, and the role never came from the page. That is still true — the role
- * is stamped on `auth.users` from the email domain and enforced by RLS, so
- * nothing here decides what anyone can see, and a client loading /staff/login
- * gains nothing at all.
+ * ── Why there is only one ───────────────────────────────────────────────────
+ * There have been three arrangements here. First a `?role=` that dressed this
+ * page as either console — removed because it asked people to categorise
+ * themselves before proving anything. Then two pages, /login and /staff/login,
+ * each refusing the addresses it was not for and offering a link to the other.
+ * Now one again.
  *
- * What justifies two pages now is that this one stopped being only a sign-in
- * form. It offers a password, a reset, and registration of a new client account
- * — none of which apply to staff, and one of which (`/signup`) refuses their
- * addresses outright. The choice was a client page carrying a paragraph of
- * exceptions, or staff getting the form that is actually theirs.
+ * The role has never come from the page and does not now:
+ * `role_from_email_domain` reads the domain, a trigger stamps
+ * `app_metadata.role`, RLS enforces it, and `land()` sends people wherever it
+ * says. A second page could only ever be cosmetic about that — what it was not
+ * cosmetic about was telling somebody they had knocked on the wrong door,
+ * which is a sentence no sign-in should ever have to say.
  *
- * So each page refuses the addresses it is not for (`audience`, in
- * ./actions/session.ts) and offers a link to the other, instead of silently
- * mailing a code and landing somebody somewhere the page never described.
+ * What the split was protecting is still protected, in the actions where rules
+ * belong: staff are provisioned on their first code request, and both the
+ * password and the reset flow refuse Vitti addresses outright. A staff member
+ * who tries a password here is told to use the code — which is on this page,
+ * so there is nowhere to send them.
+ *
+ * The cost, stated plainly: staff see a password field and a "create an
+ * account" link that are not for them. That is a smaller cost than a client
+ * being turned away at a door they had no way of knowing was the wrong one.
  *
  * ── Password or code, never both ────────────────────────────────────────────
  * They are alternatives, not steps: see `requestLoginCode` for why a code on top
@@ -66,8 +72,6 @@ export default function LoginPage() {
   const [digits, setDigits] = useState<string[]>(emptyCode);
 
   const [error, setError] = useState<string | null>(null);
-  /** Set when the address belongs at the staff console — the link to offer. */
-  const [wrongDoor, setWrongDoor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   /** Set once a session exists and the portal is being navigated to. */
@@ -113,7 +117,6 @@ export default function LoginPage() {
     setMode(next);
     setSent(false);
     setError(null);
-    setWrongDoor(null);
     setDigits(emptyCode());
     verifying.current = false;
   };
@@ -124,19 +127,14 @@ export default function LoginPage() {
     if (busy) return;
     setBusy(true);
     setError(null);
-    setWrongDoor(null);
 
     const result = await signInWithPassword(email, password);
     if (!result.ok) {
       setBusy(false);
       setError(result.error);
       setPassword("");
-      // A staff address is the one password failure with somewhere to send them.
-      // Matched on the action's own refusal rather than re-testing the domain
-      // here, so there stays one copy of the rule.
-      if (result.error.startsWith("Vitti Capital staff")) {
-        setWrongDoor("/staff/login");
-      }
+      // A staff address lands here too, and the message tells it to use the code
+      // — which is on this same page, so there is nowhere to send anybody.
       return;
     }
     land(result.role);
@@ -146,15 +144,13 @@ export default function LoginPage() {
   const sendCode = async (address: string) => {
     setBusy(true);
     setError(null);
-    setWrongDoor(null);
     // A new code is a new attempt — including a resend after one was spent.
     verifying.current = false;
-    const result = await requestLoginCode(address, "client");
+    const result = await requestLoginCode(address);
     setBusy(false);
 
     if (!result.ok) {
       setError(result.error);
-      setWrongDoor(result.wrongDoor ?? null);
       if (result.retryAfter) setCooldown(result.retryAfter);
       return false;
     }
@@ -198,19 +194,7 @@ export default function LoginPage() {
 
   /** One error block for all three views, so the "wrong door" link cannot end up
    *  on some of them and not others. */
-  const errorBlock = error && (
-    <FormError id="login-error">
-      {error}
-      {wrongDoor && (
-        <>
-          {" "}
-          <Link href={wrongDoor} className="underline underline-offset-2 font-semibold">
-            Go to the staff sign-in →
-          </Link>
-        </>
-      )}
-    </FormError>
-  );
+  const errorBlock = error && <FormError id="login-error">{error}</FormError>;
 
   // The form is replaced rather than covered: it has done its job, and nothing
   // underneath should be tabbable while the browser is on its way to the portal.
@@ -318,7 +302,6 @@ export default function LoginPage() {
             </Link>
           </p>
 
-          <StaffDoor />
         </form>
       ) : !sent ? (
         <form onSubmit={handleEmailSubmit} className="space-y-5" noValidate>
@@ -381,7 +364,6 @@ export default function LoginPage() {
             </Link>
           </p>
 
-          <StaffDoor />
         </form>
       ) : (
         <div className="space-y-5">
@@ -450,27 +432,6 @@ export default function LoginPage() {
   );
 }
 
-/**
- * The way through to the desk console.
- *
- * Deliberately quiet — a small line at the foot rather than a second button.
- * Staff sign in a few times a week and know where they are going; clients are
- * the audience this page is for, and a prominent "Staff" control on it is an
- * invitation to click the wrong one. Anyone who does land there is refused by
- * address and sent straight back.
- */
-function StaffDoor() {
-  return (
-    <p className="text-xs text-mut text-center">
-      <Link
-        href="/staff/login"
-        className="font-semibold underline underline-offset-2 hover:text-ink transition-colors"
-      >
-        Vitti Capital staff sign-in →
-      </Link>
-    </p>
-  );
-}
 
 /** "or" between the two credentials, so neither reads as the submit button. */
 function Divider() {

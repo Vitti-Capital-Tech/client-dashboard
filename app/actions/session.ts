@@ -17,26 +17,9 @@ export type SignInResult =
   | { ok: true; role: Role }
   | { ok: false; error: string };
 
-/**
- * Which sign-in page is asking.
- *
- * Clients and staff have separate doors — /login and /staff/login — and this is
- * what makes that separation real rather than cosmetic. It is NOT a security
- * boundary and must never be read as one: the role is stamped on `auth.users`
- * from the email domain and enforced by RLS, so a client who finds the staff URL
- * gains nothing by loading it. What the audience buys is that each page refuses
- * the addresses it is not for, instead of quietly sending someone a code and
- * landing them somewhere the page did not describe.
- */
-export type Audience = "client" | "staff";
-
 export type CodeRequestResult =
   | { ok: true }
-  // `wrongDoor` is set when the address is real but belongs at the other page,
-  // so the form can offer the link rather than leaving them to find it. It says
-  // nothing a caller did not already know: the rule is the email domain, which
-  // they just typed.
-  | { ok: false; error: string; retryAfter?: number; wrongDoor?: string };
+  | { ok: false; error: string; retryAfter?: number };
 
 /**
  * Email a one-time code. One of the two ways in; `signInWithPassword` is the
@@ -74,36 +57,25 @@ export type CodeRequestResult =
  */
 export async function requestLoginCode(
   email: string,
-  audience: Audience = "client",
 ): Promise<CodeRequestResult> {
   const address = email.trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
     return { ok: false, error: "Enter a valid email address." };
   }
 
-  // ── Which door this address belongs at ──────────────────────────────────
-  // `null` means the rule could not be read. The gate is then SKIPPED rather
-  // than failing closed: a hiccup reading one function should not take sign-in
-  // down for everybody, and the wrong-door case degrades to what the page did
-  // before there were two doors — the code still works, and the role decides
-  // where they land. Provisioning is skipped in that case, as it always was.
+  // ── One door ────────────────────────────────────────────────────────────
+  // This used to refuse a staff address here and point it at /staff/login, and
+  // refuse a client address there and point it back. Two pages, two refusals,
+  // and a person told they had guessed wrong about a category the database was
+  // going to decide for them anyway: `role_from_email_domain` reads the domain,
+  // the trigger stamps `app_metadata.role`, and `land()` sends them wherever
+  // that says. Nobody has to know which of them they are before they sign in.
+  //
+  // The lookup stays, because a staff address still has to be PROVISIONED on
+  // its first code request. `null` means the rule could not be read, in which
+  // case provisioning is skipped and the code is still sent — an existing staff
+  // account signs in fine, and a brand new one retries.
   const staff = await isStaffAddress(address);
-
-  if (staff === true && audience === "client") {
-    return {
-      ok: false,
-      error:
-        "That is a Vitti Capital address. Staff sign in through the desk console.",
-      wrongDoor: "/staff/login",
-    };
-  }
-  if (staff === false && audience === "staff") {
-    return {
-      ok: false,
-      error: "This console is for Vitti Capital staff. Clients sign in here.",
-      wrongDoor: "/login",
-    };
-  }
 
   // A staff address that has never signed in is created here, so the code below
   // has somebody to send to. Clients are never provisioned this way: they arrive
@@ -328,7 +300,7 @@ export async function signInWithPassword(
     return {
       ok: false,
       error:
-        "Vitti Capital staff sign in with a one-time code, not a password. Use the desk console.",
+        "Vitti Capital staff sign in with a one-time code, not a password.",
     };
   }
 
@@ -359,12 +331,11 @@ export async function requestPasswordResetCode(
     return {
       ok: false,
       error:
-        "Vitti Capital staff do not have passwords. Sign in with a one-time code.",
-      wrongDoor: "/staff/login",
+        "Vitti Capital staff do not have passwords. Sign in with a one-time code instead.",
     };
   }
 
-  return requestLoginCode(address, "client");
+  return requestLoginCode(address);
 }
 
 /**
