@@ -423,9 +423,6 @@ export default function LoginPage() {
             </button>
           </div>
 
-          <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
-            Every sign-in is recorded in the audit log with time, user and device.
-          </p>
         </div>
       )}
     </AuthShell>

@@ -93,21 +93,29 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * Write the theme out when it CHANGES, and not when it is merely read.
+   * Apply on every pass; write only when somebody chose something.
    *
-   * The first run is skipped, because on that pass `theme` is whatever
-   * `readSavedTheme` found — storing it again would write the file back over
-   * itself, and for somebody who has never chosen anything it would save the
-   * current default as if they had picked it, quietly pinning them to it if the
-   * default ever moves. The document is already painted by `ThemeInitScript` by
-   * then, so there is nothing to apply either.
+   * These were one branch and should never have been: applying is idempotent
+   * and cheap, while writing is a claim that a choice was made.
+   *
+   * Skipping the apply on the first pass was a real bug and it shipped. The
+   * pre-hydration script sets 27 of the 29 variables this generates —
+   * `--theme-border-subtle` and `--theme-accent-hover` are not in it — and this
+   * effect running on mount was quietly covering that gap. Without it,
+   * `--color-line-2` fell through to its light-theme fallback (#dedacf, opaque
+   * beige) and drew hard cream lines between every table row on a dark page.
+   *
+   * The write still waits for a change. Writing on load would save the current
+   * default as though it had been picked, which pins somebody to it if the
+   * default ever moves, and undoes a reset on the next navigation.
    */
   useEffect(() => {
+    applyThemeToDom(theme);
+
     if (!chosen.current) {
       chosen.current = true;
       return;
     }
-    applyThemeToDom(theme);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
     } catch {
@@ -221,7 +229,15 @@ export function ThemeInitScript() {
         root.style.setProperty('--theme-text', theme.textColor);
         root.style.setProperty('--theme-text-muted', rgba(theme.textColor, theme.mutedTextOpacity || 0.6));
         root.style.setProperty('--theme-border', rgba(theme.textColor, theme.borderOpacity || 0.12));
+        /*
+          These two are easy to forget and expensive to miss: this script and
+          generateThemeCssVariables have to emit the SAME set, or whatever is
+          absent falls through to a light-theme fallback in globals.css. That is
+          what put opaque cream rules between the rows of every dark table.
+        */
+        root.style.setProperty('--theme-border-subtle', rgba(theme.textColor, (theme.borderOpacity || 0.12) * 0.7));
         root.style.setProperty('--theme-accent', theme.accentColor);
+        root.style.setProperty('--theme-accent-hover', adjust(theme.accentColor, isDark ? 0.12 : -0.12));
         root.style.setProperty('--theme-accent-soft', rgba(theme.accentColor, theme.accentGlowOpacity || 0.15));
         
         var sidebarBg = isDark ? adjust(theme.bgColor, -0.04) : adjust(theme.textColor, -0.05);

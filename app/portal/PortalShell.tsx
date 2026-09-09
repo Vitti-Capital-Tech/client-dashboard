@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useTransition } from "react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Home,
@@ -35,8 +35,35 @@ import { signOut, setActiveAccount } from "@/app/actions/session";
 import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 import { Wordmark } from "@/app/components/Wordmark";
 import { isComingSoon } from "@/lib/nav/coming-soon";
+import { LeavingOverlay } from "@/app/components/LeavingOverlay";
+import { LEAVING_MS, SIGN_OUT_TIPS } from "@/lib/ui/leaving";
 
 type AccountOption = { id: string; label: string; accountType: string };
+
+/**
+ * Says the click landed, while the next page is on its way.
+ *
+ * `useLinkStatus` reads the pending state of the `<Link>` it sits inside, which
+ * is why this is a child component rather than a hook call up in the nav: the
+ * hook has no way to be told which link it is about.
+ *
+ * `loading.tsx` already swaps a skeleton into the content area, and that is the
+ * better signal — but only once the router has the fallback. Before that (the
+ * first visit to a route in dev, a tab whose prefetch has not finished, a phone
+ * on a slow connection) there is a gap where a click has visibly done nothing,
+ * and "did that register?" is answered by clicking again. This fills the gap in
+ * the one place the eye is already looking: the row that was clicked.
+ */
+function NavPending() {
+  const { pending } = useLinkStatus();
+  if (!pending) return null;
+  return (
+    <span
+      aria-hidden
+      className="ml-auto w-3.5 h-3.5 flex-none rounded-full border-[1.5px] border-current border-r-transparent animate-spin opacity-70 motion-reduce:animate-none"
+    />
+  );
+}
 
 /**
  * The nav icon's answer to being pointed at.
@@ -113,6 +140,8 @@ export function PortalShell({
   // stay disabled while the server action runs and the redirect resolves.
   const [isSignOutOpen, setIsSignOutOpen] = useState(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
+  /** The send-off, up from the moment it is confirmed until /login. */
+  const [isLeaving, setIsLeaving] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   // The profile menu under the avatar.
@@ -165,12 +194,25 @@ export function PortalShell({
   const handleSignOut = async () => {
     if (isSigningOut) return;
     setIsSigningOut(true);
+    setIsLeaving(true);
     // Sign-out is a client-side `router.push`, so module-scope stores are NOT torn
     // down the way a full document load would tear them down. The P&L Calculator
     // keeps parsed client trade data in one, so it has to be cleared explicitly or
     // the next person to sign in on this browser inherits it.
     usePnlCalculatorStore.getState().reset();
-    await signOut();
+
+    /**
+     * Held for the length of the panel, and no longer.
+     *
+     * `Promise.all` rather than a timer after the fact: the sign-out is real
+     * work and can outlast the animation, in which case the wait is the
+     * server's and not ours. This only stops the send-off being cut off
+     * mid-draw when the round trip returns quickly, which is most of the time.
+     */
+    await Promise.all([
+      signOut(),
+      new Promise((r) => setTimeout(r, LEAVING_MS.signOut)),
+    ]);
     // `/login` rather than `/`, which is now only a redirect to it. Left in the
     // signing-out state on purpose: the navigation is the next thing that
     // happens, and re-enabling the button first only invites a second click.
@@ -294,6 +336,7 @@ export function PortalShell({
             <>
               <it.icon className={`w-4.5 h-4.5 stroke-[1.7] flex-none ${ICON_MOTION}`} />
               <span>{it.label}</span>
+              <NavPending />
               {it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>}
               {badgeVal !== null && (
                 <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
@@ -530,9 +573,11 @@ export function PortalShell({
         const isActive = pathname === it.path;
         const badgeVal = getBadgeValue(it.badge);
         return (
-          <button
+          // A Link and not a button: `router.push` cannot prefetch, so every tap
+          // on a phone waited for a round trip the sidebar had already made.
+          <Link
             key={it.k}
-            onClick={() => router.push(it.path)}
+            href={it.path}
             className={`group flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative cursor-pointer ${
               isActive ? "text-green-d" : "text-mut hover:text-ink"
             }`}
@@ -544,7 +589,7 @@ export function PortalShell({
                 {badgeVal}
               </span>
             )}
-          </button>
+          </Link>
         );
       })}
 
@@ -640,12 +685,10 @@ export function PortalShell({
               const isActive = pathname === it.path;
               const badgeVal = getBadgeValue(it.badge);
               return (
-                <button
+                <Link
                   key={it.k}
-                  onClick={() => {
-                    setIsMoreOpen(false);
-                    router.push(it.path);
-                  }}
+                  href={it.path}
+                  onClick={() => setIsMoreOpen(false)}
                   className={`group flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors hover:bg-paper-2 ${
                     isActive ? "text-green-d bg-paper-2" : "text-ink"
                   }`}
@@ -657,7 +700,7 @@ export function PortalShell({
                       {badgeVal}
                     </span>
                   )}
-                </button>
+                </Link>
               );
             })}
           </div>
@@ -749,6 +792,35 @@ export function PortalShell({
       </div>
     </div>
   );
+
+  // The whole shell goes, not a panel over it: what is underneath belongs to a
+  // session being torn down as this renders.
+  if (isLeaving) {
+    return (
+      <LeavingOverlay
+        tone="muted"
+        title="Signing you out"
+        subtitle="Ending this session…"
+        tips={SIGN_OUT_TIPS}
+        durationMs={LEAVING_MS.signOut}
+        icon={
+          <svg
+            viewBox="0 0 24 24"
+            className="h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {/* The same door as the way in, walked the other way. */}
+            <path pathLength="1" d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h8" />
+            <path pathLength="1" d="M18 12H10M14 8l4 4-4 4" />
+          </svg>
+        }
+      />
+    );
+  }
 
   return (
     <div className="app-shell flex min-h-screen bg-paper font-body select-none">
