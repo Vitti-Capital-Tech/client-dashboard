@@ -135,7 +135,7 @@ function toAnnouncement(raw: ApiItem): AsxAnnouncement | null {
  * with day-level figures alongside them.
  *
  * Returns `[]` rather than throwing when the source is unreachable or slow.
- * This renders inside Insights alongside sector momentum and the research
+ * This renders inside Market alongside sector momentum and the research
  * library; a sibling deployment being down should cost the page one section,
  * not the whole route.
  *

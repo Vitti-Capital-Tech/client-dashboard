@@ -18,7 +18,6 @@ const COMING_SOON: readonly string[] = [
   "/portal/client/invest",
   "/portal/client/askvitti",
   "/portal/client/markets",
-  "/portal/client/watchlist",
 ];
 
 /** Whether this route is still being built, and so must not be navigated to. */

@@ -420,7 +420,7 @@ Every route is a thin **Server Component** `page.tsx` that resolves the active c
 | `client/watchlist/` | `WatchlistClient.tsx` | `addCustomAlert` |
 | `client/alerts/` | `AlertsClient.tsx` | `ackAlert`/`addCustomAlert` |
 | `client/askvitti/` | `AskVittiClient.tsx` | contextual AI chat over DAL shapes |
-| `client/insights/` | *(none — pure display)* | single Server Component |
+| `client/market/` | *(none — pure display)* | single Server Component |
 | `staff/` (overview) | `StaffOverviewClient.tsx` | book totals, register, `setViewClient` |
 | `staff/clients/` | `ClientsTable.tsx` | row navigation |
 | `staff/clients/[id]/` | `ClientDetailClient.tsx` | per-client desk, expiry rail |
