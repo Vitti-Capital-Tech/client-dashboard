@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Star } from "lucide-react";
 import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
+import { useToast } from "@/app/components/Toast";
 
 /**
  * Follow a company from wherever it is being read about.
@@ -33,6 +34,7 @@ export function WatchButton({
   const [watching, setWatching] = useState(initiallyWatching);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, startTransition] = useTransition();
+  const toast = useToast();
 
   const toggle = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -50,7 +52,16 @@ export function WatchButton({
       if (!result.ok) {
         setWatching(!next);
         setFailed(result.error);
+        toast({ message: `Could not save: ${result.error}`, tone: "error" });
+        return;
       }
+      // The star changing is the feedback for the click; the toast is what says
+      // where it went, since the watchlist is a page away from here.
+      toast({
+        message: next
+          ? `${code} added to your watchlist.`
+          : `${code} removed from your watchlist.`,
+      });
     });
   };
 

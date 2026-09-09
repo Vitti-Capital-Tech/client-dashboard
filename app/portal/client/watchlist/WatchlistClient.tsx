@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useTransition } from "react";
 import { X } from "lucide-react";
 import type {
   WatchRow,
@@ -8,6 +8,8 @@ import type {
   RecoRow,
 } from "@/lib/data/queries";
 import { addCustomAlert } from "@/app/actions/alerts";
+import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
+import { useToast } from "@/app/components/Toast";
 
 // Local view shape for a watchlist row. Add-security items are never persisted,
 // so they carry only the fields the table renders. Note: the DAL has no
@@ -45,6 +47,8 @@ export function WatchlistClient({
     })),
   );
 
+  const toast = useToast();
+  const [, startTransition] = useTransition();
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAlertModal, setShowAlertModal] = useState<number | null>(null); // Index of watch item
 
@@ -67,41 +71,104 @@ export function WatchlistClient({
     ? livePlacements.find(p => p.code === matchedWatchItem.code)
     : null;
 
+  /**
+   * Adding, and this time it is written down.
+   *
+   * The list was seeded from the database and everything after that was React
+   * state, so an add survived a reload only because the seed came back and an
+   * add of something NOT in the seed quietly disappeared. `addToWatchlist` is
+   * the write; the local update stays because it is what makes the row appear
+   * at once.
+   */
   const handleAddSecurity = (e: React.FormEvent) => {
     e.preventDefault();
     const code = newCode.trim().toUpperCase();
     if (!code) return;
 
-    if (watchlist.some(w => w.code === code)) {
-      alert(`${code} is already on your watchlist.`);
+    if (watchlist.some((w) => w.code === code)) {
+      toast({ message: `${code} is already on your watchlist.`, tone: "info" });
       return;
     }
 
-    const reco = recos.find(r => r.code === code);
+    const reco = recos.find((r) => r.code === code);
     const item: WatchItem = {
       code,
       name: newName.trim() || code,
-      last: reco && reco.target ? reco.target * 0.9 : 1.00,
+      last: reco && reco.target ? reco.target * 0.9 : 1.0,
       alert: null,
       dir: null,
-      unlisted: false
+      unlisted: false,
     };
 
     setWatchlist([item, ...watchlist]);
     setShowAddModal(false);
     setNewCode("");
     setNewName("");
-    alert(`${code} added to watchlist.`);
+
+    startTransition(async () => {
+      const result = await addToWatchlist(code, item.name);
+      if (!result.ok) {
+        setWatchlist((list) => list.filter((w) => w.code !== code));
+        toast({ message: `Could not add ${code}: ${result.error}`, tone: "error" });
+        return;
+      }
+      toast({ message: `${code} added to your watchlist.` });
+    });
   };
 
+  /**
+   * Removing, with an Undo rather than an "are you sure?".
+   *
+   * The dialog it replaces interrupted everybody — including the many who meant
+   * it — to protect the few who did not, over an action that costs one click to
+   * reverse. Now it happens at once and the toast offers it back.
+   */
   const handleRemoveSecurity = (idx: number) => {
     const item = watchlist[idx];
-    if (confirm(`Remove ${item.code} from watchlist?`)) {
-      const updated = [...watchlist];
-      updated.splice(idx, 1);
-      setWatchlist(updated);
-      alert(`${item.code} removed.`);
+    const code = item.code;
+    const label = code ?? item.name;
+    setWatchlist((list) => list.filter((_, i) => i !== idx));
+
+    const restore = () =>
+      setWatchlist((list) =>
+        list.some((w) => w.code === code && w.name === item.name) ? list : [item, ...list],
+      );
+
+    // An unlisted row has no security code, and the table keys on one. Nothing
+    // to write, so nothing is written — and the Undo is still offered, because
+    // from the reader's side the row went either way.
+    if (!code) {
+      toast({
+        message: `${label} removed from your watchlist.`,
+        action: { label: "Undo", onClick: restore },
+      });
+      return;
     }
+
+    startTransition(async () => {
+      const result = await removeFromWatchlist(code);
+      if (!result.ok) {
+        restore();
+        toast({ message: `Could not remove ${label}: ${result.error}`, tone: "error" });
+        return;
+      }
+      toast({
+        message: `${label} removed from your watchlist.`,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            restore();
+            startTransition(async () => {
+              const back = await addToWatchlist(code, item.name);
+              if (!back.ok) {
+                setWatchlist((list) => list.filter((w) => w.code !== code));
+                toast({ message: `Could not restore ${label}.`, tone: "error" });
+              }
+            });
+          },
+        },
+      });
+    });
   };
 
   const handleOpenAlertSetup = (idx: number) => {

@@ -8,6 +8,7 @@ import {
   plusJakartaSans,
 } from "@/lib/fonts";
 import { ThemeProvider, ThemeInitScript } from "@/app/components/ThemeProvider";
+import { ToastProvider } from "@/app/components/Toast";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -38,7 +39,9 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col font-body bg-paper text-ink">
         <ThemeProvider>
-          {children}
+          {/* Above the theme, so a toast is themed; around everything, so any
+              page can raise one without threading a prop to it. */}
+          <ToastProvider>{children}</ToastProvider>
         </ThemeProvider>
       </body>
     </html>
