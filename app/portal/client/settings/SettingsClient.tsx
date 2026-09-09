@@ -71,11 +71,28 @@ export function SettingsClient({
         </Banner>
       )}
 
-      <div className="space-y-5 max-w-160">
-        <Details name={name} email={email} accounts={accounts} />
-        {hasPassword ? <ChangePassword /> : <SetFirstPassword email={email} />}
-        <ChangeEmail current={email} />
-        <Sessions />
+      {/*
+        Two columns from `lg`, one below it.
+
+        It was a single 640px column, which on a desk monitor left two thirds of
+        the screen empty and put "Devices" three scrolls below "Your details" —
+        a page that reads as long when it holds four short cards.
+
+        The pairing is not arbitrary. Left is who you are and how you get in:
+        the account, then the password. Right is what changes and what ends: the
+        login address, then every session. `items-start` so each card is its own
+        height — stretching them to match would leave whitespace inside the
+        shorter one, which is the same problem moved indoors.
+      */}
+      <div className="grid lg:grid-cols-2 gap-5 items-start max-w-5xl">
+        <div className="space-y-5">
+          <Details name={name} email={email} accounts={accounts} />
+          {hasPassword ? <ChangePassword /> : <SetFirstPassword email={email} />}
+        </div>
+        <div className="space-y-5">
+          <ChangeEmail current={email} />
+          <Sessions />
+        </div>
       </div>
 
       <Appearance name={name} />

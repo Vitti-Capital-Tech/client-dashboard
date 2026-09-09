@@ -202,17 +202,21 @@ export function PortalShell({
     usePnlCalculatorStore.getState().reset();
 
     /**
-     * Held for the length of the panel, and no longer.
+     * The panel runs FIRST, and the session is torn down after it.
      *
-     * `Promise.all` rather than a timer after the fact: the sign-out is real
-     * work and can outlast the animation, in which case the wait is the
-     * server's and not ours. This only stops the send-off being cut off
-     * mid-draw when the round trip returns quickly, which is most of the time.
+     * Racing the two — `Promise.all` on the action and a timer — looked
+     * tidier and did not work: `signOut` is a server action, and finishing one
+     * refreshes the current route. The portal layout then finds no session and
+     * redirects to /login, so the browser left while the send-off was still on
+     * its second beat. It read as a flash, which is worse than not having one.
+     *
+     * Waiting first costs three seconds of a session whose owner is watching a
+     * screen that says it is ending, and during which the shell has already
+     * been replaced by that screen. Nothing can be done with those seconds,
+     * which is what makes them affordable.
      */
-    await Promise.all([
-      signOut(),
-      new Promise((r) => setTimeout(r, LEAVING_MS.signOut)),
-    ]);
+    await new Promise((r) => setTimeout(r, LEAVING_MS.signOut));
+    await signOut();
     // `/login` rather than `/`, which is now only a redirect to it. Left in the
     // signing-out state on purpose: the navigation is the next thing that
     // happens, and re-enabling the button first only invites a second click.
