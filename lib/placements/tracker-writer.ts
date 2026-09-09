@@ -10,6 +10,7 @@ import {
   nextOverviewSlot,
   nextSheetName,
   overviewRowAddress,
+  overviewRowColumns,
   overviewRowFormulas,
   referencedSheetName,
   tabCellWrites,
@@ -774,7 +775,7 @@ export async function writeDealToTracker(
     const written = await graph(
       `${item}/worksheets('${encodeURIComponent(
         target.overviewSheet,
-      )}')/range(address='B${slot.row}:T${slot.row}')`,
+      )}')/range(address='${overviewRowColumns(slot.row)}')`,
       {
         method: "PATCH",
         body: { formulas: [overviewRowFormulas(sheet, deal.ticker, slot.row, slot.counter)] },

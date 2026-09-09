@@ -787,7 +787,7 @@ test("tracker: a new deal lands on the first empty row, continuing the counter",
   assert.equal(res.overviewRow, 6);
   assert.equal(res.counter, 58);
 
-  const row = calls.find((c) => c.method === "PATCH" && c.path.includes("B6:T6"));
+  const row = calls.find((c) => c.method === "PATCH" && c.path.includes("B6:V6"));
   assert.ok(row, "the row is written as one range");
   const formulas = (row!.body as { formulas: string[][] }).formulas[0];
   assert.equal(formulas[0], 58, "counter");
@@ -980,9 +980,18 @@ test("tracker: duplicate detection needs ticker AND date", () => {
   assert.equal(alreadyInOverview(rows, { ticker: "PGF" }), true);
 });
 
-test("tracker: the Overview row is 19 cells, B through T", () => {
+test("tracker: the Overview row is 21 cells, B through V", () => {
   const row = overviewRowFormulas("PGF", "PGF", 61, 58);
-  assert.equal(row.length, 19, "B..T inclusive — matches the header on row 3");
+  assert.equal(row.length, 21, "B..V inclusive — matches the header on row 3");
+
+  // Add-Ons is a link like every other column: the grant lives on the tab, and
+  // the P&L engine values unlisted placement options out of this cell, so a
+  // blank here reports a client's grant as absent rather than as unknown.
+  assert.equal(row[20], "='PGF'!B2", "V reads the tab's Add-Ons cell");
+
+  // Error Check is the row's own arithmetic against itself, so it carries the
+  // row number the way N and T do. Left empty it reads as an unchecked row.
+  assert.equal(row[19], "=T61=M61", "U checks All Fees against Total Fee");
 });
 
 test("tracker: the Counter cell is a link to the deal's own tab", () => {
@@ -1057,6 +1066,19 @@ test("tracker: a used range names the columns whose widths have to be replayed",
 test("tracker: a price of zero is not written as an issue price", () => {
   const writes = tabCellWrites({ ticker: "ABC", price: 0 });
   assert.equal(writes.some((w) => w.address === "F3"), false);
+});
+
+test("tracker: the DVP date reads the way the desk writes dates", () => {
+  const writes = tabCellWrites({ ticker: "ABC", issueDate: "2026-09-08", settleDate: "2026-09-11" });
+
+  // `9 Sept 2026`, the convention the tab's own BOOKING DAY cell already shows —
+  // not the slash-separated form Template's L3 carries.
+  const dvp = writes.find((w) => w.address === "L3");
+  assert.equal(dvp?.numberFormat, "d mmm yyyy");
+
+  // Still the serial underneath, so `=SHEET!L3` on the Overview and every date
+  // comparison against the cell are unaffected by how it renders.
+  assert.equal(dvp?.value, excelSerialDate("2026-09-11"));
 });
 
 /* ---------------------------------------------------------------- */

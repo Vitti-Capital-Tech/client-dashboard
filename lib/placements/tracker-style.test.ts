@@ -2,7 +2,10 @@ import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CLIENT_INPUT_COLS,
+  CLIENT_INPUT_LAST_ROW,
   addressOf,
+  clampClientInputYellow,
   clearTemplatePlanCache,
   columnsOf,
   dressSheetLikeTemplate,
@@ -310,4 +313,118 @@ test("style: nothing about shading can fail a deal", async () => {
 
   const notes = await dressSheetLikeTemplate(graph, ITEM, "Template", "PGF", "A1:P30");
   assert.match(notes.join(" "), /connection reset/);
+});
+
+/**
+ * Yellow on a deal tab means "read this cell", and Template shades the client
+ * inputs down to row 21 — eight rows further than any placement fills. These
+ * cover the trim, and cover it in the plan rather than in a corrective write,
+ * because `$batch` does not promise the order the writes go out in.
+ */
+
+test("style: Template's client-input yellow is trimmed to the rows the desk uses", () => {
+  const trimmed = clampClientInputYellow([
+    { rect: { r1: 5, c1: 6, r2: 21, c2: 7 }, value: "#FFFF00" },
+  ]);
+
+  assert.deepEqual(trimmed, [{ rect: { r1: 5, c1: 6, r2: 14, c2: 7 }, value: "#FFFF00" }]);
+
+  // Rows 5 and 6 survive: the headings and the Total are what the columns are
+  // read by, and they are not inputs to be trimmed alongside them.
+  assert.equal(trimmed[0].rect.r1, 5);
+});
+
+test("style: trimming F and G leaves every other column its full height", () => {
+  // The scan merges by colour, so a yellow block is not guaranteed to stop at
+  // column F — the banner row's fill runs A to Q. Only the F-to-G slice is cut.
+  const trimmed = clampClientInputYellow([
+    { rect: { r1: 5, c1: 1, r2: 21, c2: 9 }, value: "#FFFF00" },
+  ]);
+
+  assert.deepEqual(trimmed, [
+    { rect: { r1: 5, c1: 1, r2: 21, c2: 5 }, value: "#FFFF00" }, // A:E, untouched
+    { rect: { r1: 5, c1: 8, r2: 21, c2: 9 }, value: "#FFFF00" }, // H:I, untouched
+    { rect: { r1: 5, c1: 6, r2: 14, c2: 7 }, value: "#FFFF00" }, // F:G, clamped
+  ]);
+});
+
+test("style: yellow that starts below the cutoff is dropped, and other colours are not touched", () => {
+  const trimmed = clampClientInputYellow([
+    { rect: { r1: 17, c1: 6, r2: 21, c2: 7 }, value: "#ffff00" },
+    { rect: { r1: 5, c1: 6, r2: 21, c2: 7 }, value: "#000000" },
+    { rect: { r1: 1, c1: 1, r2: 1, c2: 17 }, value: "#FFFF00" },
+  ]);
+
+  // A region entirely past the cutoff loses its only surviving slice, so it
+  // contributes nothing rather than a zero-height rectangle. Lower case is
+  // still yellow; black is not, whatever rows it covers; row 1 is above the
+  // cutoff and never had anything to lose.
+  assert.deepEqual(trimmed, [
+    { rect: { r1: 5, c1: 6, r2: 21, c2: 7 }, value: "#000000" },
+    { rect: { r1: 1, c1: 1, r2: 1, c2: 17 }, value: "#FFFF00" },
+  ]);
+});
+
+test("style: no yellow is painted below the cutoff on a real replay", async () => {
+  const calls: { method: string; path: string; body?: unknown }[] = [];
+
+  // A Template shaded exactly like the desk's: F5:G21 yellow, the rest plain.
+  const graph: GraphCall = async (path, init = {}) => {
+    const method = init.method ?? "GET";
+    calls.push({ method, path, body: init.body });
+
+    if (path === "/$batch") {
+      const inner = (init.body as { requests: { id: string; method: string; url: string; body?: unknown }[] })
+        .requests;
+      const responses = [];
+      for (const r of inner) {
+        const answer = await graph(r.url, { method: r.method, body: r.body });
+        responses.push({ id: r.id, status: answer.status, body: answer.body });
+      }
+      return { ok: true, status: 200, body: { responses } };
+    }
+
+    if (method === "GET" && path.includes("/format/fill")) {
+      const rect = rectOf(/range\(address='([^']+)'\)/.exec(path)?.[1] ?? "");
+      if (!rect) return { ok: true, status: 200, body: { color: null } };
+      const inside = (r: number, c: number) => r >= 5 && r <= 21 && c >= 6 && c <= 7;
+      const all = inside(rect.r1, rect.c1) && inside(rect.r2, rect.c2);
+      const none =
+        rect.r2 < 5 || rect.r1 > 21 || rect.c2 < 6 || rect.c1 > 7;
+      // Uniform where the rectangle sits wholly in or wholly out; null on the
+      // straddle, which is the signal the scan splits on.
+      return {
+        ok: true,
+        status: 200,
+        body: { color: all ? "#FFFF00" : none ? "#FFFFFF" : null },
+      };
+    }
+    if (method === "GET" && path.includes("/format/font")) {
+      return { ok: true, status: 200, body: { name: "Calibri", size: 11, color: "#000000", bold: false, italic: false, underline: "None" } };
+    }
+    if (method === "GET" && path.includes("/format")) {
+      return { ok: true, status: 200, body: { columnWidth: 14.5 } };
+    }
+    return { ok: true, status: 200, body: {} };
+  };
+
+  await dressSheetLikeTemplate(graph, ITEM, "Template", "W2V", "A1:J21");
+
+  const yellowWrites = calls.filter(
+    (c) =>
+      c.method === "PATCH" &&
+      c.path.includes("/format/fill") &&
+      String((c.body as { color?: string }).color).toUpperCase() === "#FFFF00",
+  );
+
+  assert.ok(yellowWrites.length > 0, "the client inputs are still shaded");
+
+  for (const w of yellowWrites) {
+    const rect = rectOf(/range\(address='([^']+)'\)/.exec(w.path)?.[1] ?? "");
+    if (!rect || rect.c2 < CLIENT_INPUT_COLS.c1 || rect.c1 > CLIENT_INPUT_COLS.c2) continue;
+    assert.ok(
+      rect.r2 <= CLIENT_INPUT_LAST_ROW,
+      `yellow reaches row ${rect.r2} in F:G — the cutoff is ${CLIENT_INPUT_LAST_ROW}`,
+    );
+  }
 });

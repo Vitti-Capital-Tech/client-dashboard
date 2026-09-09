@@ -270,6 +270,17 @@ export function isBareTab(values: unknown[][]): boolean {
   );
 }
 
+/**
+ * How a date reads on a deal tab: `9 Sept 2026`.
+ *
+ * Excel renders `mmm` per the workbook's locale, which on this desk's en-AU
+ * books is the four-letter `Sept` for September and three letters for every
+ * other month — the same thing `BOOKING DAY` shows. It is a display format
+ * only; the cell still holds the serial `excelSerialDate` produced, so every
+ * date comparison and the Overview's `=SHEET!L3` are unaffected.
+ */
+export const DEAL_DATE_FORMAT = "d mmm yyyy";
+
 /** One cell to write on the newly created tab. */
 export type CellWrite = {
   address: string;
@@ -297,8 +308,12 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
     writes.push({ address: "F3", value: deal.price });
   }
 
+  // The desk's date convention on a deal tab is `9 Sept 2026`, not `09/09/26` —
+  // it is what `BOOKING DAY` (N3) already renders and what the printed tab is
+  // read against, so the DVP date is written to match rather than in the
+  // slash-separated form Template's L3 carries.
   const dvp = excelSerialDate(deal.settleDate);
-  if (dvp !== null) writes.push({ address: "L3", value: dvp, numberFormat: "dd/mm/yyyy" });
+  if (dvp !== null) writes.push({ address: "L3", value: dvp, numberFormat: DEAL_DATE_FORMAT });
 
   // B2 sits under the "Options" label and holds the attaching-options text, or
   // the word the desk uses when there are none.
@@ -322,6 +337,19 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
  * `F` — T2 Settlement — is deliberately left empty. Most rows have nothing in
  * it, and the few that do point at `L4`, a cell Template does not fill; a
  * formula there would render every new deal as settling on 0 January 1900.
+ *
+ * `U` — Error Check — and `V` — Add-Ons — are the two columns past `T`, and both
+ * were being left for the desk to add by hand.
+ *
+ * `U` is `=T=M`: All Fees against Total Fee, the row's own arithmetic check. It
+ * is self-referential like `N` and `T`, so it needs the row number too. Left
+ * empty it does not read as "no error", it reads as a row nobody checked.
+ *
+ * `V` holds the attaching options, and it is a link rather than a copy of what
+ * `tabCellWrites` put in `B2` — the desk edits the tab when a grant is restated,
+ * and a second copy here would go stale the moment they did. It matters more
+ * than its position suggests: the P&L engine values unlisted placement options
+ * out of THIS column, so a blank reports a client's grant as absent.
  */
 export function overviewRowFormulas(
   sheet: string,
@@ -350,12 +378,19 @@ export function overviewRowFormulas(
     `=${s}!L28`, // R — XX3 Fee
     `=${s}!L29`, // S — XX4 Fee
     `=O${row}+P${row}+Q${row}+R${row}+S${row}`, // T — All Fees
+    `=T${row}=M${row}`, // U — Error Check: All Fees against Total Fee
+    `=${s}!B2`, // V — Add-Ons, the attaching options as the tab records them
   ];
 }
 
-/** The range one Overview row occupies. B through T, matching the header. */
+/** The range one Overview row occupies. B through V, matching the header. */
 export function overviewRowAddress(sheetName: string, row: number): string {
-  return `${formulaSheetRef(sheetName)}!B${row}:T${row}`;
+  return `${formulaSheetRef(sheetName)}!B${row}:V${row}`;
+}
+
+/** The columns `overviewRowFormulas` fills, as a range on a given row. */
+export function overviewRowColumns(row: number): string {
+  return `B${row}:V${row}`;
 }
 
 /**

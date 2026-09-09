@@ -677,6 +677,67 @@ export async function readTemplatePlan(
 }
 
 /**
+ * The client allocation table's two input columns — F (Round Shares) and G
+ * (ACTUAL $) — and how far down them the yellow goes.
+ *
+ * Yellow on this tab means "this is the cell to read": the desk scans F and G
+ * for the allocations that were actually filled, and Template's block of
+ * fifteen shaded rows makes that a hunt through eight empty ones. A placement
+ * carries five to seven different client bids, so the block is sized to eight
+ * rows — enough headroom for a busy deal, small enough that the shading still
+ * points at something. Rows 5 and 6 (the headings and the Total) keep theirs
+ * regardless; they are not inputs but they are what the columns are read by.
+ *
+ * The rows past the block are left UNFILLED rather than painted white, which is
+ * how the rest of the allocation table already reads — see `isDefaultFill`.
+ * They still take the table's borders, so the grid runs to row 21 as before and
+ * the desk can type into row 17 exactly as it always could.
+ */
+export const CLIENT_INPUT_COLS = { c1: 6, c2: 7 };
+export const CLIENT_INPUT_FIRST_ROW = 7;
+export const CLIENT_INPUT_LAST_ROW = 14;
+
+/**
+ * Cut the client input columns' yellow back to `CLIENT_INPUT_LAST_ROW`.
+ *
+ * The fill has to be trimmed in the PLAN, not overpainted afterwards: the
+ * writes go out through `$batch`, which does not promise to run them in the
+ * order they were listed, so a white rectangle sent after a yellow one is not
+ * reliably the one that lands last. A region that never says yellow below the
+ * cutoff cannot lose that race.
+ *
+ * Splitting rather than shrinking, because the scan merges by colour and a
+ * yellow region is not guaranteed to stop at column F: anything to the left of
+ * F or the right of G keeps its full height, and only the F-to-G slice is
+ * clamped. A region that starts below the cutoff loses that slice entirely.
+ */
+export function clampClientInputYellow(fills: Region<string>[]): Region<string>[] {
+  const yellow = "#FFFF00";
+  const { c1: F, c2: G } = CLIENT_INPUT_COLS;
+  const out: Region<string>[] = [];
+
+  for (const f of fills) {
+    const { r1, c1, r2, c2 } = f.rect;
+    const isYellow = f.value.trim().toUpperCase() === yellow;
+    if (!isYellow || c2 < F || c1 > G || r2 <= CLIENT_INPUT_LAST_ROW) {
+      out.push(f);
+      continue;
+    }
+
+    if (c1 < F) out.push({ rect: { r1, c1, r2, c2: F - 1 }, value: f.value });
+    if (c2 > G) out.push({ rect: { r1, c1: G + 1, r2, c2 }, value: f.value });
+    if (r1 <= CLIENT_INPUT_LAST_ROW) {
+      out.push({
+        rect: { r1, c1: Math.max(c1, F), r2: CLIENT_INPUT_LAST_ROW, c2: Math.min(c2, G) },
+        value: f.value,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Guarantees that essential placement template formatting (yellow edit fields,
  * black header bands with bold white text, Total rows, and fee tables) are
  * always complete and never dropped even if a scan was partially truncated.
@@ -685,6 +746,11 @@ function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
   const yellow = "#FFFF00";
   const black = "#000000";
   const gray = "#D9D9D9";
+
+  // Template paints the client inputs yellow all the way down to row 21; the
+  // desk only ever fills the first few. Trim before anything else reads the
+  // list, so the checks below judge the clamped block rather than Template's.
+  plan.fills = clampClientInputYellow(plan.fills);
 
   // 1. Ensure Top Banner A1:Q1 is Yellow
   if (!plan.fills.some((f) => f.rect.r1 === 1 && f.value.toUpperCase() === yellow)) {
@@ -713,18 +779,25 @@ function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
     });
   }
 
-  // 4. Ensure F7:G21 (Client Round Shares and Actual $ inputs) are ALWAYS FULLY YELLOW
-  const hasFullClientYellow = plan.fills.some(
+  // 4. Ensure the client input block (Round Shares and Actual $) is yellow for
+  //    as many rows as the desk actually uses — see CLIENT_INPUT_LAST_ROW.
+  const hasClientYellow = plan.fills.some(
     (f) =>
       f.value.toUpperCase() === yellow &&
-      f.rect.c1 <= 6 &&
-      f.rect.c2 >= 7 &&
-      f.rect.r1 <= 7 &&
-      f.rect.r2 >= 21,
+      f.rect.c1 <= CLIENT_INPUT_COLS.c1 &&
+      f.rect.c2 >= CLIENT_INPUT_COLS.c2 &&
+      f.rect.r1 <= CLIENT_INPUT_FIRST_ROW &&
+      f.rect.r2 >= CLIENT_INPUT_LAST_ROW,
   );
-  if (!hasFullClientYellow) {
-    plan.fills.push({ rect: { r1: 7, c1: 6, r2: 21, c2: 7 }, value: yellow });
-    plan.fills.push({ rect: { r1: 5, c1: 6, r2: 6, c2: 7 }, value: yellow });
+  if (!hasClientYellow) {
+    plan.fills.push({
+      rect: { r1: CLIENT_INPUT_FIRST_ROW, c1: CLIENT_INPUT_COLS.c1, r2: CLIENT_INPUT_LAST_ROW, c2: CLIENT_INPUT_COLS.c2 },
+      value: yellow,
+    });
+    plan.fills.push({
+      rect: { r1: 5, c1: CLIENT_INPUT_COLS.c1, r2: 6, c2: CLIENT_INPUT_COLS.c2 },
+      value: yellow,
+    });
   }
 
   // 5. Ensure Fee table headers (L23:N23 and P24:R24) are Yellow with Bold text
