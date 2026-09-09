@@ -167,7 +167,8 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                   rel="noopener noreferrer"
                   className="block px-4.5 py-3.5 hover:bg-paper transition-colors group"
                 >
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-start gap-2">
+                    <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
                     <span
                       className={`code font-mono text-[11px] px-1 rounded-sm font-bold ${owned ? "text-green-d" : "text-ink"}`}
                     >
@@ -181,10 +182,12 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                     <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
                       {a.company} &middot; {annTime(a.released)}
                     </span>
-                    <span className="ml-auto flex items-center gap-2 shrink-0">
-                      {/* Reading a filing is where somebody decides to follow a
-                          company, so the control belongs on the filing rather
-                          than on a page they would have to go and find. */}
+                    </div>
+
+                    {/* Reading a filing is where somebody decides to follow a
+                        company, so the control belongs on the filing rather than
+                        on a page they would have to go and find. */}
+                    <span className="flex items-center gap-1.5 flex-none">
                       <WatchButton
                         code={a.code}
                         name={a.company || a.code}

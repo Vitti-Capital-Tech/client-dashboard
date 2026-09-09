@@ -49,9 +49,9 @@ export function TablePagination({
   };
 
   return (
-    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4.5 py-3 border-t border-line bg-white text-xs text-mut select-none">
+    <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 px-4.5 py-3 border-t border-line bg-white text-xs text-mut select-none">
       {/* Left side: range count & segmented page size pills */}
-      <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
         <span>
           Showing <strong className="text-ink font-mono font-semibold">{startIdx}</strong>–
           <strong className="text-ink font-mono font-semibold">{endIdx}</strong> of{" "}
@@ -59,7 +59,7 @@ export function TablePagination({
         </span>
 
         {onPageSizeChange && totalItems > Math.min(...pageSizeOptions) && (
-          <div className="flex items-center gap-1.5 pl-2.5 border-l border-line">
+          <div className="flex items-center gap-1.5 sm:pl-2.5 sm:border-l sm:border-line">
             <span className="text-[11px] text-mut font-medium">Rows:</span>
             <div className="inline-flex items-center bg-paper-2 rounded-[7px] p-0.5 border border-line/60">
               {pageSizeOptions.map((opt) => {
@@ -103,7 +103,7 @@ export function TablePagination({
 
       {/* Right side: segmented navigation controls */}
       {totalPages > 1 && (
-        <div className="inline-flex items-center bg-paper-2 rounded-[8px] p-0.5 border border-line/60 gap-0.5">
+        <div className="self-end sm:self-auto inline-flex items-center bg-paper-2 rounded-[8px] p-0.5 border border-line/60 gap-0.5">
           {/* Previous Button */}
           <button
             type="button"

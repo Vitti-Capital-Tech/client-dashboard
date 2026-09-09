@@ -78,7 +78,7 @@ export function WatchButton({
           ? `Stop watching ${code}`
           : `Watch ${code}`
       }
-      className={`inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-full border px-2.5 py-1 transition-colors cursor-pointer disabled:opacity-60 ${
+      className={`inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-full border px-2 sm:px-2.5 py-1 transition-colors cursor-pointer disabled:opacity-60 ${
         watching
           ? "border-green/40 bg-green-bg text-green-d"
           : "border-line text-mut hover:text-ink hover:border-mut/40"
@@ -88,7 +88,10 @@ export function WatchButton({
         className={`w-3.5 h-3.5 stroke-[1.8] ${watching ? "fill-current" : ""}`}
         aria-hidden
       />
-      {watching ? "Watching" : "Watch"}
+      {/* The star alone on a phone. The word doubles the button's width on the
+          screen with the least of it, and a filled star next to a headline is
+          not ambiguous — the accessible name is on the button either way. */}
+      <span className="hidden sm:inline">{watching ? "Watching" : "Watch"}</span>
     </button>
   );
 }

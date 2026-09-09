@@ -93,7 +93,8 @@ export default async function ClientInsightsPage() {
           <div className="divide-y divide-line">
             {mine.map((a) => (
               <div key={a.id} className="px-4.5 py-3.5">
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-start gap-2">
+                  <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
                   <span className="code font-mono text-[11px] px-1 rounded-sm font-bold text-green-d">
                     {a.code}
                   </span>
@@ -111,7 +112,8 @@ export default async function ClientInsightsPage() {
                   <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
                     {a.company}
                   </span>
-                  <div className="ml-auto flex items-center gap-2">
+                  </div>
+                  <div className="flex items-center gap-2 flex-none">
                     <WatchButton
                       code={a.code}
                       name={a.company || a.code}
