@@ -30,8 +30,19 @@ import {
 
 export function CustomiseClient({
   clientName,
+  embedded = false,
 }: {
   clientName: string;
+  /**
+   * Rendered inside another page rather than as one of its own.
+   *
+   * Settings shows this under Appearance, which means the surrounding page
+   * already has a heading and a width. Embedded drops this component's own
+   * `<h1>` — two on a page is wrong for a screen reader before it is wrong for
+   * a designer — and its page-level centring, which would otherwise fight the
+   * container it is sitting in. The controls, including Reset, are unchanged.
+   */
+  embedded?: boolean;
 }) {
   const { theme, setTheme, resetTheme, isCustomized, isDark } = useTheme();
   const [copied, setCopied] = useState(false);
@@ -127,17 +138,21 @@ export function CustomiseClient({
     FONT_OPTIONS.find((f) => f.id === theme.fontFamily) || FONT_OPTIONS[0];
 
   return (
-    <div className="space-y-7 max-w-5xl mx-auto pb-12">
+    <div className={embedded ? "space-y-7" : "space-y-7 max-w-5xl mx-auto pb-12"}>
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-line pb-5">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-mut">
-            <Palette className="w-4 h-4 text-green-d" />
-            <span>Platform Customisation</span>
-          </div>
-          <h1 className="font-disp font-medium text-[28px] text-ink mt-1">
-            Personalise Appearance
-          </h1>
+          {!embedded && (
+            <>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-mut">
+                <Palette className="w-4 h-4 text-green-d" />
+                <span>Platform Customisation</span>
+              </div>
+              <h1 className="font-disp font-medium text-[28px] text-ink mt-1">
+                Personalise Appearance
+              </h1>
+            </>
+          )}
           <p className="text-sm text-mut mt-0.5">
             Select a curated theme preset or craft a custom color palette, opacities, and typography.
           </p>

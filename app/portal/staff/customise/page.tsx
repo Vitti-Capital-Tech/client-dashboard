@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/session";
-import { CustomiseClient } from "@/app/portal/client/customise/CustomiseClient";
+import { CustomiseClient } from "@/app/components/CustomiseClient";
 
 export const metadata = {
   title: "Customise Appearance — Vitti Capital Desk",
