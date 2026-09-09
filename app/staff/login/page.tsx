@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Shield, Mail } from "lucide-react";
 import { requestLoginCode, verifyLoginCode } from "@/app/actions/session";
+import { LeavingOverlay } from "@/app/components/LeavingOverlay";
+import { SIGN_IN_TIPS } from "@/lib/ui/leaving";
 import {
   AuthShell,
   FormError,
@@ -52,6 +54,8 @@ export default function StaffLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [wrongDoor, setWrongDoor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** Set once a session exists and the console is being navigated to. */
+  const [landing, setLanding] = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
   /** See the note on the client login page: `busy` is state, and the last
@@ -107,6 +111,7 @@ export default function StaffLoginPage() {
         return;
       }
 
+      setLanding(true);
       // The role still decides, not the page. A client address cannot reach here
       // — `requestLoginCode("staff")` refused it before any code was sent — but
       // if one ever did, it lands in the client portal rather than being shown a
@@ -120,6 +125,33 @@ export default function StaffLoginPage() {
     setDigits(values);
     if (codeComplete(values)) void verify(values.join(""));
   };
+
+  // Same panel as the client door. The console is heavier to render than
+  // the portal — firm-wide alerts, every placement, every bid — so if
+  // anything the wait it covers is longer.
+  if (landing) {
+    return (
+      <LeavingOverlay
+        title="Signing you in"
+        subtitle="Opening the console…"
+        tips={SIGN_IN_TIPS}
+        icon={
+          <svg
+            viewBox="0 0 24 24"
+            className="h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path pathLength="1" d="M10 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-8" />
+            <path pathLength="1" d="M3 12h11M10 8l4 4-4 4" />
+          </svg>
+        }
+      />
+    );
+  }
 
   return (
     <AuthShell>

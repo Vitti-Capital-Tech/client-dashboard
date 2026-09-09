@@ -4,6 +4,8 @@ import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { KeyRound, Mail, MonitorSmartphone, CheckCircle2, Palette } from "lucide-react";
 import { CustomiseClient } from "@/app/components/CustomiseClient";
+import { LeavingOverlay } from "@/app/components/LeavingOverlay";
+import { LEAVING_MS, SESSIONS_ENDED_TIPS } from "@/lib/ui/leaving";
 import {
   changePassword,
   startEmailChange,
@@ -379,12 +381,44 @@ function ChangeEmail({ current }: { current: string }) {
 function Sessions() {
   const router = useRouter();
   const { busy, result, run } = useAction();
+  const [leaving, setLeaving] = useState(false);
 
   const submit = () =>
-    run(signOutEverywhere, () => {
-      // This session is one of the ones just ended, so there is nowhere to stay.
+    run(signOutEverywhere, async () => {
+      setLeaving(true);
+      // Held for the length of the panel, so an action that returns quickly
+      // does not cut the send-off off mid-draw. This session is one of the ones
+      // just ended, so there is nowhere to stay.
+      await new Promise((r) => setTimeout(r, LEAVING_MS.sessionsEnded));
       router.push("/login");
     });
+
+  if (leaving) {
+    return (
+      <LeavingOverlay
+        tone="muted"
+        title="Every session ended"
+        subtitle="Including this one…"
+        tips={SESSIONS_ENDED_TIPS}
+        durationMs={LEAVING_MS.sessionsEnded}
+        icon={
+          <svg
+            viewBox="0 0 24 24"
+            className="h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            {/* A screen and a phone, both closed. */}
+            <path pathLength="1" d="M3 5h13a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z" />
+            <path pathLength="1" d="M7 18h6M19 9h3v11a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V9z" />
+          </svg>
+        }
+      />
+    );
+  }
 
   return (
     <Card

@@ -469,3 +469,125 @@ body.is-mobile {
     padding-left: 16px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * The leaving screen — see app/components/LeavingOverlay.tsx
+ * ---------------------------------------------------------------------------
+ * Four beats rather than a static panel with a moving bar: the mark lands, its
+ * stroke draws, a ring goes out from it, then the words arrive underneath. The
+ * whole sequence is done inside a second, because the screen exists for about
+ * three and an animation still introducing itself when the page changes is
+ * worse than none at all.
+ *
+ * The mark's paths need pathLength="1". Normalising the dash to the path's own
+ * length is the only way one rule can draw a door and a tick without knowing
+ * how long either is.
+ */
+@keyframes leave-mark-in {
+  from { opacity: 0; transform: scale(0.6); }
+  60% { transform: scale(1.06); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes leave-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes leave-ring {
+  from { opacity: 0.4; transform: scale(0.8); }
+  to { opacity: 0; transform: scale(1.9); }
+}
+
+@keyframes leave-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.leave-mark {
+  animation: leave-mark-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.leave-mark path {
+  stroke-dasharray: 1;
+  animation: leave-draw 0.5s cubic-bezier(0.22, 1, 0.36, 1) 0.28s both;
+}
+
+/* One ring, not a loop. This happens once. */
+.leave-ring {
+  animation: leave-ring 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
+}
+
+.leave-rise {
+  animation: leave-rise 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.leave-rise-1 { animation-delay: 0.22s; }
+.leave-rise-2 { animation-delay: 0.32s; }
+.leave-rise-3 { animation-delay: 0.42s; }
+.leave-rise-4 { animation-delay: 0.54s; }
+
+/*
+ * A bar across a KNOWN wait. The duration comes from the element, so the
+ * animation and the timer that actually navigates are set from one number: a
+ * bar that finishes early promises a page that has not arrived, and one that
+ * finishes late is still crawling after it has.
+ */
+@keyframes leave-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.leave-fill {
+  transform-origin: left;
+  animation: leave-fill linear forwards;
+}
+
+/*
+ * And one across an UNKNOWN wait. A round trip has no percentage to report, so
+ * this sweeps rather than fills — it says work is happening without claiming to
+ * know how much is left.
+ */
+@keyframes leave-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+.leave-sweep {
+  width: 33%;
+  animation: leave-sweep 1.1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * No travel, no scaling, no expanding ring — and no drawing either, which
+   * would otherwise leave the mark half-finished for anybody whose reduced
+   * setting cancels the animation that completes it.
+   */
+  .leave-mark,
+  .leave-rise,
+  .leave-ring {
+    animation: none;
+  }
+
+  .leave-mark path {
+    stroke-dasharray: none;
+    animation: none;
+  }
+
+  .leave-ring {
+    opacity: 0;
+  }
+
+  /* Both bars still read as "something is happening", without the crawl. */
+  .leave-fill {
+    animation: none;
+    transform: scaleX(1);
+  }
+
+  .leave-sweep {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}

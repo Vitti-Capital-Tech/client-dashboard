@@ -22,6 +22,8 @@ import {
   emptyCode,
   codeComplete,
 } from "@/app/components/CodeInput";
+import { LeavingOverlay } from "@/app/components/LeavingOverlay";
+import { SIGN_IN_TIPS } from "@/lib/ui/leaving";
 
 /**
  * Client sign-in. Staff have their own page at /staff/login.
@@ -68,6 +70,8 @@ export default function LoginPage() {
   const [wrongDoor, setWrongDoor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  /** Set once a session exists and the portal is being navigated to. */
+  const [landing, setLanding] = useState(false);
 
   /** Guards the auto-submit. `busy` cannot do this job: it is state, so it is
    *  still false on the render where filling the last box already fired a
@@ -81,11 +85,25 @@ export default function LoginPage() {
     return () => clearTimeout(t);
   }, [cooldown]);
 
-  /** Where a verified session lands. The role is settled server-side. */
+  /**
+   * Where a verified session lands.
+   *
+   * The send-off goes up first and stays up until the browser is somewhere
+   * else. It is not padding: the portal's layout and page make several database
+   * calls to render, each with a floor of about 350ms from here, so this is a
+   * second or two that was always going to be spent — previously on a stuck
+   * button and a screen that changed when it felt like it.
+   *
+   * No minimum hold, unlike the endings. Somebody signing in wants to be in,
+   * and charging them for a tip they did not ask for is not a trade worth
+   * making. The bar sweeps rather than fills for the same reason: nothing here
+   * knows how long the server will take.
+   */
   const land = useCallback(
     (role: "admin" | "client") => {
       // Left busy on purpose: the navigation is the next thing that happens, and
       // re-enabling the button first only invites a second submit.
+      setLanding(true);
       router.push(role === "admin" ? "/portal/staff" : "/portal/client");
     },
     [router],
@@ -193,6 +211,32 @@ export default function LoginPage() {
       )}
     </FormError>
   );
+
+  // The form is replaced rather than covered: it has done its job, and nothing
+  // underneath should be tabbable while the browser is on its way to the portal.
+  if (landing) {
+    return (
+      <LeavingOverlay
+        title="Signing you in"
+        subtitle="Fetching your book…"
+        tips={SIGN_IN_TIPS}
+        icon={
+          <svg
+            viewBox="0 0 24 24"
+            className="h-6 w-6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path pathLength="1" d="M10 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1h-8" />
+            <path pathLength="1" d="M3 12h11M10 8l4 4-4 4" />
+          </svg>
+        }
+      />
+    );
+  }
 
   return (
     <AuthShell>
