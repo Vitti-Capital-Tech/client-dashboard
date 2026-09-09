@@ -274,7 +274,11 @@ export function DashboardClient({
         />
         <div className="flex justify-between items-center text-xs">
           <b className="text-white text-sm font-semibold">Your morning briefing</b>
-          <span className="text-mut-d font-medium">{noteTime} &middot; auto-generated</span>
+          {/* "auto-generated" went with the sentence that needed the caveat.
+              What is left is the client's own cost, P&L and holding count,
+              read out of the stored figures — a statement of fact, and the
+              word only made a reader wonder which parts to trust. */}
+          <span className="text-mut-d font-medium">{noteTime}</span>
         </div>
         {/* Only figures that exist.
             This paragraph used to read "…up $X (+1.2%) today. Materials led —

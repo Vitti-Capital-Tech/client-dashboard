@@ -135,7 +135,7 @@ export function PlacementsClient({
 
         <div className="flex justify-between items-end gap-3 flex-wrap">
           <div>
-            <h1 className="font-disp font-medium text-2xl text-ink">
+            <h1 className="font-disp font-medium text-lg sm:text-2xl tabular-nums text-ink">
               {p.name} <span className="font-mono text-sm font-normal text-mut uppercase ml-1">ASX: {p.code}</span>
             </h1>
           </div>
@@ -368,7 +368,7 @@ export function PlacementsClient({
 
         <div className="flex justify-between items-end gap-3 flex-wrap">
           <div>
-            <h1 className="font-disp font-medium text-2xl text-ink">
+            <h1 className="font-disp font-medium text-lg sm:text-2xl tabular-nums text-ink">
               {p.name} <span className="font-mono text-sm font-normal text-mut uppercase ml-1">{p.code}</span>
             </h1>
           </div>

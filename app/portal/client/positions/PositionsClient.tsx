@@ -2219,17 +2219,17 @@ export function PositionsClient({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(deskCost)}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{money0(deskCost)}</div>
           <div className="text-xs text-mut mt-1">invested, {scopeLabel}</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Proceeds &amp; value</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{money0(scoped.total.sellOrCurrent)}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{money0(scoped.total.sellOrCurrent)}</div>
           <div className="text-xs text-mut mt-1">sold, plus what is still held</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
-          <div className={`font-disp font-medium text-2xl mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+          <div className={`font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
             {deskPnl >= 0 ? "+" : ""}{money0(deskPnl)}
           </div>
           <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
@@ -2244,7 +2244,7 @@ export function PositionsClient({
               position — the Holdings table lists them and the P&L counts their
               result — so leaving them out made the account read light by exactly
               what the client had been granted. */}
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(scopedTv + scopedCash + unlistedScopedValue).toLocaleString("en-AU")}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">${Math.round(scopedTv + scopedCash + unlistedScopedValue).toLocaleString("en-AU")}</div>
           <div className="text-xs text-mut mt-1">
             {holdingRows.length} holding{holdingRows.length === 1 ? "" : "s"} + cash
             {unlistedScopedValue > 0 ? ", incl. unlisted options" : ", at last price"}

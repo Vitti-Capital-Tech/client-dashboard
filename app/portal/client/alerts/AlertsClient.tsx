@@ -122,28 +122,28 @@ export function AlertsClient({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Unacknowledged</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{unackCount}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{unackCount}</div>
           <div className={`text-xs mt-1 font-semibold ${unackCount > 0 ? "text-loss-d animate-pulse" : "text-mut"}`}>
             {unackCount > 0 ? "need attention" : "all clear"}
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Critical (&le;3d / window)</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">
             {visibleAlerts.filter(a => a.sev === "red" && !a.ack).length}
           </div>
           <div className="text-xs text-mut mt-1">requires action</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">In the money</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">
             {visibleAlerts.filter(a => a.kind === "itm").length}
           </div>
           <div className="text-xs text-mut mt-1">option thresholds</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Delivery</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">In-app + email</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">In-app + email</div>
           <div className="text-xs text-mut mt-1">manual ack required</div>
         </div>
       </div>

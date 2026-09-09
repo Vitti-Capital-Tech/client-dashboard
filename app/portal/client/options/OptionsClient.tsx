@@ -126,7 +126,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
             Total options value
           </div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">
             ${money2(totalValue)}
           </div>
           <div className="text-xs text-mut mt-1">{options.length} series</div>
@@ -136,7 +136,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
             Unrealised P&amp;L
           </div>
           <div
-            className={`font-disp font-medium text-2xl mt-1 ${totalPnl >= 0 ? "text-gain" : "text-loss-d"}`}
+            className={`font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 ${totalPnl >= 0 ? "text-gain" : "text-loss-d"}`}
           >
             {totalPnl < 0 ? "-" : "+"}${money2(Math.abs(totalPnl))}
           </div>
@@ -146,14 +146,14 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
             Listed options
           </div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{listedCount}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{listedCount}</div>
           <div className="text-xs text-mut mt-1">quoted on ASX</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
             Unlisted options
           </div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{unlistedCount}</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{unlistedCount}</div>
           <div className="text-xs text-mut mt-1">placement grants</div>
         </div>
       </div>

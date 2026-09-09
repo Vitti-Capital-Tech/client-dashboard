@@ -24,6 +24,7 @@ import {
   ClipboardCheck,
   Clock,
   ChevronDown,
+  Check,
   LogOut,
   MoreHorizontal,
   X,
@@ -404,25 +405,40 @@ export function PortalShell({
 
       <div className="flex-1" />
 
-      {/* Account switcher (client, multi-account) */}
+      {/*
+        Account switcher — from `md` up only.
+
+        A `<select>` is as wide as its widest option, and these are company
+        names: "Psg Capital Investments PTY LTD · Wholesale" is over 300px. On a
+        375px phone it pushed the alerts bell and the avatar off the right of
+        the header — both simply gone, and the page scrolled sideways to reach
+        them. Capped here so a longer name cannot do it again on a small laptop
+        either.
+
+        Phones switch accounts inside the profile menu instead, where there is
+        room for the names to be read in full. See `profileMenu`.
+      */}
       {role === "client" && accounts.length > 0 && (
         accounts.length === 1 ? (
           <span
-            className="hidden sm:inline-flex items-center gap-1.5 text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 px-3"
+            className="hidden md:inline-flex items-center gap-1.5 text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 px-3 max-w-56 min-w-0"
             title={activeAccount?.accountType}
           >
-            <CreditCard className="w-3.5 h-3.5 stroke-[1.8]" />
-            {activeAccount?.label}
+            <CreditCard className="w-3.5 h-3.5 stroke-[1.8] flex-none" />
+            <span className="truncate">{activeAccount?.label}</span>
           </span>
         ) : (
-          <label className="relative inline-flex items-center" title="Switch account">
+          <label
+            className="relative hidden md:inline-flex items-center min-w-0"
+            title="Switch account"
+          >
             <CreditCard className="w-3.5 h-3.5 stroke-[1.8] text-mut absolute left-2.5 pointer-events-none" />
             <select
               value={activeAccountId}
               onChange={(e) => handleAccountChange(e.target.value)}
               disabled={isSwitching}
               aria-label="Active account"
-              className="appearance-none cursor-pointer text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 pl-7.5 pr-7 hover:border-green focus:outline-none focus:border-green disabled:opacity-60"
+              className="appearance-none cursor-pointer text-[12px] font-semibold text-ink bg-paper-2 border border-line rounded-full py-1.5 pl-7.5 pr-7 hover:border-green focus:outline-none focus:border-green disabled:opacity-60 max-w-56 truncate"
             >
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -490,10 +506,58 @@ export function PortalShell({
               <div className="px-2.5 pb-2 text-[11px] text-mut break-all">{userEmail}</div>
             )}
 
-            {/* Which account the figures on screen belong to. A client with one
-                account is told nothing they cannot already see in the header. */}
+            {/*
+              Which account the figures on screen belong to — and, with more
+              than one, how to change it.
+
+              The header's switcher is hidden below `md` because a company name
+              in a `<select>` is wider than a phone. Here the names have a
+              column to themselves and can be read in full, which is the better
+              place for them anyway: this menu is already "who am I and what is
+              mine".
+            */}
+            {role === "client" && accounts.length > 1 && (
+              <div className="md:hidden">
+                <div className="px-2.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-mut">
+                  Account
+                </div>
+                {accounts.map((a) => {
+                  const active = a.id === activeAccountId;
+                  return (
+                    <button
+                      key={a.id}
+                      role="menuitemradio"
+                      aria-checked={active}
+                      disabled={isSwitching}
+                      onClick={() => {
+                        setIsProfileOpen(false);
+                        handleAccountChange(a.id);
+                      }}
+                      className={`flex items-start gap-2 w-full text-left p-2.5 rounded-[9px] cursor-pointer transition-colors disabled:opacity-60 ${
+                        active ? "bg-paper-2" : "hover:bg-paper-2"
+                      }`}
+                    >
+                      <Check
+                        className={`w-3.5 h-3.5 stroke-[2.5] flex-none mt-0.5 ${
+                          active ? "text-green-d" : "text-transparent"
+                        }`}
+                        aria-hidden
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-[12.5px] font-semibold text-ink leading-snug">
+                          {a.label}
+                        </span>
+                        <span className="block text-[11px] text-mut">{a.accountType}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+                <div className="border-t border-line my-1" />
+              </div>
+            )}
+
             {role === "client" && accounts.length > 1 && activeAccount && (
-              <div className="px-2.5 pb-2 text-[11px] text-mut">
+              <div className="hidden md:block px-2.5 pb-2 text-[11px] text-mut">
                 Viewing <span className="font-semibold text-ink">{activeAccount.label}</span>
               </div>
             )}
