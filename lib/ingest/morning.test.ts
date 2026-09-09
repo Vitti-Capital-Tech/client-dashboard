@@ -596,3 +596,72 @@ test("a duplicate settles the window it sits in", async () => {
     new Date("2026-09-07T23:00:37Z").toISOString(),
   );
 });
+
+// ---------------------------------------------------------------------------
+// The recompute's budget is its own, not what the import left over
+// ---------------------------------------------------------------------------
+
+test("a slow import does not eat the recompute's budget", async () => {
+  // The budget used to become a deadline at function ENTRY, which makes the
+  // recompute's time a SHARE of the run rather than a duration of its own — and
+  // a heavy import does not leave it a smaller share, it leaves it none.
+  //
+  // Seen for real on 2026-09-09: a 4,140-row contract-note file took the imports
+  // past 40s, so the deadline was already behind when the recompute was reached
+  // and it deferred all 44 owed accounts — `Recomputed 0 of 44`, not 20 of 44.
+  // A `Rebuild all P&L` then did 55 accounts in 17 seconds. The recompute was
+  // never the expensive half; it was never given a turn.
+  //
+  // Here the mailbox takes longer than the whole budget, so under the old
+  // arithmetic the deadline handed to the recompute would already be in the
+  // past. It must not be.
+  const { db } = fakeDb({});
+
+  let remainingMs: number | null = null;
+  const slowMailbox = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    return {
+      ok: true,
+      attachments: [attachment({ content: holdingsCsv(["114716"]) })],
+      messagesSeen: 1,
+    };
+  };
+  const recompute = async (accountIds: string[], opts: { deadline: number }) => {
+    remainingMs = opts.deadline - Date.now();
+    return {
+      batchId: "batch-1",
+      results: [],
+      failures: [],
+      deferred: [...accountIds],
+      placementTickers: 12,
+      placementsParsedAt: "2026-08-10T00:00:00Z",
+    };
+  };
+
+  await runMorningIngest({
+    db,
+    fetchAttachments: slowMailbox as never,
+    recompute: recompute as never,
+    budgetMs: 100,
+  });
+
+  assert.notEqual(remainingMs, null, "the recompute was reached at all");
+  assert.ok(
+    (remainingMs as unknown as number) > 0,
+    `the recompute was handed ${remainingMs}ms — it must get its budget from the ` +
+      `moment it starts, not from whatever the import left of the run`,
+  );
+});
+
+test("the deferral note reports the time the recompute actually had", async () => {
+  // `the 40s budget ran out` was the wording, and it was read as "40 seconds
+  // were spent trying" — while the truth was that nothing had been attempted.
+  // What the operator needs is the two numbers side by side.
+  const { go } = run({}, [attachment({ content: holdingsCsv(["114716"]) })], {
+    deferAll: true,
+  });
+
+  const report = await go();
+
+  assert.match(report.notes.join(" "), /the recompute had \d+s of its \d+s budget left/);
+});

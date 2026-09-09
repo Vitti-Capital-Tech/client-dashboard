@@ -227,19 +227,50 @@ export type IngestDeps = {
 };
 
 /**
- * How long the whole run may take before it stops starting new recomputes.
+ * How long the recompute may spend, once it starts.
  *
  * Sized for the ceiling this actually runs against — 60s on the host's free
  * tier — and the import must finish inside it whatever else does not. The first
  * real scheduled run was killed at exactly that point having recomputed 13 of
  * 43 accounts, and because the kill came before any run row was written, the
  * failure was silent. Raise via `INGEST_BUDGET_MS` where the host allows more.
+ *
+ * Read as a DURATION FOR THE RECOMPUTE, not as a share of the run — see
+ * `HARD_STOP_MS` for the difference and for what it cost.
  */
 const DEFAULT_BUDGET_MS = Number(process.env.INGEST_BUDGET_MS) || 40_000;
 
+/**
+ * The point in the run after which no new recompute is started, whatever the
+ * budget says.
+ *
+ * This exists because the budget used to be turned into a deadline at function
+ * ENTRY — `Date.now() + budgetMs`, before a single byte of mail was read. That
+ * makes the recompute's time a share of the run rather than a duration of its
+ * own, and a heavy import does not leave it a smaller share: it leaves it
+ * NONE.
+ *
+ * Observed exactly so on 2026-09-09. A 4,140-row contract-note file (the
+ * broker's export unfreezing after a month, §8.42) took the imports past 40s,
+ * so the deadline was already behind by the time the recompute was reached and
+ * it deferred all 44 owed accounts — `Recomputed 0 of 44`, not 20 of 44. The
+ * work was safe in `pnl_recompute_queue` and a `Rebuild all P&L` then did the
+ * whole book in **17 seconds**, 55 accounts at ~0.3s each. The recompute was
+ * never the expensive half; it was simply never given a turn.
+ *
+ * So the deadline is now resolved immediately before the batch, as whichever
+ * comes first: the budget from here, or this hard stop from the run's start.
+ * A run that spent 40s importing still gets the remaining ~15s — ample for the
+ * whole book — and a run that imported nothing still stops well short of the
+ * 60s wall.
+ */
+const HARD_STOP_MS = 55_000;
+
 export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestReport> {
   const budgetMs = deps.budgetMs ?? DEFAULT_BUDGET_MS;
-  const deadline = Date.now() + budgetMs;
+  // Only the run's START is fixed here. The recompute's deadline is derived
+  // from it at the point of use — see `HARD_STOP_MS`.
+  const runStartedMs = Date.now();
   const db = deps.db ?? (await import("../supabase/admin.ts")).createAdminClient();
   const fetchAttachments =
     deps.fetchAttachments ?? (await import("./graph-mail.ts")).fetchBrokerAttachments;
@@ -353,6 +384,15 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
     const owed = (await pendingRecomputes(db)).map((r) => r.account_id);
 
     if (owed.length > 0) {
+      // Whichever comes first: the budget from HERE, or the hard stop from the
+      // run's start. Never negative — a run already past the hard stop still
+      // gets one attempt rather than deferring the whole book on arithmetic.
+      const deadline = Math.max(
+        Date.now(),
+        Math.min(Date.now() + budgetMs, runStartedMs + HARD_STOP_MS),
+      );
+      const recomputeMs = deadline - Date.now();
+
       const batch = await recompute(owed, { trigger: "ingest", deadline });
       pnlBatchId = batch.batchId;
       deferredCount = batch.deferred.length;
@@ -367,8 +407,9 @@ export async function runMorningIngest(deps: IngestDeps = {}): Promise<IngestRep
       }
       if (batch.deferred.length > 0) {
         notes.push(
-          `${batch.deferred.length} account(s) left queued — the ${Math.round(budgetMs / 1000)}s ` +
-            `budget ran out. The next run or Rebuild all P&L will take them.`,
+          `${batch.deferred.length} account(s) left queued — the recompute had ` +
+            `${Math.round(recomputeMs / 1000)}s of its ${Math.round(budgetMs / 1000)}s budget ` +
+            `left after the import. The next run or Rebuild all P&L will take them.`,
         );
       }
       if (batch.failures.length > 0) {
