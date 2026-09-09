@@ -391,9 +391,14 @@ function Sessions() {
       title="Devices"
       icon={<MonitorSmartphone className="w-4 h-4" aria-hidden="true" />}
     >
+      {/* Worded away from "sign out", deliberately. The profile menu has a
+          Sign out, and the two were reading as the same button in two places
+          when they are not remotely the same act: that one ends this session,
+          this one ends every session anybody has. */}
       <p className="text-[13.5px] text-mut leading-relaxed mb-4">
-        Signs you out of every browser and device, including this one. Use it if
-        you have signed in somewhere you no longer have.
+        Ends every session on every browser and device, including this one. Use
+        it if you have signed in somewhere you no longer have — a shared
+        computer, or a phone you no longer own.
       </p>
       <Feedback result={result} />
       <button
@@ -402,7 +407,7 @@ function Sessions() {
         disabled={busy}
         className="btn rounded-[10px] py-2.5 px-4 text-[13px] font-semibold cursor-pointer select-none border border-line-2 bg-white text-loss-d hover:bg-loss-bg transition-colors disabled:opacity-55 disabled:cursor-not-allowed"
       >
-        {busy ? "Signing out…" : "Sign out everywhere"}
+        {busy ? "Ending sessions…" : "End all sessions"}
       </button>
     </Card>
   );

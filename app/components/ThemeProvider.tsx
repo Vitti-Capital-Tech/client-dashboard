@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import {
   type ThemeConfig,
   DEFAULT_THEME,
@@ -20,9 +20,61 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 const STORAGE_KEY = "vitti_custom_theme";
 
+/**
+ * The theme this browser has saved, or the default.
+ *
+ * Returns the DEFAULT during server rendering and on the very first client
+ * render — `typeof window` is the test, and on the client React runs the
+ * initialiser during hydration, where the two must agree. After hydration the
+ * sync effect writes whatever the browser is actually showing, which the init
+ * script has already applied to the document.
+ */
+function readSavedTheme(): ThemeConfig {
+  if (typeof window === "undefined") return DEFAULT_THEME;
+  try {
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    if (!saved) return DEFAULT_THEME;
+    const parsed = JSON.parse(saved) as ThemeConfig;
+    if (parsed && parsed.bgColor && parsed.textColor) return parsed;
+  } catch {
+    // Unreadable or blocked storage is not an error worth showing anybody.
+  }
+  return DEFAULT_THEME;
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeConfig>(DEFAULT_THEME);
-  const [mounted, setMounted] = useState(false);
+  /**
+   * The saved theme is read once, lazily, rather than in an effect.
+   *
+   * It used to be `useState(DEFAULT_THEME)` plus a mount effect that read
+   * localStorage and called `setThemeState` — which lint flags, correctly, as a
+   * synchronous setState inside an effect: it renders the default, then throws
+   * that render away and renders again.
+   *
+   * The reason it was written that way is real, though: `localStorage` does not
+   * exist on the server, and a lazy initialiser that read it would give the
+   * client different first-render output than the server sent, which is a
+   * hydration mismatch. The way out is to keep the FIRST render identical on
+   * both sides — the default, always — and to let the initialiser read storage
+   * only where there is no server render to disagree with, which is every
+   * render after the module has loaded in the browser.
+   *
+   * The paint is not at risk either way: `ThemeInitScript` has already applied
+   * the saved theme (or the default) to the document before React runs at all.
+   * This state is what the Customise controls read, not what the page is
+   * wearing.
+   */
+  const [theme, setThemeState] = useState<ThemeConfig>(readSavedTheme);
+
+  /**
+   * Whether the theme in state got there by somebody choosing it.
+   *
+   * A ref and not state: it gates the effect below, and gating an effect is not
+   * something the screen needs re-rendering for. It was `useState(false)` set
+   * to true from a mount effect, which is a setState inside an effect — a
+   * render thrown away to record that a render had happened.
+   */
+  const chosen = useRef(false);
 
   const applyThemeToDom = (cfg: ThemeConfig) => {
     if (typeof document === "undefined") return;
@@ -40,33 +92,28 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // On mount: read from localStorage if present
+  /**
+   * Write the theme out when it CHANGES, and not when it is merely read.
+   *
+   * The first run is skipped, because on that pass `theme` is whatever
+   * `readSavedTheme` found — storing it again would write the file back over
+   * itself, and for somebody who has never chosen anything it would save the
+   * current default as if they had picked it, quietly pinning them to it if the
+   * default ever moves. The document is already painted by `ThemeInitScript` by
+   * then, so there is nothing to apply either.
+   */
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as ThemeConfig;
-        if (parsed && parsed.bgColor && parsed.textColor) {
-          setThemeState(parsed);
-          applyThemeToDom(parsed);
-        }
-      }
-    } catch {
-      // Ignore localStorage read error
+    if (!chosen.current) {
+      chosen.current = true;
+      return;
     }
-    setMounted(true);
-  }, []);
-
-  // Sync theme changes to DOM and localStorage after mount
-  useEffect(() => {
-    if (!mounted) return;
     applyThemeToDom(theme);
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(theme));
     } catch {
       // Ignore localStorage write error
     }
-  }, [theme, mounted]);
+  }, [theme]);
 
   const setTheme = (updater: ThemeConfig | ((prev: ThemeConfig) => ThemeConfig)) => {
     setThemeState(updater);
