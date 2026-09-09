@@ -5,17 +5,29 @@ import { createClient } from "@/lib/supabase/server";
 /**
  * The one place a link in a Supabase auth email may land.
  *
- * ── Why this app had no callback route until now ────────────────────────────
+ * ── LEGACY as of the code-based email change ────────────────────────────────
+ * Nothing issues these links any more. `double_confirm_changes` is off and
+ * `change-email-address.html` now carries a six-digit `{{ .Token }}` that
+ * `confirmEmailChange` verifies from the settings page, so the whole flow is a
+ * typed code like every other credential here.
+ *
+ * This route is kept because links issued BEFORE that switch are still valid
+ * until they expire (`otp_expiry`), and a client mid-change would otherwise
+ * click a dead URL. Once no such link can remain, this file and the
+ * `?email=confirmed|invalid` banner it redirects to can both go.
+ *
+ * ── Why the link existed at all ─────────────────────────────────────────────
  * Every credential here is a 6-digit code typed into a form (§8.32), so there
  * was nothing for a link to do — `supabase/email-templates/magic-link.html`
  * deliberately omits `{{ .ConfirmationURL }}` for exactly that reason, since a
  * link that cannot work is the thing people click first.
  *
- * Changing a login email is the one flow that cannot be a typed code. The change
- * has to be confirmed from BOTH the old and the new mailbox
- * (`double_confirm_changes`), and the new address is not a registered user yet —
- * so there is no `verifyOtp` call the app could make on its behalf and no form
- * to put the code into. Supabase sends links; this is where they arrive.
+ * Under DOUBLE confirmation an email change could not be a typed code: both the
+ * old and the new mailbox had to confirm, and the last confirmation might come
+ * days later from a device with no session and no form to type into. Removing
+ * the old address from the flow is what made the code possible — and is also
+ * what it costs, since that second mailbox was the thing stopping someone with
+ * an open session from moving the login. See LLD §8.39.
  *
  * ── What it will and will not do ────────────────────────────────────────────
  * `email_change` only. A route that accepted every `type` would become a second

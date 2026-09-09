@@ -5,7 +5,6 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { passwordProblem, confirmationProblem } from "@/lib/auth/password";
 import { VIEW_COOKIE, ACCOUNT_COOKIE } from "@/lib/session";
-import { authConfirmUrl } from "@/lib/app-origin";
 
 /**
  * What a client can change about their own login: the password, the address, and
@@ -76,19 +75,28 @@ export async function changePassword(
 }
 
 /**
- * Start moving the login to a new address.
+ * Step 1 of moving the login: send a code to the new address.
  *
  * ── Nothing changes here ────────────────────────────────────────────────────
- * `updateUser({ email })` does not move the address; it sends confirmation mail.
- * With `double_confirm_changes = true` BOTH the old and the new address must
- * confirm, which is the right setting for a credential: somebody who gets at an
- * open session cannot quietly redirect the login to an address they own, because
- * the old mailbox has to agree.
+ * `updateUser({ email })` does not move the address; it sends mail. The address
+ * moves when `confirmEmailChange` verifies the code below.
  *
- * The address actually moves when the last link is followed — possibly days
- * later, from a device this app never sees. `clients.email` is therefore kept in
- * step by a trigger on `auth.users` and NOT from here; see
- * 20260907090000_client_settings.sql for why that cannot be done in the action.
+ * ── One mailbox, on the desk's instruction ─────────────────────────────────
+ * `double_confirm_changes` is OFF, so only the NEW address is sent anything.
+ * What that gives up is worth stating where the code lives: the old mailbox no
+ * longer has to agree, so somebody who reaches an open session can point the
+ * login at an address they own and the real owner is never told. The second
+ * confirmation was the only thing preventing that. Accepted deliberately — see
+ * LLD §8.39 and the note in supabase/config.toml.
+ *
+ * There is no `emailRedirectTo` any more, and nothing here depends on
+ * `authConfirmUrl()`, the dashboard's Redirect URLs, or `SiteURL`: the mail
+ * carries a six-digit code rather than a link, so there is no host to get wrong.
+ * The old template, built on `SiteURL`, mailed clients `localhost:3000`.
+ *
+ * `clients.email` is still moved by the trigger on `auth.users` rather than from
+ * here — see 20260907090000_client_settings.sql. The trigger observes the actual
+ * change, which is the only thing that cannot disagree with it.
  *
  * ── What is refused, and why here as well as in the database ────────────────
  * A staff-domain target is refused by a trigger, because
@@ -147,31 +155,9 @@ export async function startEmailChange(newEmail: string): Promise<ActionResult> 
     };
   }
 
-  // ── The link has to come back HERE, not to whatever Site URL says ───────
-  // `{{ .SiteURL }}` is one project-level value and this project serves local
-  // development and production from the same Supabase instance, so a template
-  // built on it mails every client a link to whichever environment was
-  // configured last. It mailed `localhost:3000`. Passing the origin per request
-  // moves the decision to the deployment that is actually running.
-  //
-  // Refused rather than sent without it: a confirmation email whose link points
-  // at a host we guessed is worse than no email, because the client clicks it
-  // and nothing happens — with no error to tell them why.
-  const redirectTo = authConfirmUrl();
-  if (!redirectTo) {
-    console.error(
-      "settings: refusing an email change — neither APP_URL nor VERCEL_PROJECT_PRODUCTION_URL is set, so the confirmation link would have no host",
-    );
-    return {
-      ok: false,
-      error: "Changing your email is unavailable just now. Please contact the Vitti desk.",
-    };
-  }
-
-  const { error } = await supabase.auth.updateUser(
-    { email: address },
-    { emailRedirectTo: redirectTo },
-  );
+  // No `emailRedirectTo`: the mail carries a code, not a link, so there is no
+  // origin to resolve and nothing to keep in step per environment.
+  const { error } = await supabase.auth.updateUser({ email: address });
   if (error) {
     if (error.status === 429) {
       return { ok: false, error: "Too many requests. Wait a minute and try again." };
@@ -182,7 +168,71 @@ export async function startEmailChange(newEmail: string): Promise<ActionResult> 
 
   return {
     ok: true,
-    message: `Confirmation sent to ${address} and to ${user.email}. Both have to be confirmed before your login changes — until then, keep signing in with your current address.`,
+    message: `Code sent to ${address}. Enter it below to finish the change — until then, keep signing in with your current address.`,
+  };
+}
+
+/**
+ * Step 2: verify the code and move the login.
+ *
+ * ── Why the NEW address is the one passed to `verifyOtp` ────────────────────
+ * That is where the code was sent. With `double_confirm_changes` off there is
+ * exactly one token in play and one mailbox holding it, so there is no ambiguity
+ * about which address the caller is proving control of — which is the whole
+ * reason this flow can be a code at all. Under double confirmation there were
+ * two tokens and the last one might be confirmed from a device with no session,
+ * and that is why it used to be a link.
+ *
+ * ── The address is re-derived, not trusted from the form ───────────────────
+ * `auth.users.email_change` already holds the pending target, put there by
+ * `startEmailChange` after the staff-domain and uniqueness checks. Reading it
+ * back means the code is verified against the address those checks passed on,
+ * not against whatever the browser sends in this second call. A caller who
+ * posted a different address here would otherwise be verifying a token for an
+ * address nothing had validated.
+ *
+ * ── `clients.email` is still not touched here ──────────────────────────────
+ * `sync_client_email_from_auth` observes the change inside the auth transaction
+ * (20260907090000_client_settings.sql). Doing it here as well would be a second
+ * writer to the same fact, and the trigger is the one that cannot be skipped.
+ */
+export async function confirmEmailChange(code: string): Promise<ActionResult> {
+  const { supabase, user } = await currentUser();
+  if (!user?.email) return { ok: false, error: "You are not signed in." };
+
+  const token = code.trim();
+  if (!/^\d{6}$/.test(token)) {
+    return { ok: false, error: "Enter the 6-digit code from the email." };
+  }
+
+  // `email_change` is the pending target; it is empty once there is nothing in
+  // flight, which is a clearer thing to say than letting `verifyOtp` fail.
+  const pending = (user.new_email ?? "").trim().toLowerCase();
+  if (!pending) {
+    return {
+      ok: false,
+      error: "There is no email change waiting. Enter your new address above to start one.",
+    };
+  }
+
+  const { error } = await supabase.auth.verifyOtp({
+    email: pending,
+    token,
+    type: "email_change",
+  });
+  if (error) {
+    if (error.status === 429) {
+      return { ok: false, error: "Too many attempts. Wait a minute and try again." };
+    }
+    // Wrong and expired are one message, as everywhere else here: telling them
+    // apart says "that code was real, just late", which is a hint worth having
+    // if you are guessing.
+    return { ok: false, error: "That code is not valid or has expired." };
+  }
+
+  return {
+    ok: true,
+    message: `Your login is now ${pending}. Use it next time you sign in.`,
   };
 }
 

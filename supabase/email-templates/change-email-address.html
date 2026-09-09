@@ -6,60 +6,41 @@
   invisible to review — paste it into the template editor, and edit it here too
   when you change it there.
 
-  Subject:  Confirm your new Vitti Capital login address
+  Subject:  Your Vitti Capital login change code
 
-  ── This one IS a link, and that is the exception ───────────────────────────
-  Every other credential in this system is a six-digit code typed into a form,
-  and magic-link.html deliberately omits the URL for that reason. An email
-  change cannot work that way: the NEW address is not a registered user yet, so
-  there is no session to verify a code against and no screen belonging to that
-  address to type one into. Supabase sends a link, and app/auth/confirm/route.ts
-  exists to catch it.
+  ── This is a CODE now, like everything else here ───────────────────────────
+  It used to be a link, and the reasoning was sound at the time: under double
+  confirmation the change could be finished from the old mailbox, on a phone,
+  days later, with no session and no screen to type a code into. So the template
+  carried `{{ .TokenHash }}` and app/auth/confirm/route.ts existed to catch it.
 
-  ── {{ .TokenHash }}, and NOT {{ .ConfirmationURL }} ────────────────────────
-  The default template ships `{{ .ConfirmationURL }}`, which points at Supabase's
-  own /auth/v1/verify and returns the session in a URL fragment — something only
-  browser-side JavaScript can read. This app establishes sessions on the SERVER
-  (@supabase/ssr writes the cookies), so the link has to carry `token_hash` to a
-  route that calls `verifyOtp`. Hence the hand-built URL below.
+  That flow is gone. `double_confirm_changes` is off, so only the NEW address is
+  sent anything, and the person receiving it is the one sitting on the settings
+  page that started the change — signed in, with a form in front of them. A code
+  works, and it matches every other credential in this system (magic-link.html
+  omits its URL for exactly this reason: a token in a URL lives in browser
+  history and referrer headers).
 
-  `type=email_change` must match what the route allows. It refuses every other
-  type on purpose: a route accepting all of them would be a second way to sign
-  in, by URL, alongside the code flow chosen to avoid exactly that.
-
-  ── BOTH addresses receive this ─────────────────────────────────────────────
-  `double_confirm_changes = true`, so the old address and the new one each get a
-  copy, each carrying its own token, and the change lands only when both have
-  been followed. The copy below therefore has to read sensibly to either
-  recipient — which is why it names both addresses rather than saying "your new
-  address". Do not reword it as though only the new mailbox will see it.
+  ── ONLY the new address receives this ──────────────────────────────────────
+  The old mailbox gets nothing and does not have to agree. That is the point of
+  the change and also its cost: the second confirmation was what stopped someone
+  who reached an open session from moving the login to an address they own. The
+  copy below therefore does the one thing still available to it — it names both
+  addresses, so a recipient who did not expect this can see what is being moved
+  and where, and has somewhere to report it.
 
   Available here: {{ .Email }} (the current address), {{ .NewEmail }},
-  {{ .TokenHash }}, {{ .Token }}, {{ .SiteURL }}.
+  {{ .Token }} (the 6-digit code), {{ .TokenHash }}, {{ .SiteURL }}.
 
-  ── {{ .RedirectTo }}, and NOT {{ .SiteURL }} ───────────────────────────────
-  `{{ .SiteURL }}` is ONE project-level setting, and this project serves local
-  development and production from the same Supabase instance. A template built on
-  it therefore mails every client a link to whichever environment was configured
-  last — which is not hypothetical: it mailed `localhost:3000`.
-
-  `{{ .RedirectTo }}` is the `emailRedirectTo` the app passes per request,
-  resolved by `authConfirmUrl()` from APP_URL or Vercel's own production URL. The
-  running deployment names itself, so there is nothing to keep in step by hand.
-
-  ── Requires, in the dashboard ──────────────────────────────────────────────
-  Authentication → URL Configuration → **Redirect URLs** must contain
-  `https://<your-host>/auth/confirm` (a wildcard such as
-  `https://<your-host>/**` also works). GoTrue silently falls back to the Site
-  URL for any redirect not on that list — so a missing entry looks exactly like
-  the app not passing one, and you get a localhost link again. Set Site URL to
-  the production origin too; it is the fallback and several other auth flows use
-  it.
+  `{{ .Token }}` and NOT `{{ .ConfirmationURL }}`: there is no link in this mail
+  at all any more, which is why nothing here depends on `{{ .RedirectTo }}`,
+  `SiteURL`, or the dashboard's Redirect URLs list. One fewer thing to keep in
+  step per environment — the old template mailed clients `localhost:3000` when
+  it was built on `SiteURL`.
 
   ── Why the markup looks like 2005 ──────────────────────────────────────────
   Same reasons as magic-link.html: tables, inline styles, no images, no web
-  fonts. Mail clients strip <style> blocks, Outlook ignores flexbox, and blocked
-  images would hide the button.
+  fonts. Mail clients strip <style> blocks and Outlook ignores flexbox.
 -->
 <table
   role="presentation"
@@ -93,34 +74,32 @@
         <tr>
           <td style="padding:32px 28px 8px">
             <h1 style="margin:0 0 10px;font-size:21px;font-weight:600;color:#1d202f">
-              Confirm your login change
+              Confirm your new login address
             </h1>
             <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:#6e7180">
               A request was made to move the Vitti Capital login from
-              <strong style="color:#1d202f">{{ .Email }}</strong> to
-              <strong style="color:#1d202f">{{ .NewEmail }}</strong>.
+              <strong style="color:#1d202f">{{ .Email }}</strong> to this
+              address, <strong style="color:#1d202f">{{ .NewEmail }}</strong>.
             </p>
             <p style="margin:0;font-size:14px;line-height:1.6;color:#6e7180">
-              We have sent this to <strong style="color:#1d202f">both</strong>
-              addresses. The login only changes once each one has been confirmed,
-              so nobody can move it without access to both mailboxes.
+              Enter this code on the settings page you started the change from.
             </p>
           </td>
         </tr>
 
-        <!-- The action. A table-wrapped anchor rather than a styled <button>,
-             which Outlook will not render. -->
+        <!-- The code. Letter-spaced and large, because it is read off the
+             screen and typed into another one. -->
         <tr>
           <td style="padding:24px 28px">
             <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
               <tr>
-                <td align="center" style="background-color:#1d202f;border-radius:10px">
-                  <a
-                    href="{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email_change"
-                    style="display:block;padding:14px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none"
-                  >
-                    Confirm this change
-                  </a>
+                <td
+                  align="center"
+                  style="background-color:#f7f6f3;border:1px solid #e7e4dc;border-radius:10px;padding:18px 12px"
+                >
+                  <span style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:32px;font-weight:700;letter-spacing:0.22em;color:#1d202f">
+                    {{ .Token }}
+                  </span>
                 </td>
               </tr>
             </table>
@@ -130,13 +109,12 @@
         <tr>
           <td style="padding:0 28px 28px">
             <p style="margin:0 0 16px;font-size:13px;line-height:1.6;color:#6e7180">
-              The link can be used once. Until both confirmations are complete,
-              keep signing in with
+              The code can be used once. Until you enter it, keep signing in with
               <strong style="color:#1d202f">{{ .Email }}</strong>.
             </p>
             <p style="margin:0;font-size:13px;line-height:1.6;color:#6e7180">
               <strong style="color:#1d202f">If you did not request this</strong>,
-              do not follow the link, and tell us at
+              do not enter the code, and tell us at
               <a href="mailto:info@vitti.capital" style="color:#1f8e6b;font-weight:600;text-decoration:underline">info@vitti.capital</a>.
               A request you did not make can mean somebody else has reached your
               account.
@@ -158,7 +136,7 @@
       </table>
 
       <p style="max-width:480px;margin:14px auto 0;font-size:11px;line-height:1.6;color:#9aa0b4;text-align:center">
-        Never forward this email. The link in it can change who signs in to your
+        Never forward this email. The code in it changes who signs in to your
         account.
       </p>
     </td>

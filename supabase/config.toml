@@ -241,7 +241,23 @@ web3 = 30
 enable_signup = false
 # If enabled, a user will be required to confirm any email change on both the old, and new email
 # addresses. If disabled, only the new email is required to confirm.
-double_confirm_changes = true
+#
+# OFF, on the desk's instruction: a client types a new address, the code goes to
+# that address, and entering it moves the login. One mailbox, one code, done.
+#
+# What that gives up, stated so nobody has to rediscover it: the old address no
+# longer has to agree. Somebody who reaches an open session can point the login
+# at an address they control, and the real owner is never told — the second
+# confirmation was the only thing standing in the way. Accepted deliberately for
+# a small advised client base; see LLD §8.39.
+#
+# ── This file is not what production reads ─────────────────────────────────
+# `supabase/config.toml` configures the LOCAL stack. The hosted project has its
+# own switch: Authentication → Sign In / Providers → Email → **Secure email
+# change**, which must be turned off there too. Left on, the client gets the
+# code AND the old mailbox gets one, and the login does not move until both are
+# used — which looks exactly like the code not working.
+double_confirm_changes = false
 # If enabled, users need to confirm their email address before signing in.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.

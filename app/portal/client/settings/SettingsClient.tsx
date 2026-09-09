@@ -9,6 +9,7 @@ import { LEAVING_MS, SESSIONS_ENDED_TIPS } from "@/lib/ui/leaving";
 import {
   changePassword,
   startEmailChange,
+  confirmEmailChange,
   signOutEverywhere,
   type ActionResult,
 } from "@/app/actions/profile";
@@ -338,56 +339,129 @@ function SetFirstPassword({ email }: { email: string }) {
 // ---------------------------------------------------------------------------
 // Login email
 // ---------------------------------------------------------------------------
+/**
+ * Two steps, one mailbox: type the new address, then type the code sent to it.
+ *
+ * `sent` is local rather than derived from the server, and deliberately: the
+ * pending address lives in `auth.users.email_change`, which is not on the
+ * session payload this page is rendered from. Keeping the step in component
+ * state means a reload lands back on the address form — which is the right
+ * place to be, since starting again re-sends the code and the person is not
+ * stranded on a code screen with no way back.
+ */
 function ChangeEmail({ current }: { current: string }) {
+  const router = useRouter();
   const [next, setNext] = useState("");
-  const { busy, result, run } = useAction();
+  const [sent, setSent] = useState(false);
+  const [digits, setDigits] = useState(emptyCode());
+  const { busy, result, run, setResult } = useAction();
 
-  const submit = (e: React.FormEvent) => {
+  const target = next.trim().toLowerCase();
+
+  const send = (e: React.FormEvent) => {
     e.preventDefault();
-    run(() => startEmailChange(next), () => setNext(""));
+    run(() => startEmailChange(next), () => {
+      setDigits(emptyCode());
+      setSent(true);
+    });
+  };
+
+  const confirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(() => confirmEmailChange(digits.join("")), () => {
+      setNext("");
+      setDigits(emptyCode());
+      setSent(false);
+      // `current` is resolved on the server, so the card only shows the new
+      // address after a refresh.
+      router.refresh();
+    });
+  };
+
+  const startOver = () => {
+    setResult(null);
+    setDigits(emptyCode());
+    setSent(false);
   };
 
   return (
     <Card title="Login email" icon={<Mail className="w-4 h-4" aria-hidden="true" />}>
-      <form onSubmit={submit} className="space-y-4" noValidate>
-        <p className="text-[13.5px] text-mut leading-relaxed">
-          Your login is{" "}
-          <span className="font-semibold text-ink break-all">{current}</span>.
-          Changing it needs confirmation from <strong>both</strong> the old and
-          the new address, so nobody can move your login on their own.
-        </p>
+      {!sent ? (
+        <form onSubmit={send} className="space-y-4" noValidate>
+          <p className="text-[13.5px] text-mut leading-relaxed">
+            Your login is{" "}
+            <span className="font-semibold text-ink break-all">{current}</span>.
+            We will email a {CODE_LENGTH}-digit code to the new address to
+            confirm you can reach it.
+          </p>
 
-        <div className="space-y-1.5">
-          <label htmlFor="new-email" className="block text-xs font-semibold text-ink">
-            New email
-          </label>
-          <input
-            id="new-email"
-            name="new-email"
-            type="email"
-            autoComplete="email"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-            placeholder="you@example.com"
-            required
-            className="w-full border border-line-2 bg-white rounded-[10px] px-3.5 py-3 text-[15px] focus:border-green focus:outline-none transition-colors"
+          <div className="space-y-1.5">
+            <label htmlFor="new-email" className="block text-xs font-semibold text-ink">
+              New email
+            </label>
+            <input
+              id="new-email"
+              name="new-email"
+              type="email"
+              autoComplete="email"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              placeholder="you@example.com"
+              required
+              className="w-full border border-line-2 bg-white rounded-[10px] px-3.5 py-3 text-[15px] focus:border-green focus:outline-none transition-colors"
+            />
+          </div>
+
+          <Feedback result={result} />
+
+          <Submit
+            busy={busy}
+            disabled={next.trim() === ""}
+            label="Email me a code"
+            busyLabel="Sending…"
           />
-        </div>
 
-        <Feedback result={result} />
+          <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
+            Nothing changes until you enter the code. Keep using your current
+            address to sign in until then.
+          </p>
+        </form>
+      ) : (
+        <form onSubmit={confirm} className="space-y-4" noValidate>
+          <p className="text-[13.5px] text-mut leading-relaxed">
+            Enter the {CODE_LENGTH}-digit code we sent to{" "}
+            <span className="font-semibold text-ink break-all">{target}</span>.
+            Your login changes as soon as it is accepted.
+          </p>
 
-        <Submit
-          busy={busy}
-          disabled={next.trim() === ""}
-          label="Send confirmations"
-          busyLabel="Sending…"
-        />
+          <CodeInput
+            digits={digits}
+            onChange={setDigits}
+            onError={(m) => setResult({ ok: false, error: m })}
+            disabled={busy}
+          />
 
-        <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
-          Nothing changes until both are confirmed. Keep using your current
-          address to sign in until then.
-        </p>
-      </form>
+          <Feedback result={result} />
+
+          <Submit
+            busy={busy}
+            disabled={!codeComplete(digits)}
+            label="Change my login email"
+            busyLabel="Confirming…"
+          />
+
+          {/* A typo in the address is only discoverable at this point — the code
+              never arrives — so there has to be a way back to the field. */}
+          <button
+            type="button"
+            onClick={startOver}
+            disabled={busy}
+            className="w-full text-xs font-semibold text-mut hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+          >
+            Use a different address
+          </button>
+        </form>
+      )}
     </Card>
   );
 }

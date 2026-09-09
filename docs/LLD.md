@@ -1448,11 +1448,22 @@ The password-less path sets a first password through the emailed code (`requestP
 
 | Part | Where | Why |
 | --- | --- | --- |
+| Send the code, and only to the new address | `startEmailChange` → `confirmEmailChange` | `double_confirm_changes` is off, so one token reaches one mailbox. **The hosted project has its own switch** — Authentication → Sign In / Providers → Email → *Secure email change* — which must be off there too; left on, the client gets the code, the old mailbox gets one as well, and the login does not move until both are used, which looks exactly like the code not working |
 | Refuse a staff-domain target | `startEmailChange` + `block_email_change_to_staff_domain` | `stamp_role_from_email` fires on `UPDATE OF email` too, so a client renaming themselves to `anything@vitti.capital` would be stamped **admin** and land in the desk console on the next token refresh. Refused in the action for a readable sentence, and in the database because that is the boundary |
 | Refuse an address already registered | `startEmailChange`, service role | `clients.email` is UNIQUE. Checked with the service role because RLS shows the caller only their own row — they would see no conflict and hit a constraint on confirmation, days later |
 | Move `clients.email` when the address actually moves | `sync_client_email_from_auth` | See below |
 
-`updateUser({ email })` changes nothing; it sends mail. With `double_confirm_changes` the old **and** new addresses each get a link with its own token, and both must be followed — which is what stops somebody who reaches an open session from redirecting the login to an address they own.
+`updateUser({ email })` changes nothing; it sends mail.
+
+**It is now one mailbox and a typed code, on the desk's instruction.** `double_confirm_changes` is **off**, `change-email-address.html` carries a six-digit `{{ .Token }}` instead of a link, and `confirmEmailChange` verifies it from the settings page — `verifyOtp({ email, token, type: "email_change" })`, with the address re-read from `auth.users.email_change` rather than trusted from the form, so the code is checked against the address the staff-domain and uniqueness tests actually passed on.
+
+**What that gives up, recorded because it will not be obvious later.** The old address used to get its own token and the change landed only when both were followed, which is what stopped somebody who reached an open session from redirecting the login to an address they own. That guard is gone: a session is now sufficient to move the login, and the real owner is never told. It was accepted knowingly for a small advised client base, and the mitigations that would restore some of it are both currently unavailable or unwanted — a notification to the old address needs outbound mail this application does not have (see *Notification preferences are absent*), and gating on the current password would exclude the majority of this firm's clients, who have none (§8.32).
+
+**Why a code works now when it could not before.** The old objection was real: under double confirmation the last confirmation might arrive days later, from a phone, with no session and no screen belonging to that address to type a code into. With one token going to one mailbox, the person holding it is the one sitting on the settings page that started the change — signed in, with a form in front of them. Removing the second mailbox is precisely what made the code possible.
+
+Nothing in the flow depends on `authConfirmUrl()`, the dashboard's Redirect URLs, or `SiteURL` any more, because there is no link to point anywhere — one fewer thing to keep in step per environment, and the failure it removes is not hypothetical: the `SiteURL`-based template mailed clients `localhost:3000`.
+
+`app/auth/confirm/route.ts` is kept as a **legacy** path only, so that links issued before the switch still resolve until they expire; it and the `?email=confirmed|invalid` banner can both be deleted once none can remain.
 
 **Why the second half is a trigger and not app code.** A client login is two halves in two places, and `lib/session.ts` and `current_client_id()` both resolve the client row from the address. If `auth.users.email` moved and `clients.email` did not, the person would be authenticated and attached to **nothing** — every policy denying them, so the portal reads as empty rather than as broken. And the change lands when the last link is followed: possibly days later, possibly from a phone, with no request in flight for the app to hook. A trigger is the only thing that observes the actual change, and it runs inside the auth transaction, so the halves cannot drift.
 
@@ -1460,9 +1471,11 @@ It matches on `OLD.email` rather than a user id, because `clients` has no FK to 
 
 Incidentally this closed a hazard that predates the page: editing an address by hand in the Supabase dashboard silently detached the client.
 
-#### `/auth/confirm` — the first auth callback route, and a narrow one
+#### `/auth/confirm` — now a legacy path
 
-Every other credential here is a six-digit code typed into a form, and `magic-link.html` omits the URL for that reason. An email change cannot work that way: the new address is not a registered user, so there is no session to verify a code against and no screen belonging to that address to type one into. Supabase sends links; this route catches them.
+Nothing issues these links any more (see above). The route is kept only so that a link mailed before the switch still resolves until it expires, and the reasoning below is why it existed rather than why it stays.
+
+Every other credential here is a six-digit code typed into a form, and `magic-link.html` omits the URL for that reason. Under double confirmation an email change could not work that way: the last confirmation might come from the old mailbox, on another device, with no session and no screen belonging to the new address to type a code into. Supabase sent links; this route caught them.
 
 - **`type=email_change` only.** A route accepting every type would be a second way to sign in — a bearer token in a URL, in browser history and referrer headers — beside the code flow chosen precisely to avoid that. `recovery` in particular is refused: password reset already has a form.
 - **`token_hash`, not the implicit fragment.** `{{ .ConfirmationURL }}` returns the session in a `#access_token=` fragment that only browser JavaScript can read; this app establishes sessions on the server, so the template is hand-built to carry `token_hash` and the route calls `verifyOtp`.
