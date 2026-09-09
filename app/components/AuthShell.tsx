@@ -17,7 +17,7 @@ import { Wordmark } from "@/app/components/Wordmark";
  */
 export function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen grid md:grid-cols-2 bg-paper text-ink font-body">
+    <div className="min-h-dvh grid md:grid-cols-2 bg-paper text-ink font-body">
       {/* ── Brand aside ─────────────────────────────────────────────────── */}
       <aside className="bg-navy text-white p-10 md:p-14 flex-col justify-between relative overflow-hidden hidden md:flex">
         <div

@@ -953,7 +953,7 @@ export function PortalShell({
   }
 
   return (
-    <div className="app-shell flex min-h-screen bg-paper font-body select-none">
+    <div className="app-shell flex min-h-dvh bg-paper font-body select-none">
       {sidebar}
       <div className="main clears-tabbar flex-1 flex flex-col min-w-0 relative overflow-x-clip">
         {topbar}
