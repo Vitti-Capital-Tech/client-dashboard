@@ -85,6 +85,18 @@ export function DashboardClient({
   // Filter alerts visible to this client
   const clientAlerts = alerts.filter(a => a.clientId === clientId && !a.ack).slice(0, 3);
 
+  /**
+   * Open options, soonest expiry first.
+   *
+   * Already-expired ones are left out: `dte` goes negative once the date has
+   * passed, and a window that closed is not upcoming. Four is what fits beside
+   * the holdings without the column becoming a second page.
+   */
+  const expiring = options
+    .filter((o) => o.status === "open" && o.dte >= 0)
+    .sort((a, b) => a.dte - b.dte)
+    .slice(0, 4);
+
   // Live countdown timer for the book close (closes 4:00pm)
   useEffect(() => {
     const timer = setInterval(() => {
@@ -277,14 +289,16 @@ export function DashboardClient({
             belongs here eventually; inventing it in the meantime is worse than
             leaving the space plain. */}
         <p className="text-sm leading-relaxed text-slate-300">
-          Your book is <b className="text-white font-bold">${pv.toLocaleString("en-AU")}</b> across{" "}
-          {positions.length} holding{positions.length === 1 ? "" : "s"} and cash, with a lifetime
-          profit and loss of{" "}
+          Your book is{" "}
+          <b className="text-white font-bold">${Math.round(pv).toLocaleString("en-AU")}</b>{" "}
+          across {positions.length} holding{positions.length === 1 ? "" : "s"} and cash, with a
+          lifetime profit and loss of{" "}
           <b className={`font-bold ${deskPnl >= 0 ? "text-[#5cc79a]" : "text-[#e0795b]"}`}>
             {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
           </b>{" "}
-          on ${Math.round(deskCost).toLocaleString("en-AU")} invested. Figures come from Vitti&apos;s
-          own reconciliation of your contract notes and holdings.
+          on ${Math.round(deskCost).toLocaleString("en-AU")} invested.{" "}
+          Figures come from Vitti&apos;s own reconciliation of your contract notes
+          and holdings.
         </p>
       </div>
 
@@ -317,17 +331,17 @@ export function DashboardClient({
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Total portfolio</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${pv.toLocaleString("en-AU")}</div>
+          <div className="font-disp font-medium text-xl sm:text-2xl mt-1 text-ink tabular-nums">${Math.round(pv).toLocaleString("en-AU")}</div>
           <div className="text-xs text-mut mt-1">holdings + cash, at last price</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">${Math.round(deskCost).toLocaleString("en-AU")}</div>
+          <div className="font-disp font-medium text-xl sm:text-2xl mt-1 text-ink tabular-nums">${Math.round(deskCost).toLocaleString("en-AU")}</div>
           <div className="text-xs text-mut mt-1">invested, all accounts</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
-          <div className={`font-disp font-medium text-2xl mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+          <div className={`font-disp font-medium text-xl sm:text-2xl mt-1 tabular-nums ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
             {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
           </div>
           <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
@@ -336,42 +350,23 @@ export function DashboardClient({
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Holdings</div>
-          <div className="font-disp font-medium text-2xl mt-1 text-ink">{positions.length}</div>
+          <div className="font-disp font-medium text-xl sm:text-2xl mt-1 text-ink tabular-nums">{positions.length}</div>
           <div className="text-xs text-mut mt-1">
-            {portfolio.rows.length} line{portfolio.rows.length === 1 ? "" : "s"} of P&amp;L history
+            {portfolio.rows.length} line{portfolio.rows.length === 1 ? "" : "s"}{" "}
+            of P&amp;L history
           </div>
         </div>
       </div>
 
-      {/* Main Content Grid */}
-      <div className="grid lg:grid-cols-12 gap-4">
-        {/* Left Column (equities performance & positions) */}
-        <div className="lg:col-span-7 space-y-4">
-          {/* Performance Line Chart Card */}
-          <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
-            <div className="flex justify-between items-center text-xs">
-              <b className="text-ink text-sm font-semibold">Portfolio performance</b>
-              <span className="text-mut font-semibold">1Y &middot; time-weighted</span>
-            </div>
-
-            <div className="w-full relative h-32.5 pt-2">
-              <svg className="w-full h-full block" viewBox="0 0 600 120" preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="gd" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0" stopColor="#36bb91" stopOpacity="0.18" />
-                    <stop offset="1" stopColor="#36bb91" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                {/* Reference line */}
-                <path d="M0 100 L100 95 L200 90 L300 82 L400 74 L500 66 L600 60" fill="none" stroke="#c7c2b5" strokeWidth="1.4" strokeDasharray="4 5" />
-                {/* Area under curve */}
-                <path d="M0 96 L50 90 L100 93 L150 78 L200 82 L250 64 L300 70 L350 50 L400 56 L450 35 L500 41 L550 22 L600 16 V120 H0Z" fill="url(#gd)" />
-                {/* Chart Line */}
-                <path d="M0 96 L50 90 L100 93 L150 78 L200 82 L250 64 L300 70 L350 50 L400 56 L450 35 L500 41 L550 22 L600 16" fill="none" stroke="#36bb91" strokeWidth="2.5" />
-              </svg>
-            </div>
-          </div>
-
+      {/*
+        Two columns on a desk, one on a phone — and the order below is the order
+        it stacks in, which is why the holdings come first: on a phone a client
+        scrolls until they see their own money, and anything above that is in
+        the way.
+      */}
+      <div className="grid lg:grid-cols-12 gap-4 items-start">
+        {/* What they hold. */}
+        <div className="lg:col-span-8 space-y-4">
           {/* Positions Preview Table */}
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
             <div className="flex justify-between items-center px-4.5 py-4 border-b border-line bg-white">
@@ -395,7 +390,7 @@ export function DashboardClient({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f0ede5] font-medium">
-                  {positions.slice(0, 5).map(p => {
+                  {positions.slice(0, 8).map(p => {
                     const pl = posPL(p);
                     const plp = pl / posCost(p) * 100;
                     const val = posValue(p);
@@ -430,8 +425,8 @@ export function DashboardClient({
           </div>
         </div>
 
-        {/* Right Column (Live deal & widgets) */}
-        <div className="lg:col-span-5 space-y-4">
+        {/* What needs attention. */}
+        <div className="lg:col-span-4 space-y-4">
           {/* Live Placement Card */}
           {liveDeal && (
             <div className="card bg-green-bg/50 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-3.5 bg-linear-to-b from-green-bg/60 to-card/70">
@@ -466,33 +461,6 @@ export function DashboardClient({
               </button>
             </div>
           )}
-
-          {/* Ask Vitti AI Card */}
-          <div className="card bg-linear-to-b from-green-bg to-card/80 border border-green rounded-[14px] p-4.5 shadow-shadow space-y-2">
-            <div className="flex justify-between items-center text-xs">
-              <b className="text-ink text-sm font-semibold">Ask Vitti</b>
-              <span className="bg-green text-[#08130e] text-[9px] font-bold px-1.5 py-0.5 rounded-[5px]">AI</span>
-            </div>
-            {/* Was: "You're up $X today; the MRD book closes at 4:00pm and one
-                option needs attention." — a fabricated day move, a hardcoded
-                ticker and an invented alert, in quotes, under an AI badge. A
-                prompt is honest; a fake answer is not. */}
-            <p className="text-[13px] text-mut italic leading-normal">
-              Ask about your holdings, your options and their exercise windows, or
-              anything in your book.
-            </p>
-            {/* Disabled for the same reason the nav entry is: the page behind
-                it is still being built. A card that describes the feature and
-                then refuses to open it is honest; one that opens a half-written
-                page is not. */}
-            <button
-              disabled
-              title="Vitti Intelligence is coming soon"
-              className="w-full btn bg-navy/45 text-white/80 font-semibold py-2 rounded-lg text-xs cursor-not-allowed select-none mt-2"
-            >
-              Vitti Intelligence &middot; coming soon
-            </button>
-          </div>
 
           {/* Markets indices. Absent entirely when there are no indices: the
               card is a 2×2 grid of numbers, and with none it drew a heading, a
@@ -561,40 +529,70 @@ export function DashboardClient({
             </div>
           </div>
 
-          {/* Upcoming dates checklist */}
-          <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
-            <b className="text-ink text-sm font-semibold block">Upcoming dates</b>
-            <table className="w-full border-collapse text-xs text-ink leading-relaxed">
-              <tbody className="divide-y divide-[#f0ede5]">
-                <tr>
-                  <td className="py-2 pr-2">
-                    TTM allocation
-                    <div className="text-mut text-[10.5px]">if your bid is filled</div>
-                  </td>
-                  <td className="py-2 text-right font-mono font-semibold">
-                    {new Date(2026, 5, 12).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="py-2 pr-2">
-                    NVX options expiry
-                    <div className="text-mut text-[10.5px]">listed &middot; in the money</div>
-                  </td>
-                  <td className="py-2 text-right font-mono font-semibold text-gain">
-                    {new Date(2026, 5, 17).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="py-2 pr-2">
-                    BHP dividend
-                  </td>
-                  <td className="py-2 text-right font-mono font-semibold">
-                    {new Date(2026, 5, 25).toLocaleDateString("en-AU", { day: "numeric", month: "short" })}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+          {/* ── Exercise windows ──────────────────────────────────────
+              What replaced "Upcoming dates", which listed a TTM allocation, an
+              NVX options expiry and a BHP dividend on fixed dates — three
+              events, hardcoded, for companies this client may not hold.
+
+              These are the client's own option holdings, soonest first. It is
+              also the thing this product says it is for: "the options whose
+              exercise windows you cannot afford to miss". */}
+          {expiring.length > 0 && (
+            <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+              <div className="px-4.5 py-3.5 border-b border-line flex items-center justify-between gap-2">
+                <b className="text-ink text-sm font-semibold">Exercise windows</b>
+                <button
+                  onClick={() => router.push("/portal/client/options")}
+                  className="text-green-d font-semibold text-xs underline underline-offset-2 hover:opacity-85 cursor-pointer"
+                >
+                  All options
+                </button>
+              </div>
+              <div className="divide-y divide-line">
+                {expiring.map((o) => {
+                  const itm = isITM(o);
+                  // Under a fortnight is where an unlisted grant stops being a
+                  // date in the future and becomes something to act on.
+                  const urgent = o.dte <= 14;
+                  return (
+                    <div key={o.id} className="px-4.5 py-3 flex items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className="code font-mono text-[12px] bg-paper-2 rounded-[5px] px-1.5 py-0.5 font-bold text-ink">
+                            {o.code}
+                          </span>
+                          {itm && (
+                            <span className="text-[9.5px] font-bold uppercase tracking-wider text-green-d bg-green-bg rounded-full px-1.5 py-0.5">
+                              In the money
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-mut mt-1 truncate">
+                          {o.qty.toLocaleString("en-AU")} @ ${o.strike.toFixed(2)}
+                          {o.listed ? "" : " · unlisted"}
+                        </div>
+                      </div>
+                      <div className="text-right flex-none">
+                        <div
+                          className={`font-mono text-[13px] font-semibold ${
+                            urgent ? "text-loss-d" : "text-ink"
+                          }`}
+                        >
+                          {o.dte}d
+                        </div>
+                        <div className="text-[10.5px] text-mut font-mono">
+                          {new Date(o.expiryDate).toLocaleDateString("en-AU", {
+                            day: "numeric",
+                            month: "short",
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
