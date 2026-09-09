@@ -42,7 +42,6 @@ export function DashboardClient({
   placements,
   alerts,
   signals,
-  noteTime,
   portfolio,
   filings,
   sectorByTicker,
@@ -57,7 +56,6 @@ export function DashboardClient({
   placements: PlacementRow[];
   alerts: AlertRow[];
   signals: Record<string, SignalRow>;
-  noteTime: string;
   /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
   portfolio: ClientPortfolio;
   /** Today's price-sensitive ASX filings, already narrowed to this book. */
@@ -274,54 +272,6 @@ export function DashboardClient({
 
       {/* Marquee Ticker */}
       {renderTicker()}
-
-      {/* Morning Briefing Card */}
-      <div className="card bg-navy text-[#dfe2ee] border-navy p-5 rounded-[14px] shadow-shadow space-y-3 relative overflow-hidden">
-        <div
-          className="absolute inset-0 pointer-events-none opacity-5"
-          style={{
-            backgroundImage: `radial-gradient(ellipse 60% 60% at 50% 0%, #36bb91, transparent)`
-          }}
-        />
-        <div className="flex justify-between items-center text-xs">
-          <b className="text-white text-sm font-semibold">Your morning briefing</b>
-          {/* "auto-generated" went with the sentence that needed the caveat.
-              What is left is the client's own cost, P&L and holding count, read
-              out of the stored figures — a statement of fact, and the word only
-              made a reader wonder which parts to trust.
-
-              The time is dropped too when there is no note behind it: the
-              fallback is an em dash, and a lone dash up here reads as a rule
-              somebody drew by accident. */}
-          {noteTime && noteTime !== "—" && (
-            <span className="text-mut-d font-medium">{noteTime}</span>
-          )}
-        </div>
-        {/* Only figures that exist.
-            This paragraph used to read "…up $X (+1.2%) today. Materials led —
-            PLS +2.1%, BHP +0.8% — while energy lagged. China stimulus and a
-            cooler US CPI are supportive for your resources and financials
-            exposure." Every specific in it was hardcoded, under a heading that
-            says "auto-generated" — so it read as commentary written from this
-            client's own book. It was not. The day move came from
-            `dailyPL`'s fixed factors and the market colour from nowhere at all.
-
-            What is left is what the app can stand behind. Real market commentary
-            belongs here eventually; inventing it in the meantime is worse than
-            leaving the space plain. */}
-        <p className="text-sm leading-relaxed text-slate-300">
-          Your book is{" "}
-          <b className="text-white font-bold">${Math.round(pv).toLocaleString("en-AU")}</b>{" "}
-          across {positions.length} holding{positions.length === 1 ? "" : "s"} and cash, with a
-          lifetime profit and loss of{" "}
-          <b className={`font-bold ${deskPnl >= 0 ? "text-[#5cc79a]" : "text-[#e0795b]"}`}>
-            {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
-          </b>{" "}
-          on ${Math.round(deskCost).toLocaleString("en-AU")} invested.{" "}
-          Figures come from Vitti&apos;s own reconciliation of your contract notes
-          and holdings.
-        </p>
-      </div>
 
       {/* Dynamic Suggestions */}
       {suggestions.length > 0 && (
