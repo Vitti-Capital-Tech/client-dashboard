@@ -609,3 +609,32 @@ body.is-mobile {
 @media (prefers-reduced-motion: reduce) {
   .toast-in { animation: none; }
 }
+
+/* ---------------------------------------------------------------------------
+ * The mobile tab bar, and the room the page has to leave for it
+ * ---------------------------------------------------------------------------
+ * `env(safe-area-inset-bottom)` is the strip the browser reserves for the OS —
+ * the home indicator on every iPhone since the X, the gesture bar on most
+ * Android. The bar used to sit flush to the bottom of the viewport with 14px of
+ * padding, so the labels were drawn underneath that furniture and read as
+ * missing. The inset is 0 where there is none, so this costs nothing elsewhere.
+ *
+ * As classes rather than inline styles, because the desktop rule has to be able
+ * to win: an inline `padding-bottom` beats `md:pb-0` and would leave a phone's
+ * worth of space under every desktop page.
+ */
+.tabbar {
+  padding-bottom: calc(0.875rem + env(safe-area-inset-bottom));
+}
+
+.clears-tabbar {
+  /* The bar is ~66px plus the inset; this was 64px, so the last row of every
+     page sat under it. */
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 768px) {
+  .clears-tabbar {
+    padding-bottom: 0;
+  }
+}

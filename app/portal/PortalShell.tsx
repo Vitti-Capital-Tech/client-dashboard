@@ -572,7 +572,7 @@ export function PortalShell({
   );
 
   const bottomnav = (
-    <nav className="flex md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-line px-1.5 pb-3.5 pt-2 z-20">
+    <nav className="tabbar flex md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-line px-1.5 pt-2 z-20">
       {items.filter(it => it.tab).map(it => {
         const isActive = pathname === it.path;
         const badgeVal = getBadgeValue(it.badge);
@@ -829,9 +829,9 @@ export function PortalShell({
   return (
     <div className="app-shell flex min-h-screen bg-paper font-body select-none">
       {sidebar}
-      <div className="main flex-1 flex flex-col min-w-0 relative pb-16 md:pb-0">
+      <div className="main clears-tabbar flex-1 flex flex-col min-w-0 relative overflow-x-clip">
         {topbar}
-        <main className="content p-6 flex-1 max-w-300 w-full mx-auto pb-10">
+        <main className="content p-4 sm:p-6 flex-1 max-w-300 w-full mx-auto pb-10">
           {children}
         </main>
         {bottomnav}
