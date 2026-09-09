@@ -166,7 +166,15 @@ export const THEME_PRESETS: ThemeConfig[] = [
   },
 ];
 
-export const DEFAULT_THEME = THEME_PRESETS[0];
+/**
+ * What everyone gets before they choose anything: Midnight Slate.
+ *
+ * Found by id rather than taken as `THEME_PRESETS[0]`, so reordering the
+ * presets — which is a presentation decision about the Customise page — cannot
+ * silently change what the whole product looks like on first load.
+ */
+export const DEFAULT_THEME =
+  THEME_PRESETS.find((t) => t.id === "midnight") ?? THEME_PRESETS[0];
 
 /** Helper: Parse a hex color string (#rgb, #rrggbb) into { r, g, b } */
 export function hexToRgb(hex: string): { r: number; g: number; b: number } {

@@ -24,6 +24,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<ThemeConfig>(DEFAULT_THEME);
   const [mounted, setMounted] = useState(false);
 
+  const applyThemeToDom = (cfg: ThemeConfig) => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    const vars = generateThemeCssVariables(cfg);
+    const lum = getLuminance(cfg.bgColor);
+    const isDark = lum < 0.5;
+
+    // Set active theme attributes
+    root.setAttribute("data-theme-active", "true");
+    root.setAttribute("data-theme-mode", isDark ? "dark" : "light");
+
+    for (const [k, v] of Object.entries(vars)) {
+      root.style.setProperty(k, v);
+    }
+  };
+
   // On mount: read from localStorage if present
   useEffect(() => {
     try {
@@ -41,22 +57,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setMounted(true);
   }, []);
 
-  const applyThemeToDom = (cfg: ThemeConfig) => {
-    if (typeof document === "undefined") return;
-    const root = document.documentElement;
-    const vars = generateThemeCssVariables(cfg);
-    const lum = getLuminance(cfg.bgColor);
-    const isDark = lum < 0.5;
-
-    // Set active theme attributes
-    root.setAttribute("data-theme-active", "true");
-    root.setAttribute("data-theme-mode", isDark ? "dark" : "light");
-
-    for (const [k, v] of Object.entries(vars)) {
-      root.style.setProperty(k, v);
-    }
-  };
-
   // Sync theme changes to DOM and localStorage after mount
   useEffect(() => {
     if (!mounted) return;
@@ -72,29 +72,30 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(updater);
   };
 
+  /**
+   * Back to Midnight Slate — not back to the bare stylesheet.
+   *
+   * This used to strip `data-theme-active` and every inline custom property,
+   * which was right while the default WAS the stylesheet's own light palette.
+   * Now that the default is a theme like any other, stripping it would drop the
+   * person onto the old light look, which nothing else in the product shows
+   * them. The saved choice is still cleared, so the next load starts from the
+   * default rather than from what they were resetting away from.
+   */
   const resetTheme = () => {
     setThemeState(DEFAULT_THEME);
-    if (typeof document !== "undefined") {
-      const root = document.documentElement;
-      root.removeAttribute("data-theme-active");
-      root.removeAttribute("data-theme-mode");
-      // Clean up inline properties
-      const vars = generateThemeCssVariables(DEFAULT_THEME);
-      for (const k of Object.keys(vars)) {
-        root.style.removeProperty(k);
-      }
-      try {
-        localStorage.removeItem(STORAGE_KEY);
-      } catch {
-        // Ignore
-      }
+    applyThemeToDom(DEFAULT_THEME);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Ignore
     }
   };
 
 
   const isDark = getLuminance(theme.bgColor) < 0.5;
   const isCustomized =
-    theme.id !== "classic" ||
+    theme.id !== DEFAULT_THEME.id ||
     theme.bgColor !== DEFAULT_THEME.bgColor ||
     theme.textColor !== DEFAULT_THEME.textColor ||
     theme.accentColor !== DEFAULT_THEME.accentColor ||
@@ -131,10 +132,15 @@ export function ThemeInitScript() {
   const scriptContent = `
     (function() {
       try {
+        // The default is inlined so that somebody who has never chosen a theme
+        // still gets one on the FIRST paint. Without it this returned early,
+        // the page rendered the stylesheet's light palette, and the dark
+        // default only arrived after hydration — a white flash on every first
+        // load, which is precisely what this script exists to prevent.
+        var DEFAULTS = ${JSON.stringify(DEFAULT_THEME)};
         var raw = localStorage.getItem("${STORAGE_KEY}");
-        if (!raw) return;
-        var theme = JSON.parse(raw);
-        if (!theme || !theme.bgColor || !theme.textColor) return;
+        var theme = raw ? JSON.parse(raw) : DEFAULTS;
+        if (!theme || !theme.bgColor || !theme.textColor) theme = DEFAULTS;
         var root = document.documentElement;
         function hexToRgb(h) {
           var c = h.replace('#', '');

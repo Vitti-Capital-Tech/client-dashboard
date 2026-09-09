@@ -9,7 +9,6 @@ import {
   getContrastRatio,
   isContrastAdequate,
   THEME_PRESETS,
-  DEFAULT_THEME,
 } from "./theme-config.ts";
 
 test("hexToRgb parses 6-digit and 3-digit hex strings accurately", () => {
@@ -55,7 +54,12 @@ test("adjustLightness shifts color brightness in expected direction", () => {
 });
 
 test("generateThemeCssVariables outputs all necessary CSS tokens for light theme", () => {
-  const vars = generateThemeCssVariables(DEFAULT_THEME);
+  // Named explicitly rather than reached through DEFAULT_THEME. This test is
+  // about what a LIGHT theme produces, and it only passed on the default while
+  // the default happened to be light; the day Midnight Slate became the default
+  // it started asserting dark tokens against light expectations.
+  const classic = THEME_PRESETS.find((p) => p.id === "classic")!;
+  const vars = generateThemeCssVariables(classic);
 
   assert(vars["--theme-bg"]);
   assert(vars["--theme-card"]);
