@@ -11,6 +11,7 @@ import {
   Clock,
   type LucideIcon,
 } from "lucide-react";
+import type { AsxAnnouncement } from "@/lib/asx/news";
 import type {
   Position,
   OptionRow,
@@ -42,6 +43,7 @@ export function DashboardClient({
   signals,
   noteTime,
   portfolio,
+  filings,
 }: {
   clientId: string;
   clientName: string;
@@ -55,6 +57,8 @@ export function DashboardClient({
   noteTime: string;
   /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
   portfolio: ClientPortfolio;
+  /** Today's price-sensitive ASX filings, already narrowed to this book. */
+  filings: AsxAnnouncement[];
 }) {
   const router = useRouter();
   const [countdown, setCountdown] = useState("closes 4:00:00");
@@ -275,10 +279,16 @@ export function DashboardClient({
         <div className="flex justify-between items-center text-xs">
           <b className="text-white text-sm font-semibold">Your morning briefing</b>
           {/* "auto-generated" went with the sentence that needed the caveat.
-              What is left is the client's own cost, P&L and holding count,
-              read out of the stored figures — a statement of fact, and the
-              word only made a reader wonder which parts to trust. */}
-          <span className="text-mut-d font-medium">{noteTime}</span>
+              What is left is the client's own cost, P&L and holding count, read
+              out of the stored figures — a statement of fact, and the word only
+              made a reader wonder which parts to trust.
+
+              The time is dropped too when there is no note behind it: the
+              fallback is an em dash, and a lone dash up here reads as a rule
+              somebody drew by accident. */}
+          {noteTime && noteTime !== "—" && (
+            <span className="text-mut-d font-medium">{noteTime}</span>
+          )}
         </div>
         {/* Only figures that exist.
             This paragraph used to read "…up $X (+1.2%) today. Materials led —
@@ -396,7 +406,11 @@ export function DashboardClient({
                 <tbody className="divide-y divide-[#f0ede5] font-medium">
                   {positions.slice(0, 8).map(p => {
                     const pl = posPL(p);
-                    const plp = pl / posCost(p) * 100;
+                    const cost = posCost(p);
+                    // A grant that cost nothing has no percentage return: the
+                    // division is Infinity, and 0/0 is NaN. Both used to reach
+                    // the screen as "+Infinity%".
+                    const plp = cost > 0 && Number.isFinite(pl / cost) ? (pl / cost) * 100 : null;
                     const val = posValue(p);
                     const isUp = pl >= 0;
                     return (
@@ -409,7 +423,9 @@ export function DashboardClient({
                         <td className="px-4 py-3 text-right font-mono text-[13px]">${Math.round(val).toLocaleString("en-AU")}</td>
                         <td className={`px-4 py-3 text-right font-mono text-[13px] ${isUp ? "text-gain" : "text-loss-d"}`}>
                           ${Math.round(pl).toLocaleString("en-AU")}
-                          <div className="text-[10.5px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
+                          <div className="text-[10.5px]">
+                            {plp === null ? "granted" : `${isUp ? "+" : ""}${plp.toFixed(1)}%`}
+                          </div>
                         </td>
                         {/* Was a "Day" column reading `p.code === "PLS" ? "+2.1%" : "+0.4%"`
                             — one hardcoded move for one ticker and one for
@@ -495,6 +511,55 @@ export function DashboardClient({
               })}
             </div>
           </div>
+          )}
+
+          {/* ── Today's filings, from companies in this book ─────────────
+              The count is the point: three lines and a way through to Insights,
+              rather than a second copy of that page. Absent when there are
+              none, because "0 announcements" is a row that says nothing. */}
+          {filings.length > 0 && (
+            <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
+              <div className="px-4.5 py-3.5 border-b border-line flex items-center justify-between gap-2">
+                <b className="text-ink text-sm font-semibold">Your holdings in the news</b>
+                <button
+                  onClick={() => router.push("/portal/client/insights")}
+                  className="text-green-d font-semibold text-xs underline underline-offset-2 hover:opacity-85 cursor-pointer flex-none"
+                >
+                  {filings.length} today
+                </button>
+              </div>
+              <div className="divide-y divide-line">
+                {filings.slice(0, 3).map((a) => (
+                  <a
+                    key={a.id}
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block px-4.5 py-3 hover:bg-paper-2/60 transition-colors group"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="code font-mono text-[11px] px-1 rounded-sm font-bold text-green-d">
+                        {a.code}
+                      </span>
+                      <span
+                        className={`pill text-[9.5px] font-bold rounded-full px-2 py-0.5 ${
+                          a.sentiment === "bullish"
+                            ? "bg-green-bg text-green-d"
+                            : a.sentiment === "bearish"
+                            ? "bg-loss-bg text-loss-d"
+                            : "bg-paper-2 text-mut"
+                        }`}
+                      >
+                        {a.sentiment}
+                      </span>
+                    </div>
+                    <div className="text-[12.5px] font-semibold text-ink leading-snug mt-1 group-hover:underline">
+                      {a.headline}
+                    </div>
+                  </a>
+                ))}
+              </div>
+            </div>
           )}
 
           {/* Alerts preview */}

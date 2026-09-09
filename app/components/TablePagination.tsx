@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 
 export interface TablePaginationProps {
   totalItems: number;
@@ -59,45 +59,44 @@ export function TablePagination({
         </span>
 
         {onPageSizeChange && totalItems > Math.min(...pageSizeOptions) && (
-          <div className="flex items-center gap-1.5 sm:pl-2.5 sm:border-l sm:border-line">
-            <span className="text-[11px] text-mut font-medium">Rows:</span>
-            <div className="inline-flex items-center bg-paper-2 rounded-[7px] p-0.5 border border-line/60">
-              {pageSizeOptions.map((opt) => {
-                const isSelected = !isAll && pageSize === opt;
-                return (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => {
-                      onPageSizeChange(opt);
-                      onPageChange(1);
-                    }}
-                    className={`px-2 py-0.5 rounded-[5px] text-[11px] font-mono font-semibold transition-all cursor-pointer ${
-                      isSelected
-                        ? "bg-white text-ink shadow-shadow"
-                        : "text-mut hover:text-ink hover:bg-white/40"
-                    }`}
-                  >
-                    {opt}
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() => {
-                  onPageSizeChange(999999);
+          <label className="flex items-center gap-1.5 sm:pl-2.5 sm:border-l sm:border-line">
+            <span className="text-[11px] text-mut font-medium">Rows</span>
+            {/*
+              A dropdown rather than four pills. The segmented control spent a
+              third of a phone's width on options nobody changes twice, and the
+              chosen one was told apart from the rest by a slightly lighter
+              background — which is a weak signal at 11px. A select shows the
+              current value as text and hides the alternatives until they are
+              wanted, which is the right ratio for a setting like this.
+
+              Kept narrow deliberately: a `<select>` is as wide as its widest
+              option, and that is how the account switcher pushed half the
+              header off a phone. "All" is the widest thing in here.
+            */}
+            <span className="relative inline-flex items-center">
+              <select
+                value={isAll ? "all" : String(pageSize)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onPageSizeChange(v === "all" ? 999999 : Number(v));
                   onPageChange(1);
                 }}
-                className={`px-2 py-0.5 rounded-[5px] text-[11px] font-medium transition-all cursor-pointer ${
-                  isAll
-                    ? "bg-white text-ink shadow-shadow font-semibold"
-                    : "text-mut hover:text-ink hover:bg-white/40"
-                }`}
+                aria-label="Rows per page"
+                className="appearance-none cursor-pointer bg-paper-2 border border-line/60 rounded-[7px] pl-2.5 pr-6 py-1 text-[11px] font-mono font-semibold text-ink hover:border-line focus:outline-none focus:border-green"
               >
-                All
-              </button>
-            </div>
-          </div>
+                {pageSizeOptions.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+                <option value="all">All</option>
+              </select>
+              <ChevronDown
+                aria-hidden
+                className="w-3 h-3 stroke-[2] text-mut absolute right-2 pointer-events-none"
+              />
+            </span>
+          </label>
         )}
       </div>
 

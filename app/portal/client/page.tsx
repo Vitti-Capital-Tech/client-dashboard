@@ -14,6 +14,7 @@ import {
   getSignals,
   type SignalRow,
 } from "@/lib/data/queries";
+import { getAsxMarketSensitive } from "@/lib/asx/news";
 import { DashboardClient } from "./DashboardClient";
 
 // Server Component: resolves the active client + account from the session,
@@ -33,6 +34,7 @@ export default async function ClientDashboardPage() {
     notes,
     alerts,
     signals,
+    asxFeed,
   ] = await Promise.all([
     getClient(clientId),
     getAccount(accountId),
@@ -43,6 +45,9 @@ export default async function ClientDashboardPage() {
     getResearchNotes(),
     getAlerts(clientId),
     getSignals(),
+    // Cached upstream for five minutes and shared with Market and Insights,
+    // so this is a map lookup on most requests rather than a fetch.
+    getAsxMarketSensitive(),
   ]);
 
   // The desk's own stored figures, so the headline numbers here, on the
@@ -87,6 +92,7 @@ export default async function ClientDashboardPage() {
       alerts={alerts}
       signals={signalMap}
       noteTime={noteTime}
+      filings={asxFeed.items.filter((a) => positions.some((p) => p.parent === a.code || p.code === a.code))}
       portfolio={clientPortfolio(storedPnl, overrides)}
     />
   );

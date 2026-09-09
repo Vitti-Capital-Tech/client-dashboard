@@ -37,6 +37,7 @@ import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 import { Wordmark } from "@/app/components/Wordmark";
 import { isComingSoon } from "@/lib/nav/coming-soon";
 import { LeavingOverlay } from "@/app/components/LeavingOverlay";
+import { PortalSkeleton } from "@/app/components/PortalSkeleton";
 import { LEAVING_MS, SIGN_OUT_TIPS } from "@/lib/ui/leaving";
 
 type AccountOption = { id: string; label: string; accountType: string };
@@ -144,6 +145,53 @@ export function PortalShell({
   /** The send-off, up from the moment it is confirmed until /login. */
   const [isLeaving, setIsLeaving] = useState(false);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
+
+  /**
+   * Where a nav click is going, while it is still going there.
+   *
+   * ── Why the shell drives this and not `loading.tsx` ──────────────────────
+   * `app/portal/loading.tsx` is the right mechanism and it is still there, but
+   * it only renders once the router has COMMITTED the navigation, and the
+   * router will not commit until it has the new route's payload — unless that
+   * payload was prefetched. Every portal route is dynamic and reads Supabase
+   * behind a session, so in practice the click produced nothing for most of a
+   * second and then swapped the whole screen at once. The nav item span the
+   * whole wait with a spinner, which answered "did it register" and not "am I
+   * going anywhere".
+   *
+   * So the click is intercepted: React marks the navigation as a transition,
+   * `pending` is true for its duration, and this component renders the
+   * destination's title and the skeleton immediately. The tab highlights, the
+   * page changes, and the content fills in behind it — which is the order it
+   * should have happened in.
+   *
+   * `<Link>` is kept underneath, so prefetching still happens on viewport as
+   * normal and a modified click (new tab, middle-click) is left alone.
+   */
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [isNavigating, startNavigation] = useTransition();
+
+  const go = (e: React.MouseEvent, path: string) => {
+    // Anything but a plain left click belongs to the browser: new tab, new
+    // window, download, context menu.
+    if (e.defaultPrevented) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (path === pathname) return;
+
+    e.preventDefault();
+    setPendingPath(path);
+    startNavigation(() => router.push(path));
+  };
+
+  /**
+   * The route being shown, or the one being navigated to.
+   *
+   * Derived rather than cleared in an effect: `pendingPath` only means anything
+   * while the transition is running, so once it is not, the value is ignored
+   * instead of being reset — a render thrown away to record that a render had
+   * happened. The next click overwrites it.
+   */
+  const shownPath = isNavigating && pendingPath ? pendingPath : pathname;
 
   // The profile menu under the avatar.
   const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -335,7 +383,7 @@ export function PortalShell({
 
       <nav className="flex-1 space-y-0.5">
         {items.map((it) => {
-          const isActive = pathname === it.path;
+          const isActive = shownPath === it.path;
           const badgeVal = getBadgeValue(it.badge);
           const body = (
             <>
@@ -355,6 +403,7 @@ export function PortalShell({
             <Link
               key={it.k}
               href={it.path}
+              onClick={(e) => go(e, it.path)}
               className={`group flex items-center gap-2.75 w-full text-left font-medium text-[13.5px] px-3 py-2.5 rounded-[9px] cursor-pointer transition-colors ${
                 isActive
                   ? "bg-navy-3 text-white"
@@ -647,7 +696,7 @@ export function PortalShell({
   const bottomnav = (
     <nav className="tabbar flex md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-line px-1.5 pt-2 z-20">
       {items.filter(it => it.tab).map(it => {
-        const isActive = pathname === it.path;
+        const isActive = shownPath === it.path;
         const badgeVal = getBadgeValue(it.badge);
         return (
           // A Link and not a button: `router.push` cannot prefetch, so every tap
@@ -655,6 +704,7 @@ export function PortalShell({
           <Link
             key={it.k}
             href={it.path}
+            onClick={(e) => go(e, it.path)}
             className={`group flex-1 flex flex-col items-center gap-0.75 text-[9.5px] font-semibold relative cursor-pointer ${
               isActive ? "text-green-d" : "text-mut hover:text-ink"
             }`}
@@ -759,13 +809,16 @@ export function PortalShell({
           </div>
           <div className="space-y-1">
             {items.filter(it => !it.tab).map(it => {
-              const isActive = pathname === it.path;
+              const isActive = shownPath === it.path;
               const badgeVal = getBadgeValue(it.badge);
               return (
                 <Link
                   key={it.k}
                   href={it.path}
-                  onClick={() => setIsMoreOpen(false)}
+                  onClick={(e) => {
+                    setIsMoreOpen(false);
+                    go(e, it.path);
+                  }}
                   className={`group flex items-center gap-3 w-full text-left py-3.5 px-3 rounded-[10px] text-sm font-medium transition-colors hover:bg-paper-2 ${
                     isActive ? "text-green-d bg-paper-2" : "text-ink"
                   }`}
@@ -905,7 +958,7 @@ export function PortalShell({
       <div className="main clears-tabbar flex-1 flex flex-col min-w-0 relative overflow-x-clip">
         {topbar}
         <main className="content p-4 sm:p-6 flex-1 max-w-300 w-full mx-auto pb-10">
-          {children}
+          {isNavigating ? <PortalSkeleton /> : children}
         </main>
         {bottomnav}
       </div>

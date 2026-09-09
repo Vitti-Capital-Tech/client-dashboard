@@ -2477,7 +2477,14 @@ export function PositionsClient({
               <div className="flex justify-between py-2 text-xs">
                 <span className="text-mut font-semibold">Unrealised P&amp;L</span>
                 <b className={`font-mono font-semibold ${posPL(selectedStock) >= 0 ? "text-gain" : "text-loss-d"}`}>
-                  {posPL(selectedStock) >= 0 ? "+" : ""}${Math.round(posPL(selectedStock)).toLocaleString("en-AU")} ({(posPL(selectedStock) / posCost(selectedStock) * 100).toFixed(1)}%)
+                  {posPL(selectedStock) >= 0 ? "+" : ""}${Math.round(posPL(selectedStock)).toLocaleString("en-AU")}
+                  {/* The same zero-cost trap this file's own header describes,
+                      in the one place it was left unguarded: a free grant makes
+                      this Infinity, and 0/0 makes it NaN. */}
+                  {posCost(selectedStock) > 0 &&
+                  Number.isFinite(posPL(selectedStock) / posCost(selectedStock))
+                    ? ` (${((posPL(selectedStock) / posCost(selectedStock)) * 100).toFixed(1)}%)`
+                    : " (granted)"}
                 </b>
               </div>
               {advice && (
