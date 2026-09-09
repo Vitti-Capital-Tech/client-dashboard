@@ -54,6 +54,7 @@ import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import { PnlRow } from "@/app/components/PnlRow";
 import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { TablePagination } from "@/app/components/TablePagination";
+import { TransactionsTable } from "./TransactionsTable";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 const qty0 = (n: number) => (n ? Math.round(n).toLocaleString("en-AU") : "—");
@@ -264,7 +265,7 @@ export function PositionsClient({
   commentary: Record<string, SecurityCommentaryRow>;
 }) {
   const [tab, setTab] = useState<
-    "holdings" | "historical" | "options" | "analytics"
+    "holdings" | "historical" | "options" | "analytics" | "transactions"
   >("holdings");
   const [selectedHolding, setSelectedHolding] = useState<string | null>(null);
 
@@ -2166,6 +2167,7 @@ export function PositionsClient({
               { id: "historical", label: "Historical P&L" },
               { id: "options", label: "Options" },
               { id: "analytics", label: "Analytics" },
+              { id: "transactions", label: "Transactions" },
             ] as const
           ).map((t) => (
             <button
@@ -2255,6 +2257,11 @@ export function PositionsClient({
       {/* Render selected Tab content */}
       {tab === "analytics" ? (
         renderAnalytics()
+      ) : tab === "transactions" ? (
+        /* The ledger unpooled — see TransactionsTable for why Historical P&L
+           cannot serve this purpose. Scoped by the same account filter as
+           every other tab. */
+        <TransactionsTable trades={visibleTrades} accountLabel={scopeLabel} />
       ) : tab === "historical" ? (
         renderHistoricalPnl()
       ) : tab === "options" ? (

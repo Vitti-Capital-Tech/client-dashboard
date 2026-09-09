@@ -32,6 +32,29 @@ const QTY = "#,##0";
 
 export const XLSX_FILLS = { FILL_OPEN, FILL_CLOSED, FILL_UNKNOWN, FILL_TOTAL, INK_FLAG };
 
+/**
+ * One contract note, as the broker confirmed it.
+ *
+ * Declared here rather than imported from the DAL because this module is also
+ * exercised by the plain-Node test runner, which cannot load `server-only`.
+ * Structurally a `TradeRow` minus the identifiers the sheet does not need.
+ */
+export type TradeLedgerRow = {
+  tradeDate: string;
+  code: string;
+  name: string;
+  side: string;
+  units: number;
+  avgPrice: number;
+  consideration: number;
+  brokerage: number;
+  otherCharges: number;
+  gst: number;
+  value: number;
+  cnote: string;
+  status: string;
+};
+
 export async function buildPnlSummaryWorkbook(
   rows: PnlSummaryRow[],
   title: string,
@@ -141,4 +164,82 @@ export async function buildPnlSummaryWorkbook(
   titleRow.font = { size: 9, color: { argb: "FF6E7180" } };
 
   return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+/**
+ * The trade ledger as a real `.xlsx` — one row per contract note.
+ *
+ * Separate from the P&L summary workbook on purpose. That one answers "what did
+ * these holdings make" and pools a company's trades to do it; this is the
+ * unpooled record a client hands an accountant, in the shape the confirmations
+ * arrived in.
+ *
+ * Consideration, fees and net are three columns rather than one, because a
+ * return needs the proceeds and the deductible costs separately and the split
+ * is otherwise only in the PDFs.
+ *
+ * Cancelled and reversed notes are included with their status. A ledger that
+ * silently drops rows cannot be reconciled against the client's own paperwork,
+ * which is the one thing it has to be good for.
+ */
+export async function buildTradeLedgerWorkbook(
+  rows: TradeLedgerRow[],
+  title: string,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Vitti Capital";
+
+  const ws = wb.addWorksheet("Transactions", {
+    views: [{ state: "frozen", ySplit: 1 }],
+  });
+
+  ws.columns = [
+    { header: "Trade date", key: "tradeDate", width: 13 },
+    { header: "Code", key: "code", width: 12 },
+    { header: "Company", key: "name", width: 34 },
+    { header: "Side", key: "side", width: 8 },
+    { header: "Units", key: "units", width: 14, style: { numFmt: QTY } },
+    { header: "Price", key: "avgPrice", width: 12, style: { numFmt: "#,##0.0000" } },
+    { header: "Consideration", key: "consideration", width: 15, style: { numFmt: MONEY } },
+    { header: "Brokerage", key: "brokerage", width: 12, style: { numFmt: MONEY } },
+    { header: "Other charges", key: "otherCharges", width: 14, style: { numFmt: MONEY } },
+    { header: "GST", key: "gst", width: 10, style: { numFmt: MONEY } },
+    { header: "Net value", key: "value", width: 14, style: { numFmt: MONEY } },
+    { header: "Contract note", key: "cnote", width: 16 },
+    { header: "Status", key: "status", width: 12 },
+  ];
+
+  const header = ws.getRow(1);
+  header.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  header.fill = { type: "pattern", pattern: "solid", fgColor: { argb: FILL_HEADER } };
+  header.alignment = { vertical: "middle" };
+
+  for (const r of rows) {
+    const row = ws.addRow({
+      tradeDate: r.tradeDate,
+      code: r.code,
+      name: r.name,
+      side: r.side,
+      units: r.units,
+      avgPrice: r.avgPrice,
+      consideration: r.consideration,
+      brokerage: r.brokerage,
+      otherCharges: r.otherCharges,
+      gst: r.gst,
+      value: r.value,
+      cnote: r.cnote,
+      status: r.status,
+    });
+
+    // A note that did not settle is marked rather than dropped — see the header.
+    if (r.status !== "SETTLED") {
+      row.font = { color: { argb: INK_FLAG } };
+    }
+  }
+
+  ws.autoFilter = { from: "A1", to: { row: 1, column: ws.columns.length } };
+  ws.getCell("A1").note = title;
+
+  const out = await wb.xlsx.writeBuffer();
+  return Buffer.from(out);
 }

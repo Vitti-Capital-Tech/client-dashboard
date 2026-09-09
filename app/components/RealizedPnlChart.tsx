@@ -27,10 +27,22 @@ import type { RealizedPeriod } from "@/lib/data/compute";
 
 const W = 760;
 const H = 300;
-const PAD_L = 64; // y-axis labels
+/*
+ * The gutters, sized for the labels that go in them.
+ *
+ * `PAD_L` holds a y-axis figure right-aligned 8px off the axis. At 64 a
+ * six-character label — "−$12.5k" — started at x=0 and touched the edge of the
+ * viewBox; 76 gives it room to grow one more character before that happens
+ * again.
+ *
+ * `PAD_B` carries two stacked lines, the month and the sale count. The second
+ * sat at H − PAD_B + 28 against a 46px gutter, which put its descenders past
+ * the bottom of the box.
+ */
+const PAD_L = 76;
 const PAD_R = 16;
 const PAD_T = 16;
-const PAD_B = 46; // month labels + the sale count beneath them
+const PAD_B = 56;
 const MAX_BAR = 44; // ≤ 24px is for thin bar charts; a monthly column reads wider
 const R = 4; // rounded data-end
 
@@ -100,7 +112,10 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
   const total = periods.reduce((s, p) => s + p.realizedPl, 0);
   const anyUncosted = periods.some((p) => p.hasUncosted);
   // A crowded axis is worse than a sparse one — thin the labels, never the bars.
-  const labelEvery = slot < 44 ? 2 : 1;
+  // Two thresholds rather than one: at twelve months a single skip is enough,
+  // at two years of them it is not, and the labels overlapped rather than
+  // thinning further.
+  const labelEvery = slot < 34 ? 3 : slot < 56 ? 2 : 1;
 
   return (
     <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
@@ -187,7 +202,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                 y={scaleY(t) + 3.5}
                 textAnchor="end"
                 className="font-mono"
-                fontSize="9.5"
+                fontSize="12"
                 fill="var(--color-mut-d)"
               >
                 {t === 0 ? "0" : compact(t)}
@@ -244,10 +259,10 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                 {i % labelEvery === 0 && (
                   <text
                     x={PAD_L + i * slot + slot / 2}
-                    y={H - PAD_B + 16}
+                    y={H - PAD_B + 20}
                     textAnchor="middle"
                     className="font-mono"
-                    fontSize="10"
+                    fontSize="12"
                     fill={isHover ? "var(--color-ink)" : "var(--color-mut)"}
                   >
                     {p.label}
@@ -256,9 +271,9 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                 {!empty && i % labelEvery === 0 && (
                   <text
                     x={PAD_L + i * slot + slot / 2}
-                    y={H - PAD_B + 28}
+                    y={H - PAD_B + 35}
                     textAnchor="middle"
-                    fontSize="9"
+                    fontSize="10.5"
                     fill="var(--color-mut-d)"
                   >
                     {p.saleCount} sale{p.saleCount === 1 ? "" : "s"}

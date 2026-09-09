@@ -3,6 +3,7 @@
 import { getSession } from "@/lib/session";
 import { buildPnlSummaryWorkbook } from "@/lib/export/xlsx";
 import type { PnlSummaryRow } from "@/lib/export/order-history";
+import type { TradeLedgerRow } from "@/lib/export/xlsx";
 
 /**
  * Spreadsheet generation, kept on the server on purpose.
@@ -26,5 +27,24 @@ export async function buildPnlSummaryXlsx(
 
   const buffer = await buildPnlSummaryWorkbook(rows, title);
   // Base64 because a server action returns JSON — it cannot stream a file body.
+  return buffer.toString("base64");
+}
+
+/**
+ * The trade ledger as a spreadsheet — the file a client hands an accountant.
+ *
+ * Same bargain as the P&L export above: ExcelJS stays on the server, and the
+ * caller passes the rows it is displaying so the file matches the screen
+ * including its filters. It reads nothing and only formats what it was given.
+ */
+export async function buildTradeLedgerXlsx(
+  rows: TradeLedgerRow[],
+  title: string,
+): Promise<string> {
+  const session = await getSession();
+  if (!session) throw new Error("Not authenticated");
+
+  const { buildTradeLedgerWorkbook } = await import("@/lib/export/xlsx");
+  const buffer = await buildTradeLedgerWorkbook(rows, title);
   return buffer.toString("base64");
 }
