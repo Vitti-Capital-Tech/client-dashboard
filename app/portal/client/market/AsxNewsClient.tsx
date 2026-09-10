@@ -29,42 +29,42 @@ function annTime(iso: string): string {
 }
 
 /**
- * What the "price going in" figures are, for a reader who has not been told.
+ * The (i) beside a filing's price figures, and what it opens.
  *
- * The measurements read as plain sentences but the concepts behind them do not:
- * the date misleads anyone who assumes they are live, and the fact that they
- * are computed rather than written by the AI is the whole reason to trust them.
+ * Shows what THAT filing's numbers mean, not what the feature is. It began as
+ * a generic explanation — what a 20-day average is, why the date is yesterday's
+ * — which is worth reading exactly once. The useful question is what this
+ * particular stock was doing going into this particular announcement, so the
+ * sentences are composed upstream per filing and named for the ticker.
+ *
+ * Opens on hover and on keyboard focus, so it is not mouse-only.
  */
-const CONTEXT_HELP = [
-  "What the share price was doing in the days BEFORE this announcement came out.",
-  "Most ASX news lands before the market opens, so there is no price for today yet — these are measured up to the previous close, which is the date shown.",
-  "They are calculated from exchange data, not written by the AI. You can check any of them against a chart.",
-  "They describe what the market was already doing. They are not a prediction and not advice.",
-];
-
-/** The (i) and its panel. Opens on hover and on keyboard focus. */
-export function ContextHelp() {
+function ContextHelp({ reading }: { reading: string[] }) {
+  if (!reading.length) return null;
   return (
     <span className="relative inline-flex group/info align-middle">
-      <button type="button" aria-label="What does this mean?"
+      <button type="button" aria-label="What do these figures mean?"
         className="w-3.5 h-3.5 rounded-full bg-line-2 text-mut text-[9px] font-bold
                    leading-none flex items-center justify-center cursor-help outline-none">
         i
       </button>
       <span role="tooltip"
-        className="pointer-events-none absolute left-0 top-5 z-50 w-[min(20rem,72vw)] p-3
-                   rounded-[12px] bg-white border border-line shadow-shadow-lg
+        className="pointer-events-none absolute left-0 top-5 z-50 w-[min(21rem,72vw)] p-3
+                   rounded-[12px] bg-white border border-line shadow-shadow-lg text-left
                    opacity-0 invisible transition-opacity duration-150
                    group-hover/info:opacity-100 group-hover/info:visible
                    group-focus-within/info:opacity-100 group-focus-within/info:visible">
         <span className="block font-mono text-[10px] tracking-wider uppercase text-mut mb-1.5">
-          Price going in
+          What this means
         </span>
-        {CONTEXT_HELP.map((line) => (
-          <span key={line} className="block text-[11px] leading-relaxed text-ink/80 mb-1.5">
+        {reading.map((line) => (
+          <span key={line} className="block text-[11px] leading-relaxed text-ink/80 mb-1.5 normal-case">
             {line}
           </span>
         ))}
+        <span className="block text-[10px] leading-relaxed text-mut-d pt-1 border-t border-line normal-case">
+          Measured from exchange data, not written by the AI.
+        </span>
       </span>
     </span>
   );
@@ -108,6 +108,7 @@ function ContextChips({ ctx }: { ctx: NonNullable<AsxAnnouncement["context"]> })
       {/* Not decoration: these are pre-announcement figures, and a reader who
           takes them as live would draw the wrong conclusion. */}
       <span className="font-mono text-[9.5px] text-mut-d">to {ctx.asOf}</span>
+      <ContextHelp reading={ctx.reading} />
       {/* A footnote, not a chip. As a chip this was a full sentence wrapping
           over two lines, and it displaced the observations it qualifies. */}
       {ctx.caveat && (
@@ -208,9 +209,8 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <div className="font-mono text-[11px] tracking-wider uppercase text-mut flex items-center gap-1.5">
+        <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
           ASX market-sensitive announcements
-          <ContextHelp />
         </div>
         {asAt && (
           <div className="font-mono text-[10.5px] text-mut-d shrink-0">as at {asAt}</div>

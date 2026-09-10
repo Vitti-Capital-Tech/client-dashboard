@@ -32,6 +32,12 @@ export type AsxPriceContext = {
   /** Observations only, authored upstream so phrasing cannot drift. */
   notes: string[];
   /**
+   * What THIS filing's figures mean, in sentences — the help tooltip's content.
+   * Authored upstream and specific to the announcement, replacing a generic
+   * explanation of the feature that was read once and useless afterwards.
+   */
+  reading: string[];
+  /**
    * Why the observations may be worth little, or null. Not one of the notes:
    * it qualifies them, and rendering it as a chip put a two-line sentence in a
    * pill and pushed the real signals out.
@@ -134,6 +140,7 @@ function toContext(v: unknown): AsxPriceContext | null {
   return {
     asOf: str(c.as_of),
     notes,
+    reading: strArray(c.reading),
     liquid: c.liquid === true,
     caveat: typeof c.caveat === "string" && c.caveat ? c.caveat : null,
     turnoverAud: num(c.avg_turnover_aud),
