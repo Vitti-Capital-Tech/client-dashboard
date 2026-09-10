@@ -443,6 +443,16 @@ export function replayLedger(lines: LedgerLine[]): {
       }
     }
 
+    // One rule, whichever branch got here. An option that drew NO cost and was
+    // never bought for value is a free grant — that is true of an empty parcel,
+    // a part-covered one, and a parcel recovered at zero value by
+    // `offLedgerBuyLines`. Deciding it per-branch left the third case reading as
+    // a plain sale while the other two said "free grant", for the same thing.
+    if (!freeGrant && costOut === 0 && isOptionCode(t.code) && !boughtForValue.has(pk)) {
+      freeGrant = true;
+      noCostBasis = false;
+    }
+
     r.costOfSold += costOut;
     r.realizedPl += t.value - costOut;
 

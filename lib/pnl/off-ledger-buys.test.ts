@@ -34,6 +34,9 @@ function stored(over: Partial<StoredBuySide> = {}): StoredBuySide {
 function trade(over: Partial<LedgerBuySide> = {}): LedgerBuySide {
   return {
     parent: "HYD",
+    // Defaults to the parent, which is what an ordinary's own line looks like.
+    // Pass `code` for an option, whose pool must stay separate.
+    code: "HYD",
     side: "SELL",
     tradeDate: "2026-05-14",
     units: 1_280_953,
@@ -64,8 +67,8 @@ test("off-ledger: a book the ledger already accounts for recovers nothing", () =
   const lines = offLedgerBuyLines(
     [stored({ ticker: "VR1", parentTicker: "VR1", buyQty: 130_400, buyPrice: 8_696 })],
     [
-      trade({ parent: "VR1", side: "BUY", tradeDate: "2025-11-03", units: 130_400, value: 8_696 }),
-      trade({ parent: "VR1", side: "SELL", tradeDate: "2026-04-02", units: 130_400, value: 3_020 }),
+      trade({ parent: "VR1", code: "VR1", side: "BUY", tradeDate: "2025-11-03", units: 130_400, value: 8_696 }),
+      trade({ parent: "VR1", code: "VR1", side: "SELL", tradeDate: "2026-04-02", units: 130_400, value: 3_020 }),
     ],
   );
   assert.deepEqual(lines, []);
@@ -84,8 +87,8 @@ test("off-ledger: a SHORT buy side is capped at what the ledger cannot cost", ()
   const lines = offLedgerBuyLines(
     [stored({ ticker: "X2M", parentTicker: "X2M", buyQty: 1_000_000, buyPrice: 9_000 })],
     [
-      trade({ parent: "X2M", side: "BUY", tradeDate: "2025-06-01", units: 400_000, value: 4_000 }),
-      trade({ parent: "X2M", side: "SELL", tradeDate: "2026-03-01", units: 900_000, value: 12_000 }),
+      trade({ parent: "X2M", code: "X2M", side: "BUY", tradeDate: "2025-06-01", units: 400_000, value: 4_000 }),
+      trade({ parent: "X2M", code: "X2M", side: "SELL", tradeDate: "2026-03-01", units: 900_000, value: 12_000 }),
     ],
   );
 
@@ -97,14 +100,21 @@ test("off-ledger: a SHORT buy side is capped at what the ledger cannot cost", ()
 test("off-ledger: a traded free grant recovers UNITS at ZERO value", () => {
   // The distinction the whole flag turns on: a free option's cost is zero, not
   // unknown. Recovering the units at no value is what lets the replay say so.
+  //
+  // The sale is the OPTION's own (`code: "HYDOC"`). It used to be written as a
+  // sale of the ordinary, which passed for the wrong reason: the grant's units
+  // were recovered into the SHARES' pool, which is the dilution this file now
+  // guards against.
   const lines = offLedgerBuyLines(
     [stored({ ticker: "HYDOC", parentTicker: "HYD", buyQty: 600_000, buyPrice: 0 })],
-    [trade({ parent: "HYD", side: "SELL", units: 600_000, value: 600 })],
+    [trade({ parent: "HYD", code: "HYDOC", side: "SELL", units: 600_000, value: 600 })],
   );
 
   assert.equal(lines.length, 1);
   assert.equal(lines[0].units, 600_000);
   assert.equal(lines[0].value, 0);
+  assert.equal(lines[0].code, "HYDOC", "on its OWN parcel, not the shares'");
+  assert.equal(lines[0].parent, "HYD", "and still rolled up under the ordinary");
 });
 
 test("off-ledger: an UNTRADED option row does not dilute the shares' cost", () => {
@@ -140,30 +150,54 @@ test("off-ledger: a fully-accounted parent is left alone even with an option row
       stored({ ticker: "WHK-UO", parentTicker: "WHK", buyQty: 357_143, buyPrice: 0 }),
     ],
     [
-      trade({ parent: "WHK", side: "BUY", tradeDate: "2025-07-01", units: 357_143, value: 5_000 }),
-      trade({ parent: "WHK", side: "SELL", tradeDate: "2026-01-20", units: 357_143, value: 6_200 }),
+      trade({ parent: "WHK", code: "WHK", side: "BUY", tradeDate: "2025-07-01", units: 357_143, value: 5_000 }),
+      trade({ parent: "WHK", code: "WHK", side: "SELL", tradeDate: "2026-01-20", units: 357_143, value: 6_200 }),
     ],
   );
   assert.deepEqual(lines, []);
 });
 
-test("off-ledger: rolled up per PARENT, matching how the replay pools", () => {
-  // `HYD` and `HYDOC` share one pool in the replay on purpose, so a placement
-  // bought as one code and sold as another nets out. The difference has to be
-  // taken at the same grain or the option row's units sit unexplained inside a
-  // pool that already absorbed them. Here BOTH legs trade, so both are short
-  // and both are recovered.
+test("off-ledger: an option's units never dilute the shares' cost", () => {
+  /**
+   * This test used to assert the opposite, and the opposite was a money bug.
+   *
+   * It read "`HYD` and `HYDOC` share one pool in the replay on purpose" and
+   * expected ONE recovered line of 1,600,000 units at $4,000 — the shares' real
+   * cost spread across the grant's free units as well as their own, halving the
+   * unit cost. The replay no longer pools them (an option keeps its own parcel,
+   * see `replayLedger`), and this recovery must not either.
+   *
+   * It reached a client: our export showed `IXR` bought for $2,500 against the
+   * broker's own closed-trades report and the tracker, which both say $5,000,
+   * and the same halving on `M2M` and `14D`. Found by comparing the two files.
+   */
   const lines = offLedgerBuyLines(
     [
       stored({ ticker: "HYD", parentTicker: "HYD", buyQty: 800_000, buyPrice: 4_000 }),
       stored({ ticker: "HYDOC", parentTicker: "HYD", buyQty: 800_000, buyPrice: 0 }),
     ],
-    [trade({ parent: "HYD", side: "SELL", units: 1_600_000, value: 8_459 })],
+    [
+      trade({ parent: "HYD", code: "HYD", side: "SELL", units: 800_000, value: 4_230 }),
+      trade({ parent: "HYD", code: "HYDOC", side: "SELL", units: 800_000, value: 4_229 }),
+    ],
   );
 
-  assert.equal(lines.length, 1);
-  assert.equal(lines[0].units, 1_600_000);
-  assert.equal(lines[0].value, 4_000);
+  const shares = lines.find((l) => l.code === "HYD")!;
+  const grant = lines.find((l) => l.code === "HYDOC")!;
+
+  assert.equal(lines.length, 2, "one parcel each, not one pool for both");
+
+  // The whole point: the shares' $4,000 lands on the shares' 800,000 units.
+  assert.equal(shares.units, 800_000);
+  assert.equal(shares.value, 4_000);
+
+  // And the grant recovers its units at nothing, which is what it cost.
+  assert.equal(grant.units, 800_000);
+  assert.equal(grant.value, 0);
+
+  // Both still roll up under the ordinary — `realized_pnl` is parent grain.
+  assert.equal(shares.parent, "HYD");
+  assert.equal(grant.parent, "HYD");
 });
 
 test("off-ledger: a ledger holding MORE than the stored row subtracts nothing", () => {
@@ -173,7 +207,7 @@ test("off-ledger: a ledger holding MORE than the stored row subtracts nothing", 
   const lines = offLedgerBuyLines(
     [stored({ ticker: "14D", parentTicker: "14D", buyQty: 0, buyPrice: 0 })],
     [
-      trade({ parent: "14D", side: "BUY", tradeDate: "2025-09-10", units: 209_524, value: 8_800 }),
+      trade({ parent: "14D", code: "14D", side: "BUY", tradeDate: "2025-09-10", units: 209_524, value: 8_800 }),
       trade({ parent: "14D", side: "SELL", units: 628_572, value: 21_120 }),
     ],
   );
@@ -255,6 +289,7 @@ test("replay: with it, the cost is the one the stored rows already agreed on", (
     [
       {
         parent: "HYD",
+        code: "HYD",
         side: "SELL",
         tradeDate: "2026-05-14",
         units: 1_280_953,
@@ -279,7 +314,7 @@ test("replay: the recovered parcel is placed before the sale it has to cost", ()
   // that date. Same-day is the case that would break: cost has to be in the
   // pool before the sale, not after it.
   const sameDay: LedgerBuySide[] = [
-    { parent: "IXR", side: "SELL", tradeDate: "2026-02-10", units: 625_000, value: 9_780, status: "SETTLED" },
+    { parent: "IXR", code: "IXR", side: "SELL", tradeDate: "2026-02-10", units: 625_000, value: 9_780, status: "SETTLED" },
   ];
   const recovered = offLedgerBuyLines(
     [{ ticker: "IXR", parentTicker: "IXR", buyQty: 625_000, buyPrice: 10_000 }],
@@ -311,16 +346,19 @@ test("replay: the recovered parcel is placed before the sale it has to cost", ()
 });
 
 test("replay: a free grant's sale is costed at zero, and not warned about", () => {
+  // The sale is the OPTION's own. Written as a sale of the ordinary — which it
+  // was — the stored option row and the traded code sat in different pools and
+  // nothing was recovered at all.
   const recovered = offLedgerBuyLines(
     [{ ticker: "HYDOC", parentTicker: "HYD", buyQty: 600_000, buyPrice: 0 }],
-    [{ parent: "HYD", side: "SELL", tradeDate: "2026-06-01", units: 600_000, value: 600, status: "SETTLED" }],
+    [{ parent: "HYD", code: "HYDOC", side: "SELL", tradeDate: "2026-06-01", units: 600_000, value: 600, status: "SETTLED" }],
   );
 
   const { sells } = replayLedger([
     {
       scope: "",
       parent: "HYD",
-      code: "HYD",
+      code: "HYDOC",
       cnote: "2600001",
       side: "SELL",
       tradeDate: "2026-06-01",
@@ -336,6 +374,8 @@ test("replay: a free grant's sale is costed at zero, and not warned about", () =
   assert.equal(sells[0].realizedPl, 600);
   // The whole point: nothing was paid, so nothing is MISSING.
   assert.equal(sells[0].noCostBasis, false);
+  // And it says which of the two it is, rather than staying silent.
+  assert.equal(sells[0].freeGrant, true);
 });
 
 test("replay: a genuinely unknown cost still warns", () => {
@@ -344,7 +384,7 @@ test("replay: a genuinely unknown cost still warns", () => {
   // keep firing, or the fix would have replaced a wrong number with a silent one.
   const recovered = offLedgerBuyLines(
     [{ ticker: "OLD", parentTicker: "OLD", buyQty: 0, buyPrice: 0 }],
-    [{ parent: "OLD", side: "SELL", tradeDate: "2024-01-15", units: 10_000, value: 5_000, status: "SETTLED" }],
+    [{ parent: "OLD", code: "OLD", side: "SELL", tradeDate: "2024-01-15", units: 10_000, value: 5_000, status: "SETTLED" }],
   );
   assert.deepEqual(recovered, []);
 

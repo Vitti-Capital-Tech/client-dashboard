@@ -1,4 +1,5 @@
 import { SETTLED, type LedgerLine } from "../import/trades.ts";
+import { isOptionCode } from "../import/normalize.ts";
 
 /**
  * The buy side the contract-note ledger does not carry — recovered so the
@@ -62,6 +63,8 @@ export type StoredBuySide = {
 /** The ledger fields this needs. */
 export type LedgerBuySide = {
   parent: string;
+  /** The instrument as traded, which decides the pool — see `poolKey`. */
+  code: string;
   side: "BUY" | "SELL";
   tradeDate: string;
   units: number;
@@ -90,14 +93,43 @@ export function offLedgerBuyLines(
   stored: StoredBuySide[],
   ledger: LedgerBuySide[],
 ): LedgerLine[] {
-  // ── What the stored rows say the buy side is, per parent ──────────────────
+  /**
+    * The recovery pools per INSTRUMENT for options and per parent otherwise —
+    * the same split `replayLedger`'s FIFO uses, and for the same reason.
+    *
+    * ── What pooling options with the ordinary did ─────────────────────────────
+    * `getParentTicker("IXRO")` is `IXR`, so a traded free grant's stored row —
+    * units at ZERO value, by the firm's treatment — was added to the shares'
+    * own buy side. On a real account: `IXR 312,500 @ $5,000` plus
+    * `IXRO 312,500 @ $0` recovered as **625,000 units at $5,000**, which halves
+    * the unit cost. The 312,500-share sale then drew $2,500 instead of $5,000
+    * and its realised P&L came out $2,500 too high.
+    *
+    * The cap below was written for the UNTRADED grant and handles it: an option
+    * nobody sold adds nothing to `sellUnits`, so the shortfall stays small and
+    * its units are capped away. A grant that WAS sold adds to both sides
+    * equally, the cap never bites, and the dilution goes through — which is the
+    * case this split closes. Found by comparing our export against the broker's
+    * own closed-trades report, where every affected buy side was exactly half.
+    *
+    * `AVRXX` and friends still pool with the ordinary: a deferred-settlement
+    * line IS the ordinary and its cost must carry across.
+    */
+  const poolKey = (code: string, parent: string) =>
+    isOptionCode(code) ? code : parent;
+
+  // ── What the stored rows say the buy side is, per pool ────────────────────
   const storedByParent = new Map<string, { units: number; value: number }>();
+  // The real parent of each pool, for the line's own `parent` field.
+  const parentOfPool = new Map<string, string>();
   for (const r of stored) {
     const parent = r.parentTicker ?? r.ticker;
-    const acc = storedByParent.get(parent) ?? { units: 0, value: 0 };
+    const key = poolKey(r.ticker, parent);
+    parentOfPool.set(key, parent);
+    const acc = storedByParent.get(key) ?? { units: 0, value: 0 };
     acc.units += Number(r.buyQty) || 0;
     acc.value += Number(r.buyPrice) || 0;
-    storedByParent.set(parent, acc);
+    storedByParent.set(key, acc);
   }
 
   // ── What the ledger itself accounts for, per parent ───────────────────────
@@ -112,18 +144,21 @@ export function offLedgerBuyLines(
   for (const t of ledger) {
     if (t.status !== SETTLED) continue;
 
-    const seen = earliestByParent.get(t.parent);
-    if (!seen || t.tradeDate < seen) earliestByParent.set(t.parent, t.tradeDate);
+    const key = poolKey(t.code, t.parent);
+    parentOfPool.set(key, t.parent);
+
+    const seen = earliestByParent.get(key);
+    if (!seen || t.tradeDate < seen) earliestByParent.set(key, t.tradeDate);
 
     const acc =
-      ledgerByParent.get(t.parent) ?? { buyUnits: 0, buyValue: 0, sellUnits: 0 };
+      ledgerByParent.get(key) ?? { buyUnits: 0, buyValue: 0, sellUnits: 0 };
     if (t.side === "BUY") {
       acc.buyUnits += Number(t.units) || 0;
       acc.buyValue += Number(t.value) || 0;
     } else {
       acc.sellUnits += Number(t.units) || 0;
     }
-    ledgerByParent.set(t.parent, acc);
+    ledgerByParent.set(key, acc);
   }
 
   // `code` is the parent for these: a recovered purchase is a DIFFERENCE
@@ -132,9 +167,10 @@ export function offLedgerBuyLines(
   // parent-keyed anyway.
   const lines: LedgerLine[] = [];
 
-  for (const [parent, storedBuy] of storedByParent) {
+  for (const [key, storedBuy] of storedByParent) {
+    const parent = parentOfPool.get(key) ?? key;
     const onLedger =
-      ledgerByParent.get(parent) ?? { buyUnits: 0, buyValue: 0, sellUnits: 0 };
+      ledgerByParent.get(key) ?? { buyUnits: 0, buyValue: 0, sellUnits: 0 };
 
     // Floored at zero in both columns, independently. A negative difference
     // means the ledger records MORE than the stored row does — a row whose buy
@@ -195,18 +231,18 @@ export function offLedgerBuyLines(
      * pools every purchase that precedes a sale, so only the buy/sell boundary
      * can change an answer.
      */
-    const tradeDate = earliestByParent.get(parent);
-    if (!tradeDate) continue; // No trades on this parent, so no sale to cost.
+    const tradeDate = earliestByParent.get(key);
+    if (!tradeDate) continue; // No trades on this pool, so no sale to cost.
 
     lines.push({
       // Pooled by parent alone, exactly as `attributeSells` does.
       scope: "",
       parent,
-      // The parent, deliberately: a recovered purchase is a DIFFERENCE against
-      // the stored row computed per parent, so there is no instrument it can
-      // honestly claim to be. It only supplies cost to the FIFO, which is
-      // parent-keyed anyway.
-      code: parent,
+      // The POOL this difference was computed for, so the FIFO's `parcelKey`
+      // opens the parcel on the same instrument the units and value came from.
+      // Emitting the parent here is what let an option's recovered units land
+      // in the shares' parcel and halve their cost.
+      code: key,
       cnote: "",
       side: "BUY",
       tradeDate,
