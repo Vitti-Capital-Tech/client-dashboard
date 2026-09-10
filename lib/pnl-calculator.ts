@@ -9,7 +9,7 @@ import {
 // broker importer. Two copies of that rule would drift, and the two subsystems
 // disagreeing about what a security IS is exactly the kind of split that shows
 // up as a P&L discrepancy nobody can explain.
-import { isExchangeQualified } from "./import/normalize.ts";
+import { isExchangeQualified, isOptionCode } from "./import/normalize.ts";
 // The SAME rule the badge uses. Deciding "is this at or above the strike" twice
 // is how a row comes to be labelled ATM on screen and priced as out-of-the-money
 // underneath — see the note at `useIntrinsic`.
@@ -353,21 +353,13 @@ export function getParentTicker(rawCode: string): string {
 }
 
 /**
- * Checks if a raw security code represents an Option (length > 3 and suffix after 3-letter base contains 'O', e.g. EOSO, ACWO, ZEUOB)
+ * Re-exported, not redefined.
+ *
+ * It moved to `import/normalize.ts` so the ledger reducer can key its cost
+ * attribution on it without importing this module, which pulls in ExcelJS and
+ * SheetJS. Every existing caller keeps importing it from here.
  */
-export function isOptionCode(rawCode: string): boolean {
-  const code = String(rawCode || "").trim().toUpperCase();
-  // The "an O after the third character" tell is an ASX convention and means
-  // nothing on a foreign ticker — it would read `SONO:NAS` as an option on
-  // `SON`. Today's three US holdings happen to have no O in that position, so
-  // this guards a bug that has not fired yet rather than one that has.
-  if (isExchangeQualified(code)) return false;
-  if (code.length > 3) {
-    const suffix = code.slice(3);
-    return suffix.includes("O");
-  }
-  return false;
-}
+export { isOptionCode } from "./import/normalize.ts";
 
 /**
  * The row a raw security code belongs to in the P&L table.

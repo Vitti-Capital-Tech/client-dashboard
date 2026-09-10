@@ -6,6 +6,7 @@ import {
 import {
   clean,
   cleanOrNull,
+  isOptionCode,
   money,
   num,
   numOrNull,
@@ -198,6 +199,17 @@ export type LedgerLine = {
   /** Rollup scope — the account. Pass "" when the caller already filtered. */
   scope: string;
   parent: string;
+  /**
+   * The instrument AS TRADED — `EOSXX`, `FRSOB` — where `parent` is `EOS`/`FRS`.
+   *
+   * Carried alongside `parent`, not instead of it. The FIFO is keyed on the
+   * parent and stays that way: a deferred-settlement line (`AVRXX`) IS the
+   * ordinary and its cost must carry across. But which INSTRUMENT a sale closed
+   * is a different fact, and it was being thrown away here — which is why the
+   * client's dated P&L table folded `OD6O`'s option sale into `OD6`'s row and
+   * lost every option line the all-time table shows. See `realizedBetween`.
+   */
+  code: string;
   cnote: string;
   side: TradeSide;
   tradeDate: string;
@@ -215,6 +227,8 @@ export type LedgerLine = {
 export type SellAttribution = {
   scope: string;
   parent: string;
+  /** The instrument this sale closed, where `parent` is its rollup code. */
+  code: string;
   cnote: string;
   tradeDate: string;
   units: number;
@@ -223,6 +237,22 @@ export type SellAttribution = {
   realizedPl: number;
   /** This sale drew on no cost basis, so its "profit" is really just proceeds. */
   noCostBasis: boolean;
+  /**
+   * A FREE GRANT sold: an option the ledger never saw bought.
+   *
+   * Distinct from `noCostBasis`, and the difference is the difference between
+   * "we do not know what this cost" and "this cost nothing". The firm's own
+   * treatment puts a placement's whole cost on the shares and none on the
+   * attaching options — 106 of 108 option positions in the database carry
+   * `avg_cost = 0` — so zero here is the answer, not a gap in the data.
+   *
+   * Both were `noCostBasis` until 10 Sep 2026, which was survivable only
+   * because options were quietly borrowing the ordinary's parcel and never
+   * reached the branch. Once they stopped, 187 free-grant sales worth $255,139
+   * started reporting themselves as *cost base not on file* — a red flag asking
+   * a human to find something that was never missing.
+   */
+  freeGrant?: boolean;
 };
 
 /**
@@ -247,13 +277,60 @@ export function replayLedger(lines: LedgerLine[]): {
 
   const byKey = new Map<string, PnlRollup>();
   const sells: SellAttribution[] = [];
-  // Per-key set of distinct per-unit costs making up the CURRENTLY open parcel.
-  // Weighted-average cost is exact whenever a sell closes the whole parcel, and
-  // also whenever the parcel came from a single price — it is only ever an
-  // approximation when a sell partially closes a parcel assembled at two or
-  // more different prices. Tracking this keeps `hasPartial` meaningful instead
-  // of flagging every position that was sold down in two goes.
-  const openCosts = new Map<string, Set<number>>();
+
+  /**
+   * The open parcel, held PER INSTRUMENT while the rollup stays per parent.
+   *
+   * ── Why these are two different keys ────────────────────────────────────────
+   * The rollup is reported at parent grain and `realized_pnl` is keyed that way,
+   * so that does not move. But the FIFO was keyed there too, which meant a sale
+   * of `FRSOB` drew its cost from parcels of `FRS` — an option costed against
+   * ordinary shares. `pnl_summary` states the rule this breaks: "an option line
+   * is a position in its own right (EOS and EOSO have different prices)".
+   *
+   * So an OPTION gets its own parcel and everything else pools by parent. That
+   * distinction is the whole point of splitting on `isOptionCode` rather than on
+   * the code: `AVRXX` is a deferred-settlement line that IS the ordinary, and
+   * its cost must carry across. Measured over the live ledger, keying on the
+   * code outright would have moved 714 of 1,371 parcels (48% of trades); the
+   * option-only split moves 145 (13.8%), and those are the ones that were wrong.
+   *
+   * `costs` is the set of distinct per-unit prices making up the parcel.
+   * Weighted-average cost is exact when a sell closes the whole parcel, and also
+   * when the parcel came from one price — it is only an approximation when a
+   * sell partly closes a parcel assembled at two or more prices, which is what
+   * `hasPartial` records.
+   */
+  type OpenParcel = { units: number; cost: number; costs: Set<number> };
+  const parcels = new Map<string, OpenParcel>();
+  const parcelKey = (t: LedgerLine) =>
+    `${t.scope}::${isOptionCode(t.code) ? t.code : t.parent}`;
+
+  /**
+   * Parcel keys the ledger ever records a buy WITH MONEY IN IT against.
+   *
+   * A pre-pass, because the walk is chronological and this is a fact about the
+   * whole file: an option sold in March with its purchase in June is not a
+   * grant, it is a short, and only looking at every line can tell.
+   *
+   * ── Why "for value" and not merely "ever bought" ────────────────────────────
+   * A grant is not always absent from the ledger — it is often present at ZERO.
+   * The real EPMO rows are the case: each account has an `EPMO BUY` at
+   * `value = 0` for roughly HALF the units later sold (23,810 bought against
+   * 47,620 sold, and the same ratio on four other accounts). So the parcel
+   * exists, is exhausted mid-sale, and the excess looked like missing data —
+   * except the units that ARE recorded cost nothing, so the missing ones would
+   * have cost nothing either. The P&L is identical; only the warning was wrong.
+   *
+   * Keying on a POSITIVE-value buy separates the two properly: an option the
+   * client actually paid for and whose history is short is still unknown and
+   * still flagged, while a grant booked at zero — however many of its units the
+   * broker got round to recording — is free.
+   */
+  const boughtForValue = new Set<string>();
+  for (const t of settled) {
+    if (t.side === "BUY" && t.value > 0) boughtForValue.add(parcelKey(t));
+  }
 
   for (const t of settled) {
     const key = `${t.scope}::${t.parent}`;
@@ -284,20 +361,24 @@ export function replayLedger(lines: LedgerLine[]): {
     r.lastTrade = t.tradeDate;
     r.fees += t.fees;
 
-    let costs = openCosts.get(key);
-    if (!costs) {
-      costs = new Set<number>();
-      openCosts.set(key, costs);
+    const pk = parcelKey(t);
+    let p = parcels.get(pk);
+    if (!p) {
+      p = { units: 0, cost: 0, costs: new Set<number>() };
+      parcels.set(pk, p);
     }
 
     if (t.side === "BUY") {
       r.unitsBought += t.units;
       r.costTotal += t.value;
+      // The parent's reported open parcel is the sum of its instruments'.
       r.openUnits += t.units;
       r.openCost += t.value;
+      p.units += t.units;
+      p.cost += t.value;
       // Round the unit cost before recording it, so float noise doesn't make
       // two economically identical parcels look like different prices.
-      costs.add(Math.round((t.value / t.units) * 1e6) / 1e6);
+      p.costs.add(Math.round((t.value / t.units) * 1e6) / 1e6);
       continue;
     }
 
@@ -307,32 +388,58 @@ export function replayLedger(lines: LedgerLine[]): {
 
     let costOut = 0;
     let noCostBasis = false;
+    let freeGrant = false;
 
-    if (r.openUnits <= 0) {
-      // Sold something the ledger never saw bought: the export starts mid
-      // history. Proceeds are real, cost basis is unknown — record zero cost
-      // and flag it rather than inventing a number.
-      r.shortHistory = true;
-      noCostBasis = true;
-    } else {
-      const closing = Math.min(t.units, r.openUnits);
-      if (closing < t.units) {
+    // Drawn from THIS INSTRUMENT's parcel, not the parent's pool.
+    if (p.units <= 0) {
+      if (isOptionCode(t.code) && !boughtForValue.has(pk)) {
+        // A free attaching option, sold. Zero cost is the FIRM'S ANSWER, not a
+        // gap: the placement's whole cost sits on the shares. Recorded as such
+        // so the row does not wear a warning about data nobody is missing, and
+        // deliberately not `shortHistory` — the export is not short of
+        // anything here.
+        freeGrant = true;
+      } else {
+        // Sold something the ledger never saw bought: the export starts mid
+        // history. Proceeds are real, cost basis is unknown — record zero cost
+        // and flag it rather than inventing a number.
         r.shortHistory = true;
-        noCostBasis = true; // part of this sale is uncosted
+        noCostBasis = true;
+      }
+    } else {
+      const closing = Math.min(t.units, p.units);
+      if (closing < t.units) {
+        // Part of this sale is uncosted — unless it is a free grant, where the
+        // units the broker did not record would have cost nothing either. See
+        // `boughtForValue`; EPMO is the live case.
+        if (isOptionCode(t.code) && !boughtForValue.has(pk)) {
+          freeGrant = true;
+        } else {
+          r.shortHistory = true;
+          noCostBasis = true;
+        }
       }
       // Approximate only if this leaves units open AND the parcel was built at
       // more than one price — otherwise WAC is the exact answer.
-      if (closing < r.openUnits && costs.size > 1) r.hasPartial = true;
+      if (closing < p.units && p.costs.size > 1) r.hasPartial = true;
 
-      costOut = (r.openCost * closing) / r.openUnits;
+      costOut = (p.cost * closing) / p.units;
+      p.units -= closing;
+      p.cost -= costOut;
       r.openUnits -= closing;
       r.openCost -= costOut;
 
       // Snap to zero once flat, so float dust never shows as a $0.00 residue.
+      // The parcel and the parent are snapped independently: one instrument
+      // going flat says nothing about the others under the same parent.
+      if (p.units <= 1e-9) {
+        p.units = 0;
+        p.cost = 0;
+        p.costs.clear();
+      }
       if (r.openUnits <= 1e-9) {
         r.openUnits = 0;
         r.openCost = 0;
-        costs.clear();
       }
     }
 
@@ -342,6 +449,7 @@ export function replayLedger(lines: LedgerLine[]): {
     sells.push({
       scope: t.scope,
       parent: t.parent,
+      code: t.code,
       cnote: t.cnote,
       tradeDate: t.tradeDate,
       units: t.units,
@@ -349,6 +457,7 @@ export function replayLedger(lines: LedgerLine[]): {
       costOfSold: money(costOut),
       realizedPl: money(t.value - costOut),
       noCostBasis,
+      ...(freeGrant ? { freeGrant: true } : {}),
     });
   }
 
@@ -375,6 +484,10 @@ export function reduceTrades(trades: ParsedTrade[]): PnlRollup[] {
     trades.map((t) => ({
       scope: t.accountRef,
       parent: t.parent,
+      // `rawSecurity` is the code as traded; `parent` is its rollup. The
+      // importers' rollup is parent-grain and does not read this, but the type
+      // requires it and a wrong value here would be worse than a redundant one.
+      code: t.rawSecurity,
       cnote: t.cnote,
       side: t.side,
       tradeDate: t.tradeDate,

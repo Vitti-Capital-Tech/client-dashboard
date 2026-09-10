@@ -23,6 +23,9 @@ function sell(
   return {
     scope: "",
     parent,
+    // Defaults to the parent, which is what a plain equity sale looks like.
+    // Pass `code` for an option, whose own line the window must keep separate.
+    code: parent,
     cnote: `${parent}-${tradeDate}`,
     tradeDate,
     units: 100,
@@ -177,4 +180,63 @@ test("monthsBack: a 31st clamps instead of rolling into the next month", () => {
     from: "2026-04-30",
     to: "2026-05-31",
   });
+});
+
+test("window: an option keeps its own row instead of folding into the ordinary", () => {
+  /**
+   * `getParentTicker("OD6O")` is `OD6`, so grouping by parent put an option's
+   * sale and the shares' sale on ONE row wearing one name. The client's
+   * all-time table is ticker grain — an option line is a position in its own
+   * right, EOS and EOSO have different prices — so picking a date range changed
+   * the table's grain under the reader and every option line vanished into an
+   * ordinary.
+   */
+  const sells = [
+    sell("OD6", "2026-03-10", 500),
+    sell("OD6", "2026-03-11", 300, { code: "OD6O" }),
+  ];
+
+  const w = realizedBetween(sells, "2026-03-01", "2026-03-31");
+  const codes = w.contributors.map((c) => c.code).sort();
+
+  assert.deepEqual(codes, ["OD6", "OD6O"], "two instruments, two rows");
+
+  // The parent is kept on each row, because a rollup still needs it.
+  assert.deepEqual(
+    w.contributors.map((c) => c.parent).sort(),
+    ["OD6", "OD6"],
+  );
+
+  // THE property that makes this a display change and not a money change: the
+  // realised total is untouched, the same dollars simply arrive split across
+  // the instruments that earned them.
+  assert.equal(w.realizedPl, 800);
+  assert.equal(
+    w.contributors.reduce((n, c) => n + c.realizedPl, 0),
+    800,
+    "the split sums back to the whole",
+  );
+});
+
+test("window: a desk correction is still spread per COMPANY, not per instrument", () => {
+  // An override is a company-level figure with no date and no instrument — the
+  // desk corrects `OD6`, not `OD6O`. Splitting the rows must not turn one
+  // correction into one per line, which would double it.
+  const sells = [
+    sell("OD6", "2026-03-10", 500),
+    sell("OD6", "2026-03-11", 500, { code: "OD6O" }),
+  ];
+
+  const w = realizedBetween(
+    sells,
+    "2026-03-01",
+    "2026-03-31",
+    new Map([["OD6", 200]]),
+  );
+
+  // 200 spread pro-rata over 200 units sold across BOTH lines, not 200 applied
+  // to each of them.
+  assert.equal(w.realizedPl, 1200);
+  assert.equal(w.contributors.length, 2);
+  for (const c of w.contributors) assert.equal(c.realizedPl, 600);
 });

@@ -305,9 +305,12 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                 </div>
                 <div className="mt-1 space-y-0.5">
                   {periods[hover].contributors.slice(0, 6).map((c) => (
-                    <div key={c.parent} className="flex justify-between gap-3">
+                    <div key={c.code} className="flex justify-between gap-3">
                       <span className="font-mono opacity-80">
-                        {c.parent}
+                        {/* The instrument, so this names the same thing the
+                            table below it does — an option sale reads as the
+                            option, not as its ordinary. */}
+                        {c.code}
                         {c.noCostBasis && " ^"}
                       </span>
                       <span

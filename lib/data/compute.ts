@@ -123,8 +123,20 @@ export type RealizedPeriod = {
   proceeds: number;
   costOfSold: number;
   saleCount: number;
-  /** Companies that contributed, largest absolute result first. */
-  contributors: { parent: string; realizedPl: number; noCostBasis: boolean }[];
+  /**
+   * Instruments that contributed, largest absolute result first.
+   *
+   * The INSTRUMENT, matching the table beside this chart. It was the parent,
+   * which folded an option into its ordinary — so a month whose result came
+   * from selling `OD6O` credited `OD6`, and the tooltip and the table named
+   * different things for the same money. `parent` rides along for a rollup.
+   */
+  contributors: {
+    code: string;
+    parent: string;
+    realizedPl: number;
+    noCostBasis: boolean;
+  }[];
   /** At least one sale in this period drew on no cost basis. */
   hasUncosted: boolean;
 };
@@ -159,6 +171,7 @@ export function attributeSells(
       (t): LedgerLine => ({
         scope: "",
         parent: t.parent,
+        code: t.code,
         cnote: t.cnote,
         side: t.side,
         tradeDate: t.tradeDate,
@@ -267,13 +280,15 @@ export function realizedByMonth(
     p.saleCount += 1;
     p.hasUncosted = p.hasUncosted || s.noCostBasis;
 
-    // Several sales of one company in a month read as one contributor.
-    const existing = p.contributors.find((c) => c.parent === s.parent);
+    // Several sales of one instrument in a month read as one contributor.
+    const code = s.code || s.parent;
+    const existing = p.contributors.find((c) => c.code === code);
     if (existing) {
       existing.realizedPl += s.realizedPl;
       existing.noCostBasis = existing.noCostBasis || s.noCostBasis;
     } else {
       p.contributors.push({
+        code,
         parent: s.parent,
         realizedPl: s.realizedPl,
         noCostBasis: s.noCostBasis,
@@ -323,6 +338,8 @@ export function realizedByMonth(
 /** What one company contributed to a window's realised P&L. */
 export type WindowContributor = {
   parent: string;
+  /** The instrument, which is what a row is labelled with. */
+  code: string;
   realizedPl: number;
   proceeds: number;
   costOfSold: number;
@@ -330,6 +347,12 @@ export type WindowContributor = {
   saleCount: number;
   /** At least one of these sales drew on no cost basis. */
   noCostBasis: boolean;
+  /**
+   * Every sale here is a free grant — an option that cost nothing by the firm's
+   * own treatment, rather than one whose cost is unknown. Kept apart from
+   * `noCostBasis` so the row reads "no cost" instead of "cost missing".
+   */
+  freeGrant: boolean;
 };
 
 export type RealizedWindow = {
@@ -383,7 +406,24 @@ export function realizedBetween(
     (s) => s.tradeDate >= lo && s.tradeDate <= hi,
   );
 
-  const byParent = new Map<string, WindowContributor>();
+  /**
+   * Keyed on the INSTRUMENT, not the parent.
+   *
+   * It was `byParent`, and that quietly folded an option into its ordinary:
+   * `getParentTicker("OD6O")` is `OD6`, so a sale of the option and a sale of
+   * the shares became one row carrying one name. The client's all-time table is
+   * ticker grain — "an option line is a position in its own right (EOS and EOSO
+   * have different prices)" — so picking a date range silently changed the
+   * table's grain under the reader, and every option line the reference view
+   * shows disappeared into an ordinary.
+   *
+   * This is a GROUPING change only. The FIFO in `replayLedger` is still keyed
+   * on the parent, so not one dollar of attributed cost moves — the same
+   * realised total simply arrives split across the instruments that earned it.
+   * Whether an option sale should draw cost from ordinary parcels at all is a
+   * separate question, and a change to the money rather than to the display.
+   */
+  const byCode = new Map<string, WindowContributor>();
   let realizedPl = 0;
   let proceeds = 0;
   let costOfSold = 0;
@@ -393,9 +433,12 @@ export function realizedBetween(
     realizedPl += s.realizedPl;
     proceeds += s.proceeds;
     costOfSold += s.costOfSold;
+    // A free grant is not uncosted; it cost nothing. Only a genuine
+    // gap should raise the window's warning.
     hasUncosted = hasUncosted || s.noCostBasis;
 
-    const existing = byParent.get(s.parent);
+    const key = s.code || s.parent;
+    const existing = byCode.get(key);
     if (existing) {
       existing.realizedPl += s.realizedPl;
       existing.proceeds += s.proceeds;
@@ -403,20 +446,25 @@ export function realizedBetween(
       existing.units += s.units;
       existing.saleCount += 1;
       existing.noCostBasis = existing.noCostBasis || s.noCostBasis;
+      existing.freeGrant = existing.freeGrant && Boolean(s.freeGrant);
     } else {
-      byParent.set(s.parent, {
+      byCode.set(key, {
         parent: s.parent,
+        code: key,
         realizedPl: s.realizedPl,
         proceeds: s.proceeds,
         costOfSold: s.costOfSold,
         units: s.units,
         saleCount: 1,
         noCostBasis: s.noCostBasis,
+        // ALL of them, not any: one costed sale among grants means the row does
+        // have a cost base and should not be described as free.
+        freeGrant: Boolean(s.freeGrant),
       });
     }
   }
 
-  const contributors = [...byParent.values()]
+  const contributors = [...byCode.values()]
     .map((c) => ({
       ...c,
       realizedPl: money(c.realizedPl),

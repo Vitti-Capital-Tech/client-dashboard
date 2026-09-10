@@ -126,6 +126,10 @@ export function offLedgerBuyLines(
     ledgerByParent.set(t.parent, acc);
   }
 
+  // `code` is the parent for these: a recovered purchase is a DIFFERENCE
+  // against the stored row, computed per parent, so there is no instrument it
+  // can honestly claim to be. It only ever supplies cost to the FIFO, which is
+  // parent-keyed anyway.
   const lines: LedgerLine[] = [];
 
   for (const [parent, storedBuy] of storedByParent) {
@@ -198,6 +202,11 @@ export function offLedgerBuyLines(
       // Pooled by parent alone, exactly as `attributeSells` does.
       scope: "",
       parent,
+      // The parent, deliberately: a recovered purchase is a DIFFERENCE against
+      // the stored row computed per parent, so there is no instrument it can
+      // honestly claim to be. It only supplies cost to the FIFO, which is
+      // parent-keyed anyway.
+      code: parent,
       cnote: "",
       side: "BUY",
       tradeDate,

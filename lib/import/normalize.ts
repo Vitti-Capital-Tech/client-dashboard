@@ -227,3 +227,24 @@ export function initialsOf(name: string): string {
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return (words[0][0] + words[words.length - 1][0]).toUpperCase();
 }
+
+/**
+ * Does this raw security code name an OPTION? `EOSO`, `ACWO`, `ZEUOB`, `FRSOB`.
+ *
+ * The tell is an `O` after the three-character base. It lives here rather than
+ * in `pnl-calculator.ts` because `trades.ts` keys its cost attribution on it and
+ * must not import that module — it carries ExcelJS and SheetJS with it. One
+ * definition, because the importer and the engine disagreeing about what a
+ * security IS surfaces as an unexplainable P&L difference.
+ *
+ * A foreign listing is never an option: the convention is ASX-only and would
+ * read `SONO:NAS` as an option on `SON`. Today's US holdings happen to have no
+ * `O` in that position, so this guards a bug that has not fired rather than one
+ * that has.
+ */
+export function isOptionCode(rawCode: string): boolean {
+  const code = String(rawCode || "").trim().toUpperCase();
+  if (isExchangeQualified(code)) return false;
+  if (code.length > 3) return code.slice(3).includes("O");
+  return false;
+}

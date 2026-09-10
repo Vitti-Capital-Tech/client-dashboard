@@ -7,6 +7,7 @@ import {
   parseTradeCsv,
   reduceTrades,
   replayLedger,
+  type LedgerLine,
   type ParsedTrade,
 } from "./trades.ts";
 import { reconcile, findDrift } from "./reconcile.ts";
@@ -262,6 +263,7 @@ function sellsOf(...rows: string[]) {
     trades.map((t) => ({
       scope: t.accountRef,
       parent: t.parent,
+      code: t.rawSecurity,
       cnote: t.cnote,
       side: t.side,
       tradeDate: t.tradeDate,
@@ -416,4 +418,145 @@ test("reduce: accounts are kept separate", () => {
     rollups.map((r) => r.accountRef),
     ["114716", "999999"],
   );
+});
+
+// ---------------------------------------------------------------------------
+// Cost is attributed per INSTRUMENT for options, per parent for everything else
+// ---------------------------------------------------------------------------
+
+const line = (
+  code: string,
+  side: "BUY" | "SELL",
+  tradeDate: string,
+  units: number,
+  value: number,
+): LedgerLine => ({
+  scope: "A1",
+  parent: code.slice(0, 3),
+  code,
+  cnote: `${code}-${tradeDate}-${side}`,
+  side,
+  tradeDate,
+  units,
+  value,
+  status: "SETTLED",
+  fees: 0,
+});
+
+test("ledger: an option sale does not draw cost from the ordinary's parcel", () => {
+  /**
+   * The FIFO was keyed on the parent, and `getParentTicker("FRSOB")` is `FRS`.
+   * So buying shares and then selling the free attaching options costed the
+   * options against the shares — the option came out showing the shares' cost
+   * and the shares kept a parcel they no longer had. `pnl_summary` states the
+   * rule: "an option line is a position in its own right (EOS and EOSO have
+   * different prices)".
+   *
+   * Measured over the live ledger this moved 9 (account, parent) groups across
+   * 8 accounts, and raised realised P&L by $38,013 — the options had been
+   * absorbing cost that was never theirs.
+   */
+  const { sells } = replayLedger([
+    line("FRS", "BUY", "2026-01-10", 1000, 5000),
+    // The grant is free and never bought, so nothing costs it.
+    line("FRSOB", "SELL", "2026-02-10", 500, 800),
+    line("FRS", "SELL", "2026-03-10", 1000, 6000),
+  ]);
+
+  const option = sells.find((s) => s.code === "FRSOB")!;
+  const shares = sells.find((s) => s.code === "FRS")!;
+
+  assert.equal(option.costOfSold, 0, "a free grant has no cost to draw on");
+  assert.equal(option.realizedPl, 800, "so its whole proceeds are the result");
+
+  // FREE GRANT, not "cost base not on file". The difference is between "this
+  // cost nothing" and "we do not know what this cost", and only the second is a
+  // warning. The firm's treatment puts a placement's whole cost on the shares,
+  // so zero here is the answer — 187 such sales were reading as missing data.
+  assert.equal(option.freeGrant, true);
+  assert.equal(option.noCostBasis, false, "nothing is missing, so nothing is flagged");
+
+  // The shares keep the parcel they actually bought — the option sale no longer
+  // eats half of it.
+  assert.equal(shares.costOfSold, 5000);
+  assert.equal(shares.realizedPl, 1000);
+  assert.equal(shares.noCostBasis, false);
+});
+
+test("ledger: a grant booked at ZERO for half its units is still free", () => {
+  /**
+   * EPMO, verbatim from the ledger. Every account carries an `EPMO BUY` at
+   * `value = 0` for roughly HALF the units later sold — 23,810 bought against
+   * 47,620 sold, and the same ratio on four other accounts.
+   *
+   * So the parcel exists, is exhausted mid-sale, and the excess read as missing
+   * data. It is not: the units the broker DID record cost nothing, so the ones
+   * it skipped would have cost nothing either. The P&L is identical whichever
+   * way it is labelled — only the red "cost base not on file" was wrong, and it
+   * sent the reader looking for a contract note that does not exist.
+   */
+  const { sells } = replayLedger([
+    line("EPMO", "BUY", "2025-12-11", 23810, 0),
+    line("EPMO", "SELL", "2026-01-21", 47620, 794.78),
+  ]);
+
+  const sale = sells[0];
+  assert.equal(sale.freeGrant, true, "a zero-cost parcel makes the excess free too");
+  assert.equal(sale.noCostBasis, false, "so there is nothing to warn about");
+  assert.equal(sale.costOfSold, 0);
+  assert.equal(sale.realizedPl, 794.78);
+});
+
+test("ledger: an option BOUGHT before the file starts is unknown, not free", () => {
+  // The two look identical at the moment of sale — an empty parcel either way —
+  // and only the whole file separates them: a grant has no buy line ANYWHERE,
+  // while this one's purchase simply predates the export. Calling it free would
+  // report its entire proceeds as profit. Live ledger: 187 grants against 8 of
+  // these.
+  const { sells } = replayLedger([
+    // Sold in February, bought in June FOR MONEY: the sale is short, not a
+    // grant. This is CCOOA in the live ledger — sold 777,778 on 17 May 2024,
+    // then 2,500,000 bought for $2,527.50 on 3 June.
+    line("FRSOB", "SELL", "2026-02-10", 500, 800),
+    line("FRSOB", "BUY", "2026-06-10", 500, 200),
+  ]);
+
+  const sale = sells.find((s) => s.code === "FRSOB")!;
+  assert.equal(sale.noCostBasis, true, "the cost is genuinely unknown");
+  assert.equal(sale.freeGrant, undefined, "and it is not a grant");
+});
+
+test("ledger: a deferred-settlement line still pools with the ordinary", () => {
+  /**
+   * This is why the split is on `isOptionCode` and not on the code. `AVRXX` is
+   * a deferred-settlement/rights line that BECOMES the ordinary — buying it in
+   * a placement and selling `AVR` later is one position, and its cost has to
+   * carry across. Keying the FIFO on the code outright would have broken this,
+   * and it is the common case: over the live ledger 569 parcels mix an `XX`
+   * code with its ordinary against 145 that mix in an option.
+   */
+  const { sells } = replayLedger([
+    line("AVRXX", "BUY", "2026-01-10", 1000, 4000),
+    line("AVR", "SELL", "2026-02-10", 1000, 5000),
+  ]);
+
+  const sale = sells.find((s) => s.code === "AVR")!;
+  assert.equal(sale.costOfSold, 4000, "the placement's cost carried across");
+  assert.equal(sale.realizedPl, 1000);
+  assert.equal(sale.noCostBasis, false, "nothing here is uncosted");
+});
+
+test("ledger: the parent rollup still reports both instruments together", () => {
+  // The FIFO split must not split the ROLLUP: `realized_pnl` is keyed at parent
+  // grain and stays that way. One row for FRS, carrying both lines' result.
+  const { rollups } = replayLedger([
+    line("FRS", "BUY", "2026-01-10", 1000, 5000),
+    line("FRSOB", "SELL", "2026-02-10", 500, 800),
+    line("FRS", "SELL", "2026-03-10", 1000, 6000),
+  ]);
+
+  assert.equal(rollups.length, 1, "one rollup, at parent grain");
+  assert.equal(rollups[0].parent, "FRS");
+  assert.equal(rollups[0].realizedPl, 1800, "1,000 on the shares + 800 on the grant");
+  assert.equal(rollups[0].openUnits, 0, "the shares closed out fully");
 });

@@ -40,6 +40,7 @@ import {
   optionTotals,
   CLIENT_PNL_FILTERS,
   PNL_FILTER_LABELS,
+  isRowOpen,
   OPTION_FILTERS,
   OPTION_FILTER_LABELS,
   type PnlFilter,
@@ -459,29 +460,56 @@ export function PositionsClient({
    * shape the all-time rows use, so ONE table body renders both and the two
    * views cannot drift into looking like different tables.
    *
-   * `buyQty` is left at zero on purpose. The column means "units bought", and
-   * a window has no answer for it: the parcel being sold was acquired at some
-   * earlier date, quite possibly outside the range. Zero reads as "—".
+   * ── The row is the INSTRUMENT, and it carries its classification across ────
+   * It used to be keyed on `c.parent`, which folded an option into its
+   * ordinary: `OD6O`'s sale landed on a row labelled `OD6` wearing the option's
+   * company name, and every option line the all-time view lists disappeared.
+   * The window now groups per instrument (see `realizedBetween`), and each row
+   * inherits the stored row's own flags so the filter bar means the same thing
+   * in both views — an option is still an option inside a date range.
+   *
+   * `buyQty` is the units CLOSED, which the FIFO consumed to make this sale, so
+   * the column is populated rather than reading "—". It is deliberately not
+   * "units bought in the window": the parcel was acquired earlier, quite
+   * possibly outside the range, and claiming otherwise would invite the reader
+   * to check it against a purchase that is not on screen.
    */
   const realisedRows: PnlSummaryRow[] = useMemo(() => {
     if (!window_) return [];
 
-    const nameOf = new Map(summaryRows.map((r) => [r.ticker, r.name]));
+    const storedBy = new Map(summaryRows.map((r) => [r.ticker, r]));
 
-    return window_.contributors.map((c) => ({
-      ticker: c.parent,
-      name: nameOf.get(c.parent) ?? c.parent,
-      buyQty: 0,
+    return window_.contributors.map((c) => {
+      const stored = storedBy.get(c.code) ?? storedBy.get(c.parent);
+      return {
+      ticker: c.code,
+      name: stored?.name ?? c.code,
+      buyQty: c.units,
       sellQty: c.units,
       heldQty: 0,
       buyPrice: c.costOfSold,
       sellOrCurrent: c.proceeds,
       pnl: c.realizedPl,
-      openPosition: false,
+      // Taken from the stored row rather than forced false: a part-sold parcel
+      // realised money inside the window AND is still held, and the Open pill
+      // has to be able to say so in a range exactly as it does over all time.
+      openPosition: Boolean(stored?.openPosition),
+      isOption: stored?.isOption,
+      isUnlistedOption: stored?.isUnlistedOption,
       // The status column reads "Closed" off these — which is the truth about a
       // sale — and the cost warning travels in the wording instead.
-      type: c.noCostBasis ? "Realised · cost base not on file" : "Realised",
-      flagged: c.noCostBasis,
+      //
+      // A FREE GRANT is not a warning. The firm's treatment puts a placement's
+      // whole cost on the shares and none on the attaching options, so a $0
+      // cost there is the answer rather than a gap — 187 such sales worth
+      // $255,139 were reading "cost base not on file" in red, sending the
+      // reader to look for something that was never missing.
+      type: c.freeGrant
+        ? "Realised · free grant"
+        : c.noCostBasis
+          ? "Realised · cost base not on file"
+          : "Realised",
+      flagged: c.noCostBasis && !c.freeGrant,
       edited: false,
       overridden: {
         buyQty: false,
@@ -491,28 +519,70 @@ export function PositionsClient({
       },
       note: null,
       computed: {
-        buyQty: 0,
+        buyQty: c.units,
         sellQty: c.units,
         buyPrice: c.costOfSold,
         sellOrCurrent: c.proceeds,
         pnl: c.realizedPl,
       },
-    }));
+      };
+    });
   }, [window_, summaryRows]);
 
-  /** All time is every parcel ever held; a range is the sales inside it. */
-  const tableRows = isAllTime ? summaryRows : realisedRows;
+  /**
+   * All-time rows, MINUS the parcels that are purely open.
+   *
+   * A position the client still holds in full is already on the Holdings table
+   * directly above this one, with its market value and its unrealised move. It
+   * was here too, so the same holding was stated twice on one screen under two
+   * headings — and this table is called Historical P&L, which a live holding is
+   * not.
+   *
+   * ── Why not simply the Open flag ────────────────────────────────────────────
+   * `isRowOpen` is true for a PARTIAL exit as well: 10,000 bought, 4,000 sold,
+   * 6,000 still held. Those rows carry realised money — measured across the
+   * stored rows, dropping every open row would have taken **$18,029 of realised
+   * P&L** off the table with them, which is the kind of quiet subtraction this
+   * screen must never do. So the test is "did anything actually sell".
+   *
+   * ── And why `sellQty > 0` alone is not that test ─────────────────────────────
+   * A **DB-only** row has no ledger history at all — measured, all 56 of them
+   * carry `trade_count = 0` — and for an OPTION the merge sets *both* legs from
+   * the one held count, because "an option's two legs are set from one count and
+   * it holds nothing separate" (`stored-pnl.ts`). So `sellQty` on those rows is
+   * a held quantity wearing a sold column, and reading it as a sale kept 50 free
+   * grants worth **$24,841 of unrealised value** on a table headed Historical
+   * P&L — while the snapshot says the client still holds every one of them.
+   *
+   * That is what `hasRealised` is for: a row has realised money only if the
+   * LEDGER sold something. A db-only row never did, whatever its columns say.
+   */
+  const closedOrPartlySold = useMemo(() => {
+    const hasRealised = (r: PnlSummaryRow) => !r.isDbOnly && r.sellQty > 0;
+    return summaryRows.filter((r) => hasRealised(r) || !isRowOpen(r));
+  }, [summaryRows]);
+
+  /** All time is every parcel that has sold something; a range is the sales in it. */
+  const tableRows = isAllTime ? closedOrPartlySold : realisedRows;
 
   /**
-   * The pills a range can actually answer.
+   * The same pills in both views, which they were not.
    *
-   * Open, Matched, Unlisted Options and the rest describe the STATE of a
-   * position, and every row in a realised view is a completed sale — they would
-   * all read zero and invite the reader to click something that cannot work.
+   * A range used to offer only All / Profit / Loss, on the reasoning that Open
+   * and Options "describe the STATE of a position" and every row in a realised
+   * view is a completed sale. Half of that was true and the conclusion was
+   * wrong: a realised row IS still an option or an equity, and a part-sold
+   * parcel IS still open. Dropping the pills meant picking a date range changed
+   * the table's columns AND its filter bar at once, so the same figures looked
+   * like a different screen — and there was no way at all to see options inside
+   * a period.
+   *
+   * Now every row carries the stored row's classification (see `realisedRows`),
+   * so each pill answers the same question it answers over all time. `Unlisted
+   * Options` will read zero in most ranges, and that is honest rather than
+   * broken: a free grant is never sold, so no window can realise one.
    */
-  const activeFilters = isAllTime
-    ? CLIENT_PNL_FILTERS
-    : (["all", "profit", "loss"] as const);
+  const activeFilters = CLIENT_PNL_FILTERS;
 
   const pnlTabCounts = useMemo(() => pnlFilterCounts(tableRows), [tableRows]);
 
@@ -787,9 +857,13 @@ export function PositionsClient({
    * as a period return would be the wrong number with no way to tell.
    *
    * That is also why All time is a distinct state rather than the widest range:
-   * over all time the table can show every parcel the client has ever held,
-   * open ones included, which is the reference view. Narrow it and only sales
-   * remain.
+   * over all time the table shows every parcel that has sold anything, in full
+   * or in part, which is the reference view. Narrow it and only the sales inside
+   * the window remain.
+   *
+   * Parcels still held IN FULL are on Holdings and not here — they were on both,
+   * which stated one holding twice on one screen, and a live position is not
+   * "historical P&L". Part-sold parcels stay: their realised half is the point.
    */
   const renderRangeBar = () => {
     const dateStr = (iso: string) =>
@@ -881,9 +955,11 @@ export function PositionsClient({
         <p className="text-[11px] text-mut leading-normal">
           {isAllTime ? (
             <>
-              Every parcel on file, sold and still held. Sales run{" "}
+              Every parcel that has sold, in full or in part. Sales run{" "}
               {dateStr(firstSaleDate)} – {dateStr(lastSaleDate)} — narrow the
-              period to see just what was <b>realised</b> in it.
+              period to see just what was <b>realised</b> in it. Positions you
+              still hold — shares and option grants alike — are on{" "}
+              <b>Holdings</b> above, not here.
             </>
           ) : (
             <>

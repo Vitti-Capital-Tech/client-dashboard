@@ -229,6 +229,7 @@ const HYD_LEDGER: LedgerLine[] = [
   {
     scope: "",
     parent: "HYD",
+    code: "HYD",
     cnote: "2571139",
     side: "SELL",
     tradeDate: "2026-05-14",
@@ -292,6 +293,7 @@ test("replay: the recovered parcel is placed before the sale it has to cost", ()
     {
       scope: "",
       parent: "IXR",
+      code: "IXR",
       cnote: "2500001",
       side: "SELL",
       tradeDate: "2026-02-10",
@@ -318,6 +320,7 @@ test("replay: a free grant's sale is costed at zero, and not warned about", () =
     {
       scope: "",
       parent: "HYD",
+      code: "HYD",
       cnote: "2600001",
       side: "SELL",
       tradeDate: "2026-06-01",
@@ -349,6 +352,7 @@ test("replay: a genuinely unknown cost still warns", () => {
     {
       scope: "",
       parent: "OLD",
+      code: "OLD",
       cnote: "2300001",
       side: "SELL",
       tradeDate: "2024-01-15",
