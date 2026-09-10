@@ -29,6 +29,48 @@ function annTime(iso: string): string {
 }
 
 /**
+ * What the "price going in" figures are, for a reader who has not been told.
+ *
+ * The measurements read as plain sentences but the concepts behind them do not:
+ * the date misleads anyone who assumes they are live, and the fact that they
+ * are computed rather than written by the AI is the whole reason to trust them.
+ */
+const CONTEXT_HELP = [
+  "What the share price was doing in the days BEFORE this announcement came out.",
+  "Most ASX news lands before the market opens, so there is no price for today yet — these are measured up to the previous close, which is the date shown.",
+  "They are calculated from exchange data, not written by the AI. You can check any of them against a chart.",
+  "They describe what the market was already doing. They are not a prediction and not advice.",
+];
+
+/** The (i) and its panel. Opens on hover and on keyboard focus. */
+export function ContextHelp() {
+  return (
+    <span className="relative inline-flex group/info align-middle">
+      <button type="button" aria-label="What does this mean?"
+        className="w-3.5 h-3.5 rounded-full bg-line-2 text-mut text-[9px] font-bold
+                   leading-none flex items-center justify-center cursor-help outline-none">
+        i
+      </button>
+      <span role="tooltip"
+        className="pointer-events-none absolute left-0 top-5 z-50 w-[min(20rem,72vw)] p-3
+                   rounded-[12px] bg-white border border-line shadow-shadow-lg
+                   opacity-0 invisible transition-opacity duration-150
+                   group-hover/info:opacity-100 group-hover/info:visible
+                   group-focus-within/info:opacity-100 group-focus-within/info:visible">
+        <span className="block font-mono text-[10px] tracking-wider uppercase text-mut mb-1.5">
+          Price going in
+        </span>
+        {CONTEXT_HELP.map((line) => (
+          <span key={line} className="block text-[11px] leading-relaxed text-ink/80 mb-1.5">
+            {line}
+          </span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
+/**
  * What the price was doing going into a filing.
  *
  * Measured upstream from bars that closed before the announcement and passed
@@ -53,7 +95,13 @@ function ContextChips({ ctx }: { ctx: NonNullable<AsxAnnouncement["context"]> })
   return (
     <div className="flex flex-wrap items-center gap-1.5 mt-2">
       {ctx.notes.slice(0, 2).map((n) => (
-        <span key={n} className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${tone}`}>
+        <span key={n}
+          title={
+            ctx.caveat
+              ? `Measured from exchange data up to the ${ctx.asOf} close, before this announcement. Note: ${ctx.caveat} — so treat this figure as close to meaningless.`
+              : `Measured from exchange data up to the ${ctx.asOf} close, before this announcement came out.`
+          }
+          className={`text-[10px] font-medium rounded-full px-2 py-0.5 cursor-help ${tone}`}>
           {n}
         </span>
       ))}
@@ -63,7 +111,8 @@ function ContextChips({ ctx }: { ctx: NonNullable<AsxAnnouncement["context"]> })
       {/* A footnote, not a chip. As a chip this was a full sentence wrapping
           over two lines, and it displaced the observations it qualifies. */}
       {ctx.caveat && (
-        <span className="w-full text-[10px] text-mut-d first-letter:uppercase">
+        <span className="w-full text-[10px] text-mut-d first-letter:uppercase cursor-help"
+          title="Turnover is the dollar value traded per day. When it is this small, a volume spike can be one or two people, so the ratios above describe noise rather than genuine interest.">
           {ctx.caveat}
         </span>
       )}
@@ -159,8 +208,9 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-3">
-        <div className="font-mono text-[11px] tracking-wider uppercase text-mut">
+        <div className="font-mono text-[11px] tracking-wider uppercase text-mut flex items-center gap-1.5">
           ASX market-sensitive announcements
+          <ContextHelp />
         </div>
         {asAt && (
           <div className="font-mono text-[10.5px] text-mut-d shrink-0">as at {asAt}</div>
