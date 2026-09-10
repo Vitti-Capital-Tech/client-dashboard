@@ -1072,9 +1072,12 @@ test("tracker: the DVP date reads the way the desk writes dates", () => {
   const writes = tabCellWrites({ ticker: "ABC", issueDate: "2026-09-08", settleDate: "2026-09-11" });
 
   // `9 Sept 2026`, the convention the tab's own BOOKING DAY cell already shows —
-  // not the slash-separated form Template's L3 carries.
+  // not the slash-separated form Template carries. BOTH dates: the first pass
+  // did L3 only and the next tab came out with `10/09/2026` in B3 beside
+  // `18 Sep 2026` in L3, which the desk corrected by hand.
   const dvp = writes.find((w) => w.address === "L3");
   assert.equal(dvp?.numberFormat, "d mmm yyyy");
+  assert.equal(writes.find((w) => w.address === "B3")?.numberFormat, "d mmm yyyy");
 
   // Still the serial underneath, so `=SHEET!L3` on the Overview and every date
   // comparison against the cell are unaffected by how it renders.

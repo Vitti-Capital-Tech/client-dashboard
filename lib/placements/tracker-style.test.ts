@@ -327,7 +327,7 @@ test("style: Template's client-input yellow is trimmed to the rows the desk uses
     { rect: { r1: 5, c1: 6, r2: 21, c2: 7 }, value: "#FFFF00" },
   ]);
 
-  assert.deepEqual(trimmed, [{ rect: { r1: 5, c1: 6, r2: 14, c2: 7 }, value: "#FFFF00" }]);
+  assert.deepEqual(trimmed, [{ rect: { r1: 5, c1: 6, r2: CLIENT_INPUT_LAST_ROW, c2: 7 }, value: "#FFFF00" }]);
 
   // Rows 5 and 6 survive: the headings and the Total are what the columns are
   // read by, and they are not inputs to be trimmed alongside them.
@@ -344,13 +344,13 @@ test("style: trimming F and G leaves every other column its full height", () => 
   assert.deepEqual(trimmed, [
     { rect: { r1: 5, c1: 1, r2: 21, c2: 5 }, value: "#FFFF00" }, // A:E, untouched
     { rect: { r1: 5, c1: 8, r2: 21, c2: 9 }, value: "#FFFF00" }, // H:I, untouched
-    { rect: { r1: 5, c1: 6, r2: 14, c2: 7 }, value: "#FFFF00" }, // F:G, clamped
+    { rect: { r1: 5, c1: 6, r2: CLIENT_INPUT_LAST_ROW, c2: 7 }, value: "#FFFF00" }, // F:G, clamped
   ]);
 });
 
 test("style: yellow that starts below the cutoff is dropped, and other colours are not touched", () => {
   const trimmed = clampClientInputYellow([
-    { rect: { r1: 17, c1: 6, r2: 21, c2: 7 }, value: "#ffff00" },
+    { rect: { r1: CLIENT_INPUT_LAST_ROW + 1, c1: 6, r2: 21, c2: 7 }, value: "#ffff00" },
     { rect: { r1: 5, c1: 6, r2: 21, c2: 7 }, value: "#000000" },
     { rect: { r1: 1, c1: 1, r2: 1, c2: 17 }, value: "#FFFF00" },
   ]);

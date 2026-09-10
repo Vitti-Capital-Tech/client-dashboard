@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { parseSummaryTerms } from "./summary-terms.ts";
+import {
+  ADD_ON_LISTING_UNKNOWN,
+  attachingOptionsFromSummary,
+  parseSummaryTerms,
+} from "./summary-terms.ts";
 
 /**
  * Every fixture below is a real summary from `placement_candidates`, header block
@@ -211,4 +215,130 @@ Raise: $0M
 Price: $1.00/share`);
   assert.equal(terms.raiseMillions, undefined);
   assert.equal(terms.price, 1);
+});
+
+/* ------------------------------------------------------------------ */
+/* Attaching options out of the bullets                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every bullet below is verbatim from `placement_candidates`, and every expected
+ * string is what the DESK itself typed into that deal's `B2` — read back off the
+ * live workbook rather than decided here. That is the whole basis for this
+ * parser: the ratio, the strike and the expiry are checked against four
+ * independent hand-filled cells, and they agree on all four.
+ *
+ * The listing word is the one field deliberately NOT matched, because the
+ * summaries do not carry it — the desk chose Listed for W2V and NGY and Unlisted
+ * for FBR with nothing in any of the three texts to separate them.
+ */
+
+const ISSUE = {
+  IPT: "2026-09-10",
+  NGY: "2026-09-03",
+  W2V: "2026-09-08",
+  FBR: "2026-09-03",
+};
+
+const BULLET = {
+  IPT: `- 2 free attaching options for every 3 new shares (exercise price $0.06, 2.5-year term, to be listed on ASX); Black & Scholes value 1.1c, reducing net effective entry price to ~2.5c.`,
+  NGY: `- Each investor receives 1 free attaching option for every 2 placement shares (exercise price A$0.06, 2-year expiry).`,
+  W2V: `- Attaching options on a 1-for-2 basis, strike price $0.075, 2-year term — subject to shareholder approval.`,
+  FBR: `- Each placement share includes one free-attaching option exercisable at A$0.14, expiring five years from issue date, subject to shareholder approval.`,
+};
+
+test("add-ons: the four real grants are read as the desk wrote them", () => {
+  // Ratio, strike and expiry, against the desk's own cells. The expiry is the
+  // part that could not have been reasoned out: all three count from the ISSUE
+  // date, not from settlement.
+  assert.equal(
+    attachingOptionsFromSummary(BULLET.IPT, ISSUE.IPT),
+    "2:3 @ $ 0.06 Listed Exp 10/03/29",
+    "`to be listed on ASX` is stated, so no placeholder is needed",
+  );
+  assert.equal(
+    attachingOptionsFromSummary(BULLET.NGY, ISSUE.NGY),
+    `1:2 @ $ 0.06 ${ADD_ON_LISTING_UNKNOWN} Exp 03/09/28`,
+  );
+  assert.equal(
+    attachingOptionsFromSummary(BULLET.W2V, ISSUE.W2V),
+    `1:2 @ $ 0.075 ${ADD_ON_LISTING_UNKNOWN} Exp 08/09/28`,
+    "`1-for-2 basis` is the same ratio written a third way",
+  );
+  assert.equal(
+    attachingOptionsFromSummary(BULLET.FBR, ISSUE.FBR),
+    `1:1 @ $ 0.14 ${ADD_ON_LISTING_UNKNOWN} Exp 03/09/31`,
+    "`each placement share includes one option` is 1:1 without writing either number",
+  );
+});
+
+test("add-ons: a bullet that merely MENTIONS options is refused", () => {
+  // BLZ, verbatim. It matches every loose pattern — a ratio-shaped pair of
+  // numbers, the word options — and describes a broker's own holding. A parser
+  // generous enough to take this would put an entitlement on a client's P&L
+  // that no announcement granted.
+  const blz = `- CPS Capital holds 278,670,130 shares and 106,341,638 options in BLZ — material conflict of interest to be considered.`;
+  assert.equal(attachingOptionsFromSummary(blz, "2026-09-01"), undefined);
+});
+
+test("add-ons: nothing is emitted from a partial grant", () => {
+  // All three of ratio, strike and term are required, in ONE bullet. A partial
+  // read saves the desk nothing — they open the announcement either way — and
+  // invites the half that was guessed to be trusted.
+  const noStrike = `- 1 free attaching option for every 2 placement shares, 2-year expiry.`;
+  const noTerm = `- 1 free attaching option for every 2 placement shares (exercise price A$0.06).`;
+  const noRatio = `- Free attaching options exercisable at A$0.06 with a 2-year expiry.`;
+
+  assert.equal(attachingOptionsFromSummary(noStrike, "2026-09-03"), undefined);
+  assert.equal(attachingOptionsFromSummary(noTerm, "2026-09-03"), undefined);
+  assert.equal(attachingOptionsFromSummary(noRatio, "2026-09-03"), undefined);
+
+  // And nothing at all without an issue date, since the expiry counts from it.
+  assert.equal(attachingOptionsFromSummary(BULLET.NGY, null), undefined);
+});
+
+test("add-ons: cents are divided down, not filed as dollars", () => {
+  // ICL, verbatim: `4c`, written without a dollar sign. Read as `$4.00` the
+  // strike is a hundred times the real one, which values the grant at zero for
+  // ever — and looks entirely plausible in the cell.
+  const icl = `- 1-for-2 free attaching options exercisable at 4c with 2-year expiry, subject to shareholder approval.`;
+  assert.equal(
+    attachingOptionsFromSummary(icl, "2026-07-31"),
+    `1:2 @ $ 0.04 ${ADD_ON_LISTING_UNKNOWN} Exp 31/07/28`,
+  );
+});
+
+test("add-ons: the placeholder cannot be read as UNLISTED", () => {
+  // This is the safety property, not a formatting preference. `parseAddOnSpec`
+  // decides listed-ness with `/\bun\s*-?\s*l?isted/i` and DROPS listed grants,
+  // so a placeholder matching that regex would push every unknown grant into
+  // the modelled column and invent option positions. Not matching it means an
+  // unknown lands where today's blank cell already lands: dropped.
+  assert.equal(/\bun\s*-?\s*l?isted/i.test(ADD_ON_LISTING_UNKNOWN), false);
+  assert.equal(/\bun\s*-?\s*l?isted/i.test("Unlisted"), true);
+});
+
+test("add-ons: an expiry never rolls into the next month", () => {
+  // 31 Aug + 6 months has no 31st to land on. Pulled back to the month's last
+  // day rather than becoming the 3rd of March, which would be a date the desk
+  // never wrote and no rule explains.
+  const half = `- 1 free attaching option for every 2 shares (exercise price $0.10, 0.5-year term).`;
+  assert.equal(
+    attachingOptionsFromSummary(half, "2026-08-31"),
+    `1:2 @ $ 0.1 ${ADD_ON_LISTING_UNKNOWN} Exp 28/02/27`,
+  );
+});
+
+test("add-ons: the Price line still wins when it carries the clause", () => {
+  // KNI's grant is on the `Price:` line, which `parseSummaryTerms` has always
+  // read. That path is unchanged and takes precedence — this parser is the
+  // fallback for the four-times-commoner bullet form, not a replacement.
+  const kni = `Company: Kuniko (KNI:ASX)
+Deal Type: Placement
+Price: A$0.02/share (23% disc) + 1:2 free listed KNIOA options (strike A$0.07, exp May 2029)
+Settlement: 12 September 2026`;
+  assert.equal(
+    parseSummaryTerms(kni).opts,
+    "1:2 free listed KNIOA options (strike A$0.07, exp May 2029)",
+  );
 });

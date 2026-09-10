@@ -277,7 +277,12 @@ export function isBareTab(values: unknown[][]): boolean {
  * books is the four-letter `Sept` for September and three letters for every
  * other month — the same thing `BOOKING DAY` shows. It is a display format
  * only; the cell still holds the serial `excelSerialDate` produced, so every
- * date comparison and the Overview's `=SHEET!L3` are unaffected.
+ * date comparison and the Overview's `=SHEET!B3` / `=SHEET!L3` are unaffected.
+ *
+ * Applied to BOTH dates on the tab. It went on `L3` alone first, because the
+ * desk asked about column L — and the next tab came out with `10/09/2026` in
+ * `B3` beside `18 Sep 2026` in `L3`, which they then corrected by hand. One
+ * convention, both cells.
  */
 export const DEAL_DATE_FORMAT = "d mmm yyyy";
 
@@ -302,7 +307,7 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
   const writes: CellWrite[] = [{ address: "D3", value: deal.ticker.trim().toUpperCase() }];
 
   const issued = excelSerialDate(deal.issueDate);
-  if (issued !== null) writes.push({ address: "B3", value: issued, numberFormat: "dd/mm/yyyy" });
+  if (issued !== null) writes.push({ address: "B3", value: issued, numberFormat: DEAL_DATE_FORMAT });
 
   if (typeof deal.price === "number" && deal.price > 0) {
     writes.push({ address: "F3", value: deal.price });

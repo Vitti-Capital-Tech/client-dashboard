@@ -683,9 +683,9 @@ export async function readTemplatePlan(
  * Yellow on this tab means "this is the cell to read": the desk scans F and G
  * for the allocations that were actually filled, and Template's block of
  * fifteen shaded rows makes that a hunt through eight empty ones. A placement
- * carries five to seven different client bids, so the block is sized to eight
- * rows — enough headroom for a busy deal, small enough that the shading still
- * points at something. Rows 5 and 6 (the headings and the Total) keep theirs
+ * carries five to seven client bids, and the desk sized the block itself: the
+ * first cut at eight rows came back with rows 15-16 shaded in by hand, so the
+ * cutoff follows the workbook rather than the estimate. Rows 5 and 6 (the headings and the Total) keep theirs
  * regardless; they are not inputs but they are what the columns are read by.
  *
  * The rows past the block are left UNFILLED rather than painted white, which is
@@ -695,7 +695,7 @@ export async function readTemplatePlan(
  */
 export const CLIENT_INPUT_COLS = { c1: 6, c2: 7 };
 export const CLIENT_INPUT_FIRST_ROW = 7;
-export const CLIENT_INPUT_LAST_ROW = 14;
+export const CLIENT_INPUT_LAST_ROW = 16;
 
 /**
  * Cut the client input columns' yellow back to `CLIENT_INPUT_LAST_ROW`.

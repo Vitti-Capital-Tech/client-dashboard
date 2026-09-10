@@ -1,4 +1,4 @@
-import { parseSummaryTerms } from "./summary-terms.ts";
+import { attachingOptionsFromSummary, parseSummaryTerms } from "./summary-terms.ts";
 import { writeDealToTracker, type GraphCall, type TrackerTarget } from "./tracker-writer.ts";
 import type { TrackerDeal } from "./tracker-format.ts";
 import type { CandidateFeedItem } from "./candidates.ts";
@@ -78,15 +78,22 @@ export function dealFromCandidate(item: CandidateFeedItem): TrackerDeal {
   const isTwoTranche = /\b(?:2\s*tranche|two\s*tranche|tranche\s*2|tranche\s*ii|second\s*tranche)\b/i.test(
     item.summary ?? "",
   );
+  // Named rather than inlined: the add-ons expiry counts from the issue date,
+  // so the two have to be one value and not two calls that could diverge.
+  const issued = sydneyDay(item.received_at);
+
   return {
     ticker: item.ticker.trim().toUpperCase(),
     // `Date Issued` is the day the deal was announced. The summary header has no
     // such field — it carries Bids Close and Settlement — so the mail's own
     // timestamp is the honest answer, and it is the one the desk types today.
-    issueDate: sydneyDay(item.received_at),
+    issueDate: issued,
     price: read.price ?? null,
     settleDate: read.settleDate ?? null,
-    addOns: read.opts ?? null,
+    // The `Price:` line's `+ …` clause first, then the bullets. The bullet is
+    // the commoner form by four to one across the real summaries, and the desk
+    // was transcribing it into B2 by hand on a tab that otherwise filled itself.
+    addOns: read.opts ?? attachingOptionsFromSummary(item.summary ?? "", issued) ?? null,
     twoTranche: isTwoTranche ? true : false,
   };
 }
