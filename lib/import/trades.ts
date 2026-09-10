@@ -269,11 +269,34 @@ export function replayLedger(lines: LedgerLine[]): {
     // Chronological, then by contract note so same-day trades replay in a
     // stable order — the walk is order-dependent and must be deterministic.
     .filter((t) => t.status === SETTLED)
-    .sort((a, b) =>
-      a.tradeDate === b.tradeDate
-        ? a.cnote.localeCompare(b.cnote)
-        : a.tradeDate.localeCompare(b.tradeDate),
-    );
+    .sort((a, b) => {
+      if (a.tradeDate !== b.tradeDate) return a.tradeDate.localeCompare(b.tradeDate);
+      /**
+       * A same-day BUY is replayed before the SELL, whatever the note numbers say.
+       *
+       * The walk is order-dependent, and `cnote` is an issuing sequence, not an
+       * economic one. Saturn's `ING`, both legs on 22 Jun 2026:
+       *
+       *   SELL 7,000 @ $13,302.50   cnote 2505031
+       *   BUY  7,000 @ $14,000.00   cnote 2506714
+       *
+       * By note number the sale came first, met an empty parcel, and reported
+       * its whole $13,302.50 as profit — on a day trade that actually LOST
+       * $697.50. Nothing can be sold before it is bought, so the buy leads.
+       *
+       * ── Why this is worth a −$781,286 correction ──────────────────────────
+       * Because it is verified rather than reasoned. Replaying buy-first
+       * reproduces the desk's own figures to the cent on every ticker its
+       * report covers: `4DX` −3,636.97, `CU6` −19,761.19, `EOS` −13,851.50,
+       * `LTR` −3,454.77, `PLS` −18,410.00, `ZIP` −12,683.42. Our stored
+       * numbers had those six at +$78,652, +$25,915, +$36,106, +$45,414,
+       * +$24,896 and +$27,025 — inflated by exactly this, across 42 groups.
+       *
+       * `cnote` still breaks ties within a side, so the walk stays deterministic.
+       */
+      if (a.side !== b.side) return a.side === "BUY" ? -1 : 1;
+      return a.cnote.localeCompare(b.cnote);
+    });
 
   const byKey = new Map<string, PnlRollup>();
   const sells: SellAttribution[] = [];

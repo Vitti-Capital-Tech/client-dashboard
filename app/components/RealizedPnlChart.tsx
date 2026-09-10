@@ -111,11 +111,41 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
 
   const total = periods.reduce((s, p) => s + p.realizedPl, 0);
   const anyUncosted = periods.some((p) => p.hasUncosted);
-  // A crowded axis is worse than a sparse one — thin the labels, never the bars.
-  // Two thresholds rather than one: at twelve months a single skip is enough,
-  // at two years of them it is not, and the labels overlapped rather than
-  // thinning further.
-  const labelEvery = slot < 34 ? 3 : slot < 56 ? 2 : 1;
+  /**
+   * A crowded axis is worse than a sparse one — thin the labels, never the bars.
+   *
+   * ── Each line is thinned by its OWN width ──────────────────────────────────
+   * This was two hand-picked thresholds on `slot`, both chosen for the month
+   * label — and the axis has a SECOND line under it, the sale count, which is
+   * wider: `Aug 25` is six monospace characters at 12px (~43px) while
+   * `18 sales` is eight at 10.5px (~50px). So a slot wide enough to be given
+   * every month label was not wide enough for the counts beneath them, and they
+   * ran into each other.
+   *
+   * ── Shorten before thinning ────────────────────────────────────────────────
+   * "Fits" is not the same as "readable". `Aug 25` is ~43px against a 60px slot
+   * at twelve months — 71% of the band, so the labels touched even though the
+   * arithmetic said they fitted. The first response is to drop the YEAR rather
+   * than the label: `Aug` is ~22px, every month stays named, and the year is
+   * still shown where it changes (January) and on the first bar, which is where
+   * a reader looks for it. Only when even that is too wide are labels thinned.
+   *
+   * Measured off the glyph width instead of guessed, and computed rather than
+   * stepped, so it degrades at any range the picker can produce instead of at
+   * the two widths someone happened to try.
+   */
+  const MONTH_FULL_W = 62; // "Aug 25" is ~43px at 12px monospace; 62 leaves a gap
+  const MONTH_SHORT_W = 34; // "Aug" alone is ~22px
+  // "18 sales" is eight characters in the PROPORTIONAL face (this line is not
+  // `font-mono`), so ~40 units — and at 56 it was being shown in a 60-unit
+  // slot, two thirds full, which is the row that still read as crowded after
+  // the month labels were shortened. It now needs half the band free.
+  const SALE_COUNT_W = 80;
+  const fullMonthLabel = slot >= MONTH_FULL_W;
+  const labelEvery = fullMonthLabel
+    ? 1
+    : Math.max(1, Math.ceil(MONTH_SHORT_W / slot));
+  const showSaleCounts = slot >= SALE_COUNT_W;
 
   return (
     <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
@@ -265,10 +295,12 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                     fontSize="12"
                     fill={isHover ? "var(--color-ink)" : "var(--color-mut)"}
                   >
-                    {p.label}
+                    {fullMonthLabel || i === 0 || p.label.startsWith("Jan")
+                      ? p.label
+                      : p.label.split(" ")[0]}
                   </text>
                 )}
-                {!empty && i % labelEvery === 0 && (
+                {!empty && showSaleCounts && i % labelEvery === 0 && (
                   <text
                     x={PAD_L + i * slot + slot / 2}
                     y={H - PAD_B + 35}

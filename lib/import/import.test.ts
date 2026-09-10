@@ -656,3 +656,31 @@ test("ledger: a same-day two-way pool keeps weighted average", () => {
   assert.equal(march.costOfSold, 275, "weighted average, not the $500 lot");
   assert.equal(march.realizedPl, 125);
 });
+
+test("ledger: a same-day BUY is replayed before the SELL, whatever the notes say", () => {
+  /**
+   * Saturn's `ING`, both legs on 22 Jun 2026, verbatim — and the note numbers
+   * run the wrong way round:
+   *
+   *   SELL 7,000 @ $13,302.50   cnote 2505031
+   *   BUY  7,000 @ $14,000.00   cnote 2506714
+   *
+   * `cnote` is an issuing sequence, not an economic one. Ordered by it the sale
+   * met an empty parcel and reported its whole $13,302.50 as profit, on a day
+   * trade that lost $697.50.
+   *
+   * Verified rather than reasoned: replaying buy-first reproduces the desk's own
+   * report to the cent on every ticker it covers — 8 of 8, including `4DX`
+   * −3,636.97, `CU6` −19,761.19 and `PLS` −18,410.00, where our stored figures
+   * had +$78,652, +$25,915 and +$24,896.
+   */
+  const { sells } = replayLedger([
+    { ...line("ING", "SELL", "2026-06-22", 7_000, 13_302.5), cnote: "2505031" },
+    { ...line("ING", "BUY", "2026-06-22", 7_000, 14_000), cnote: "2506714" },
+  ]);
+
+  assert.equal(sells.length, 1);
+  assert.equal(sells[0].costOfSold, 14_000, "the same-day buy costed it");
+  assert.equal(sells[0].realizedPl, -697.5, "a loss, not $13,302.50 of profit");
+  assert.equal(sells[0].noCostBasis, false, "and nothing is missing");
+});
