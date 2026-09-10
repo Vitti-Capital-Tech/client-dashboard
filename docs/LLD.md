@@ -1248,6 +1248,34 @@ Option quantities and classification consistency across the platform:
    - Over time, unlisted attaching options granted in historical placements (e.g. 2025 placements) frequently undergo official ASX listing and trade under dedicated option tickers.
    - When verifying whether an attaching option is listed or unlisted (`parseOverviewAddOns`, `combinePlacementMaps`, and `unlistedAddOnsFor` in `lib/pnl-calculator.ts`), the system prioritizes the most up-to-date **2026 Placement Tracker / Options** workbook. If a ticker/series is listed in the 2026 workbook, its status is synchronized across all candidate placements (even for historical 2025 deals), preventing duplicate unlisted Black-Scholes valuations for options that have since been listed.
 
+### 8.42 Template's look, scanned once instead of per deal (`…_placement_style_plan.sql`, `tracker-style-store.ts`, `scripts/tracker-style-plan.mjs`)
+
+§8.31 describes recovering Template's formatting by treating a range read as a uniformity test. It works. It was also being paid for on every deal, and this is the measurement that ended that:
+
+```
+SCAN  : 504,324 ms   1,207 format reads in 69 batches   (complete, budget 1500)
+WRITES:        73    16 widths, 16 fills, 39 fonts, 2 border edges  -> 4 batches
+```
+
+Eight and a half minutes to learn the plan; four batches to apply it. **Every ingest route is capped at 60 seconds**, so a live scan cannot finish — meaning whether a tab came out shaded depended on whether the instance answering had already paid for it in a previous invocation.
+
+- **The reads are the whole cost and the writes are nothing**, which is why caching is the fix rather than optimising the scan. The plan was already cached — in a module-scope `Map` with a 6-hour TTL, which serves a warm server and a serverless one not at all: every route here is a cold function often enough that most deals faced the full scan and got part of a plan or none.
+- **There is no shortcut in the API, and both candidates were probed rather than assumed.** Neither exists on this tenant, in v1.0 *or* beta, and both answer with the same message the `worksheets/copy` attempt has always got:
+
+  ```
+  POST .../worksheets('Template')/copy            -> "Resource not found for the segment 'copy'"
+  POST .../range(address='A100')/copyFrom         -> "Resource not found for the segment 'copyFrom'"
+  ```
+
+  So the reconstruction is not optional. Paying for it per deal was.
+- **It had already reached the workbook, silently.** `IPT` and `IPT (b)` were written at different times and carry *identical* column widths — and all sixteen differ from Template's, each about 20pt narrower. Two tabs replayed from the same stale plan after Template had been widened. Nothing anywhere recorded which Template a plan came from, so there was no way to notice; the tabs simply looked cramped. This is the failure the table is shaped around, not a side effect it happens to fix.
+- **The plan is a pure function of Template**, so it is scanned deliberately — `npm run tracker:plan`, where no 60s ceiling applies and the read budget can be generous — and stored as one `jsonb` row. A tab write becomes one row read plus the 73 writes.
+- **`shape` and `scanned_at` travel with the plan, and the drift check is free.** The writer already reads Template's used range for the cell seed, so comparing it against the shape the plan was scanned at costs nothing and turns silent drift into a note naming what to run. Age (>30 days) and a truncated scan are reported separately, because they want different things done about them — re-run as-is versus re-run with a bigger budget.
+- **An absent plan is not fatal.** No row means the style pass falls back to scanning: a deployment that has never seeded, or a fresh year's workbook, still gets a shaded tab if the budget happens to allow it. A missing *table* names its own migration, because "nothing stored yet" and "the migration was never applied" read identically for as long as nobody looks.
+- **The plan is resolved once per RUN, not per deal (`TrackerSyncDeps.stylePlan`).** A function rather than a value, because the workbook is only known after `target(year)` answers, and memoised by workbook path so a three-deal batch costs one row read. `workbookItemPath()` is exported and shared: the row key is derived from that exact string, and a second copy of the expression would silently miss every stored plan.
+- **A stored plan has the style RULES baked into it, and that is the one trap here.** `readTemplatePlan` runs `ensurePlacementStyleCompleteness` before returning, so what is stored is Template's scan *plus* everything §8.31 adds on top — the client-input yellow clamp included. Editing `CLIENT_INPUT_LAST_ROW` and deploying therefore changes nothing until someone re-runs `npm run tracker:plan`. Kept that way deliberately: re-deriving the rules on read would put two versions of them in play and make a tab's shading depend on when its plan was scanned *and* when the reader was deployed. One place, one answer, and the re-seed is a documented step rather than a surprise.
+- **The seed script writes one row and never touches the workbook.** It reports the counts and refuses to hide a truncated scan — a plan that ran short is still stored, because it beats what a live scan manages, but it says so and every run repeats the warning until someone re-seeds.
+
 ### 8.31 Placement Tracker Tab Formatting & Template Replay Robustness (`tracker-style.ts`, `tracker-format.ts`, `tracker-sync.ts`)
 
 Automated placement tab generation in `2026 Placements.xlsx` must strictly mirror the official `Template` sheet design:

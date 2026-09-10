@@ -745,7 +745,6 @@ export function clampClientInputYellow(fills: Region<string>[]): Region<string>[
 function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
   const yellow = "#FFFF00";
   const black = "#000000";
-  const gray = "#D9D9D9";
 
   // Template paints the client inputs yellow all the way down to row 21; the
   // desk only ever fills the first few. Trim before anything else reads the
@@ -947,11 +946,20 @@ export async function dressSheetLikeTemplate(
   templateSheet: string,
   sheet: string,
   shape: string,
-  opts?: { sessionId?: string | null; budget?: number } | string | null,
+  opts?:
+    | { sessionId?: string | null; budget?: number; plan?: TemplatePlan | null }
+    | string
+    | null,
 ): Promise<string[]> {
   try {
     const options = typeof opts === "object" && opts !== null ? opts : { sessionId: opts ?? null };
-    const plan = await readTemplatePlan(graph, item, templateSheet, shape, options);
+
+    // A plan handed in is a plan already scanned — see `tracker-style-store.ts`
+    // for the 504s that buys back. Falling through to the scan when there is
+    // none is deliberate: a deployment that has never seeded, or a fresh year's
+    // workbook, still gets a shaded tab if the budget happens to allow it, and a
+    // tab shaded badly is a far smaller problem than a tab not filed.
+    const plan = options.plan ?? (await readTemplatePlan(graph, item, templateSheet, shape, options));
     if (!plan) return [];
     return await paintSheetLikeTemplate(graph, item, sheet, plan, options.sessionId);
   } catch (err) {

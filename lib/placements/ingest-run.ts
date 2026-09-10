@@ -2,6 +2,8 @@ import "server-only";
 import { syncPlacementCandidates } from "./candidates.ts";
 import { syncTrackerRows, type TrackerSyncReport } from "./tracker-sync.ts";
 import { graphCaller, resolveTrackerTarget, trackerUrls } from "./tracker-writer.ts";
+import { TEMPLATE_SHEET } from "./tracker-format.ts";
+import { readStylePlan, stylePlanNotes } from "./tracker-style-store.ts";
 import { getMicrosoftAccessToken } from "../remote-sheets.ts";
 import {
   DEFAULT_TRACKER_BATCH,
@@ -123,6 +125,27 @@ export async function writeOwedDealsToTracker(
   const report = await syncTrackerRows<OwedCandidate>(batch, {
     graph,
     target: (year) => resolveTrackerTarget(urls, year, graph),
+    // Template's formatting, read from the table rather than re-learned. The
+    // scan costs ~504s of Graph reads and this route has 60, so before this it
+    // could only ever finish on a warm instance that had already paid for it —
+    // which is why two tabs came out shaded to a Template that had since been
+    // widened. See `tracker-style-store.ts`.
+    stylePlan: async (item) => {
+      const { stored, note } = await readStylePlan(db, item, TEMPLATE_SHEET);
+      if (!stored) {
+        return {
+          plan: null,
+          notes: [
+            note ??
+              `No stored style plan for this workbook — every tab will attempt the full Template ` +
+                `scan and will not finish it inside the route's 60s. Run \`npm run tracker:plan\`.`,
+          ],
+        };
+      }
+      // The shape check is left to the writer, which holds Template's live used
+      // range already; these are the two the plan can answer on its own.
+      return { plan: stored.plan, notes: stylePlanNotes(stored, "") };
+    },
     // Recorded per deal, as it settles. A run that dies on its second tab keeps
     // the first — which is the whole point of the queue.
     onSettled: async (item, outcome) => {

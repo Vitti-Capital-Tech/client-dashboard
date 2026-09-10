@@ -19,7 +19,7 @@ import {
   type SheetSlot,
   type TrackerDeal,
 } from "./tracker-format.ts";
-import { dressSheetLikeTemplate } from "./tracker-style.ts";
+import { dressSheetLikeTemplate, type TemplatePlan } from "./tracker-style.ts";
 
 /**
  * Writing a new deal into the Placement Tracker workbook.
@@ -95,6 +95,18 @@ export type TrackerTarget = {
   /** `2026 Overview`. */
   overviewSheet: string;
 };
+
+/**
+ * Every workbook call goes through this, and none through the share link.
+ *
+ * `/shares/{id}/driveItem/workbook` answers `400 … no addressUrl for
+ * Microsoft.Excel` — the share link resolves the ids and nothing more. Exported
+ * because the style plan is keyed on this exact string, and a key derived from a
+ * second copy of the expression would silently miss every stored plan.
+ */
+export function workbookItemPath(target: TrackerTarget): string {
+  return `/drives/${target.driveId}/items/${target.itemId}/workbook`;
+}
 
 export type TrackerWriteResult = {
   ok: boolean;
@@ -588,6 +600,16 @@ export type TrackerWriteDeps = {
   target: TrackerTarget;
   /** How far down the Overview to look. Generous; it is one range read. */
   scanToRow?: number;
+  /**
+   * Template's formatting, already scanned.
+   *
+   * Learning it costs ~504s of Graph reads and this route has 60, so a live scan
+   * cannot finish — see `tracker-style-store.ts`. Resolved once per RUN by the
+   * caller and passed down, rather than read here: a batch of three deals must
+   * not read the same row three times, and this module stays free of the
+   * database. Absent, the style pass falls back to scanning.
+   */
+  stylePlan?: TemplatePlan | null;
 };
 
 /**
@@ -602,7 +624,7 @@ export async function writeDealToTracker(
 ): Promise<TrackerWriteResult> {
   const { target } = deps;
   const scanToRow = deps.scanToRow ?? 400;
-  const item = `/drives/${target.driveId}/items/${target.itemId}/workbook`;
+  const item = workbookItemPath(target);
 
   if (!deal.ticker?.trim()) {
     return { ok: false, error: "A deal with no ticker cannot be written to the tracker." };
@@ -800,6 +822,16 @@ export async function writeDealToTracker(
     // shading, which is exactly why the leftover reads as a plain grid of
     // `#DIV/0!` with no bands, no yellow input cells and default column widths.
     if ((made.via === "replay" || made.via === "adopted") && made.shape) {
+      // Free drift check: the plan carries the shape it was scanned against and
+      // `made.shape` is Template's used range as read moments ago. A mismatch is
+      // how the column-width drift went unnoticed for weeks — two tabs shaded to
+      // a Template that had since been widened, with nothing saying so.
+      if (deps.stylePlan && deps.stylePlan.shape && deps.stylePlan.shape !== made.shape) {
+        notes.push(
+          `"${sheet}" was shaded from a style plan scanned against Template at ` +
+            `${deps.stylePlan.shape}, but Template is now ${made.shape}. Re-run \`npm run tracker:plan\`.`,
+        );
+      }
       notes.push(
         ...(await dressSheetLikeTemplate(
           graph,
@@ -807,7 +839,7 @@ export async function writeDealToTracker(
           TEMPLATE_SHEET,
           sheet,
           made.shape,
-          sessionId,
+          { sessionId, plan: deps.stylePlan ?? null },
         )),
       );
     }

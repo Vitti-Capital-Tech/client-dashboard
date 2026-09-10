@@ -1,5 +1,11 @@
 import { attachingOptionsFromSummary, parseSummaryTerms } from "./summary-terms.ts";
-import { writeDealToTracker, type GraphCall, type TrackerTarget } from "./tracker-writer.ts";
+import {
+  workbookItemPath,
+  writeDealToTracker,
+  type GraphCall,
+  type TrackerTarget,
+} from "./tracker-writer.ts";
+import type { TemplatePlan } from "./tracker-style.ts";
 import type { TrackerDeal } from "./tracker-format.ts";
 import type { CandidateFeedItem } from "./candidates.ts";
 
@@ -70,6 +76,18 @@ export type TrackerSyncDeps<T extends CandidateFeedItem = CandidateFeedItem> = {
    * caller handed the finished report keeps nothing.
    */
   onSettled?: (item: T, outcome: TrackerOutcome) => Promise<void>;
+  /**
+   * Template's formatting for a workbook, resolved on demand and once per run.
+   *
+   * A function rather than a value because the workbook is only known after
+   * `target(year)` has answered, and memoised here because a three-deal batch
+   * must cost one row read rather than three. The scan it replaces costs ~504s
+   * against a 60s route — see `tracker-style-store.ts`.
+   *
+   * Returning null is fine and means "scan it the old way": a deployment that
+   * has never seeded still gets a shaded tab if the budget allows.
+   */
+  stylePlan?: (item: string) => Promise<{ plan: TemplatePlan | null; notes?: string[] }>;
 };
 
 /** The mail item, read into the shape a tracker tab wants. */
@@ -190,6 +208,22 @@ export async function syncTrackerRows<T extends CandidateFeedItem>(
     return targets.get(year) ?? null;
   };
 
+  // One plan per workbook, resolved the first time a deal needs it — which is
+  // after the target, since the workbook is what it is keyed on. The notes it
+  // carries (a stale scan, a truncated one) belong to the RUN rather than to
+  // whichever deal happened to be first, so they are pushed once.
+  const plans = new Map<string, TemplatePlan | null>();
+  const planFor = async (target: TrackerTarget): Promise<TemplatePlan | null> => {
+    if (!deps.stylePlan) return null;
+    const item = workbookItemPath(target);
+    if (!plans.has(item)) {
+      const resolved = await deps.stylePlan(item);
+      plans.set(item, resolved.plan);
+      if (resolved.notes?.length) report.notes.push(...resolved.notes);
+    }
+    return plans.get(item) ?? null;
+  };
+
   // A permission failure is the same failure for every deal in the run. Reported
   // once, and the rest are not attempted: forty identical 403s in a cron log is
   // noise that hides the one line explaining what to do.
@@ -231,7 +265,11 @@ export async function syncTrackerRows<T extends CandidateFeedItem>(
       continue;
     }
 
-    const res = await writeDealToTracker(deal, { graph: deps.graph, target });
+    const res = await writeDealToTracker(deal, {
+      graph: deps.graph,
+      target,
+      stylePlan: await planFor(target),
+    });
 
     if (res.ok && res.skipped) {
       report.skipped++;
