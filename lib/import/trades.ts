@@ -301,7 +301,19 @@ export function replayLedger(lines: LedgerLine[]): {
    * sell partly closes a parcel assembled at two or more prices, which is what
    * `hasPartial` records.
    */
-  type OpenParcel = { units: number; cost: number; costs: Set<number> };
+  type OpenParcel = {
+    units: number;
+    cost: number;
+    costs: Set<number>;
+    /**
+     * The purchases making up the parcel, still individually identified.
+     *
+     * Weighted-average cost only needs the two totals; these are what let a
+     * sale be matched to the ONE purchase that closed it — see `sameDayPair`
+     * below for when that is allowed.
+     */
+    lots: { units: number; value: number }[];
+  };
   const parcels = new Map<string, OpenParcel>();
   const parcelKey = (t: LedgerLine) =>
     `${t.scope}::${isOptionCode(t.code) ? t.code : t.parent}`;
@@ -330,6 +342,50 @@ export function replayLedger(lines: LedgerLine[]): {
   const boughtForValue = new Set<string>();
   for (const t of settled) {
     if (t.side === "BUY" && t.value > 0) boughtForValue.add(parcelKey(t));
+  }
+
+  /**
+   * Pools that buy AND sell on the same day — where lot matching is switched
+   * off, and why.
+   *
+   * ── The rule this guards ────────────────────────────────────────────────────
+   * A client can hold two parcels of one stock at once: a placement parcel and
+   * an on-market one. Weighted-average cost pools them, so selling ONE draws
+   * blended cost from both. Real case, `ACW` on a live account:
+   *
+   *   2026-01-23  ACW    BUY     95,882 @ $5,095.86   (on-market, sold in July)
+   *   2026-02-03  ACWXX  BUY    238,095 @ $9,999.99   (placement)
+   *   2026-04-20  ACW    SELL   238,095 @ $10,360.94
+   *
+   * WAC costed that sale at $10,761.96 by blending in the January parcel — a
+   * parcel whose own sale is in JULY, outside the period being reported. The
+   * broker's own closed-trades report costs it at $9,999.99, the placement lot
+   * it actually closed, and `ARL` independently confirms the pairing: its buys
+   * are `ARLXX` and its sells `ARL`, quantities equal, and our figure already
+   * matches the desk's corrected one to the cent.
+   *
+   * So a sale that exactly matches ONE open lot is costed at that lot.
+   *
+   * ── Why same-day two-way pools are excluded ────────────────────────────────
+   * Because there the answer is decided by ORDERING, not by costing. This
+   * ledger records a same-day round trip's SELL before its BUY often enough
+   * that the sale meets an empty parcel and reports its whole proceeds as
+   * profit. Measured over the live book, lot matching moves 22 groups: **17 of
+   * them are same-day two-way pools** carrying ~$38k of that (4DX alone
+   * −$53.5k), and only 5 are the two-parcel shape above, worth ~+$5k in total.
+   * Fixing the ordering is a separate, larger question; until it is answered,
+   * applying lot matching there would be reading a number out of a sequence
+   * nobody has established.
+   */
+  const sameDayPair = new Set<string>();
+  {
+    const seen = new Map<string, TradeSide>();
+    for (const t of settled) {
+      const k = `${parcelKey(t)}::${t.tradeDate}`;
+      const other = seen.get(k);
+      if (other && other !== t.side) sameDayPair.add(parcelKey(t));
+      else if (!other) seen.set(k, t.side);
+    }
   }
 
   for (const t of settled) {
@@ -364,7 +420,7 @@ export function replayLedger(lines: LedgerLine[]): {
     const pk = parcelKey(t);
     let p = parcels.get(pk);
     if (!p) {
-      p = { units: 0, cost: 0, costs: new Set<number>() };
+      p = { units: 0, cost: 0, costs: new Set<number>(), lots: [] };
       parcels.set(pk, p);
     }
 
@@ -376,6 +432,7 @@ export function replayLedger(lines: LedgerLine[]): {
       r.openCost += t.value;
       p.units += t.units;
       p.cost += t.value;
+      p.lots.push({ units: t.units, value: t.value });
       // Round the unit cost before recording it, so float noise doesn't make
       // two economically identical parcels look like different prices.
       p.costs.add(Math.round((t.value / t.units) * 1e6) / 1e6);
@@ -390,8 +447,55 @@ export function replayLedger(lines: LedgerLine[]): {
     let noCostBasis = false;
     let freeGrant = false;
 
+    /**
+     * The ONE open lot this sale closes, if there is exactly one.
+     *
+     * "Exactly one" is the whole safety condition. Placement parcels are round
+     * numbers — 200,000, 333,333 — and two of them under one parent collide by
+     * coincidence often enough that picking the first match would pair the
+     * wrong purchase. Where the quantity is ambiguous the sale falls through to
+     * weighted average, which is the answer it has always had.
+     */
+    const exactLot = sameDayPair.has(pk)
+      ? -1
+      : (() => {
+          let found = -1;
+          for (let i = 0; i < p.lots.length; i++) {
+            if (p.lots[i].units <= 0 || Math.abs(p.lots[i].units - t.units) > 0.5) continue;
+            if (found !== -1) return -1; // ambiguous: two lots of this size
+            found = i;
+          }
+          return found;
+        })();
+
+    if (exactLot !== -1) {
+      const lot = p.lots[exactLot];
+      costOut = lot.value;
+
+      // The parcel loses the lot, and the PARENT's reported open position loses
+      // it with them. Missing the second half left `openUnits` carrying a
+      // parcel that had just been closed.
+      p.units -= lot.units;
+      p.cost -= lot.value;
+      p.lots.splice(exactLot, 1);
+      r.openUnits -= lot.units;
+      r.openCost -= lot.value;
+
+      // Snapped independently: one instrument going flat says nothing about
+      // the others under the same parent.
+      if (p.units <= 1e-9) {
+        p.units = 0;
+        p.cost = 0;
+        p.costs.clear();
+        p.lots.length = 0;
+      }
+      if (r.openUnits <= 1e-9) {
+        r.openUnits = 0;
+        r.openCost = 0;
+      }
+    }
     // Drawn from THIS INSTRUMENT's parcel, not the parent's pool.
-    if (p.units <= 0) {
+    else if (p.units <= 0) {
       if (isOptionCode(t.code) && !boughtForValue.has(pk)) {
         // A free attaching option, sold. Zero cost is the FIRM'S ANSWER, not a
         // gap: the placement's whole cost sits on the shares. Recorded as such
@@ -426,6 +530,18 @@ export function replayLedger(lines: LedgerLine[]): {
       costOut = (p.cost * closing) / p.units;
       p.units -= closing;
       p.cost -= costOut;
+
+      // Draw the same units out of the individual lots, oldest first. Without
+      // this a parcel already consumed by weighted average would still offer
+      // its original quantities to a later exact match.
+      let draining = closing;
+      while (draining > 1e-9 && p.lots.length > 0) {
+        const take = Math.min(draining, p.lots[0].units);
+        p.lots[0].value -= (p.lots[0].value * take) / p.lots[0].units;
+        p.lots[0].units -= take;
+        draining -= take;
+        if (p.lots[0].units <= 1e-9) p.lots.shift();
+      }
       r.openUnits -= closing;
       r.openCost -= costOut;
 
@@ -436,6 +552,7 @@ export function replayLedger(lines: LedgerLine[]): {
         p.units = 0;
         p.cost = 0;
         p.costs.clear();
+        p.lots.length = 0;
       }
       if (r.openUnits <= 1e-9) {
         r.openUnits = 0;

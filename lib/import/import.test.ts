@@ -560,3 +560,99 @@ test("ledger: the parent rollup still reports both instruments together", () => 
   assert.equal(rollups[0].realizedPl, 1800, "1,000 on the shares + 800 on the grant");
   assert.equal(rollups[0].openUnits, 0, "the shares closed out fully");
 });
+
+// ---------------------------------------------------------------------------
+// A sale that closes ONE lot is costed at that lot, not at a blend
+// ---------------------------------------------------------------------------
+
+test("ledger: a sale matching one open lot is costed at that lot", () => {
+  /**
+   * `ACW` on a live account, verbatim. Two parcels are open at once — an
+   * on-market one bought in January and a placement bought in February — and
+   * the April sale closes the placement exactly.
+   *
+   * Weighted average blended the January parcel in and costed the sale at
+   * $10,761.96, even though that parcel's own sale is in JULY, outside the
+   * period being reported. The broker's closed-trades report costs it at
+   * $9,999.99, the lot it actually closed. `ARL` confirms the pairing
+   * independently: its buys are `ARLXX` and its sells `ARL`, and our figure
+   * already matched the desk's corrected one to the cent.
+   */
+  const { sells } = replayLedger([
+    line("ACW", "BUY", "2025-10-20", 157_740, 4_999.94),
+    line("ACW", "SELL", "2025-10-29", 157_740, 5_253.16),
+    line("ACW", "BUY", "2026-01-23", 95_882, 5_095.86),
+    // The placement arrives as the deferred-settlement line and is sold as the
+    // ordinary — which is why this cannot be found by matching codes.
+    line("ACWXX", "BUY", "2026-02-03", 238_095, 9_999.99),
+    line("ACW", "SELL", "2026-04-20", 238_095, 10_360.94),
+    line("ACW", "SELL", "2026-07-03", 95_882, 3_341.75),
+  ]);
+
+  const april = sells.find((s) => s.tradeDate === "2026-04-20")!;
+  assert.equal(april.costOfSold, 9_999.99, "the lot it closed, not a blend");
+  assert.equal(april.realizedPl, 360.95);
+
+  // And the January parcel's cost stays with the July sale, where it belongs.
+  const july = sells.find((s) => s.tradeDate === "2026-07-03")!;
+  assert.equal(july.costOfSold, 5_095.86);
+
+  // Together they reproduce the broker's own two-line figures.
+  const inPeriod = sells.filter((s) => s.tradeDate < "2026-07-01");
+  assert.equal(
+    inPeriod.reduce((n, s) => n + s.costOfSold, 0),
+    14_999.93,
+    "broker: BUY 14,999.93",
+  );
+  assert.equal(
+    Number(inPeriod.reduce((n, s) => n + s.realizedPl, 0).toFixed(2)),
+    614.17,
+    "broker: P&L 614.17",
+  );
+});
+
+test("ledger: an AMBIGUOUS quantity falls back to weighted average", () => {
+  // The safety condition. Placement parcels are round numbers and two of them
+  // under one parent collide by coincidence — 200,000 twice here. Picking the
+  // first would pair the wrong purchase and put one parcel's cost on the
+  // other's sale, so an ambiguous match is refused and WAC answers instead.
+  const { sells } = replayLedger([
+    line("ABC", "BUY", "2026-01-10", 200_000, 4_000),
+    line("ABC", "BUY", "2026-02-10", 200_000, 6_000),
+    line("ABC", "SELL", "2026-03-10", 200_000, 5_500),
+  ]);
+
+  // WAC over 400,000 units at $10,000 → $5,000 for half of them.
+  assert.equal(sells[0].costOfSold, 5_000);
+  assert.equal(sells[0].realizedPl, 500);
+});
+
+test("ledger: a same-day two-way pool keeps weighted average", () => {
+  /**
+   * Lot matching is switched off where a pool buys and sells on one day,
+   * because there the answer is decided by ORDERING rather than by costing:
+   * this ledger records a round trip's SELL before its BUY often enough that
+   * the sale meets an empty parcel.
+   *
+   * Measured over the live book, lot matching moves 22 groups — 17 of them
+   * same-day two-way pools carrying ~$38k (4DX alone −$53.5k) against 5 of the
+   * two-parcel shape worth ~+$5k. Reading a cost out of a sequence nobody has
+   * established is not an improvement, so those pools are left as they were
+   * until the ordering question is answered on its own.
+   */
+  const { sells } = replayLedger([
+    line("XYZ", "BUY", "2026-01-10", 30_000, 600),
+    // Same day, both ways: this is what disables the rule for XYZ entirely.
+    line("XYZ", "SELL", "2026-02-10", 10_000, 300),
+    line("XYZ", "BUY", "2026-02-10", 10_000, 500),
+    line("XYZ", "SELL", "2026-03-10", 10_000, 400),
+  ]);
+
+  // The March sale exactly matches the February lot, whose value is $500 — and
+  // gets $275 instead, which is weighted average over what is left of the
+  // pooled parcel. The two answers are deliberately far apart, or the test
+  // would pass whether or not the rule was actually off.
+  const march = sells.find((s) => s.tradeDate === "2026-03-10")!;
+  assert.equal(march.costOfSold, 275, "weighted average, not the $500 lot");
+  assert.equal(march.realizedPl, 125);
+});
