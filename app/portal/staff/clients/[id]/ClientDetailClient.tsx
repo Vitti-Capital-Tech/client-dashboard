@@ -17,7 +17,7 @@ import type { PnlOverrideRow } from "@/lib/data/holdings";
 import {
   rollUpRealized,
   attributeSells,
-  realizedByMonth,
+  realizedByPeriod,
   type RealizedRow,
 } from "@/lib/data/compute";
 import {
@@ -304,7 +304,8 @@ export function ClientDetailClient({
   // The chart needs realised P&L WITH dates on it, which the per-ticker rollup
   // cannot supply. Replaying the visible ledger through the same cost-basis
   // walk the importer uses gives per-sale attribution, which then buckets by
-  // month — so the chart and the table are two views of one number.
+  // month, quarter or year depending on how much history there is — so the
+  // chart and the table are two views of one number.
   //
   // Desk edits carry no date of their own, so each corrected company's delta is
   // handed to the bucketer to spread across that company's sale months. Without
@@ -315,7 +316,7 @@ export function ClientDetailClient({
       .map((r) => [r.ticker, r.pnl - r.computed.pnl]),
   );
 
-  const chartPeriods = realizedByMonth(
+  const chartPeriods = realizedByPeriod(
     attributeSells(visibleTrades, offLedger),
     chartDeltas,
   );

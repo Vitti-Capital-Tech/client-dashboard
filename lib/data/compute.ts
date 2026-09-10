@@ -116,9 +116,13 @@ export type RealizedRow = RealizedSummary & {
 
 /** One period on the P&L-over-time chart. */
 export type RealizedPeriod = {
-  /** `YYYY-MM` — sorts lexicographically, which is also chronologically. */
+  /**
+   * The bucket: `YYYY-MM`, `YYYY-Qn` or `YYYY`, whichever grain the range was
+   * drawn at (see `grainFor`). Every form sorts lexicographically, which
+   * inside one grain is also chronologically.
+   */
   key: string;
-  label: string; // 'Mar 26'
+  label: string; // 'Mar 26' | 'Q1 26' | '2026'
   realizedPl: number;
   proceeds: number;
   costOfSold: number;
@@ -194,8 +198,9 @@ export function attributeSells(
  * A company with no sales gets nothing: correcting an unsold position changes
  * unrealised P&L, and nothing unrealised belongs on a realised figure.
  *
- * Shared by `realizedByMonth` and `realizedBetween` so a month on the chart and
- * a date range on the client's own screen cannot apply corrections differently.
+ * Shared by `realizedByPeriod` and `realizedBetween` so a bucket on the chart
+ * and a date range on the client's own screen cannot apply corrections
+ * differently.
  * It MUST run over the whole sale history before any date filter: the pro-rata
  * weights are shares of a company's total units sold, and re-deriving them from
  * a window would hand that window a share of the correction sized to the window
@@ -221,24 +226,95 @@ function applyOverrideDeltas(
 
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-function monthLabel(key: string): string {
-  const [y, m] = key.split("-");
-  return `${MONTHS[Number(m) - 1]} ${y.slice(2)}`;
+/** How wide one column is. Chosen from the range, never asked for. */
+export type PeriodGrain = "month" | "quarter" | "year";
+
+/**
+ * Read the grain back off a bucket key, so the key format has ONE owner.
+ *
+ * The chart wants it only for its prose — "by quarter", "no sales settled this
+ * quarter". The row shape is identical at every grain, which is why the
+ * columns, the tooltip and the contributor list did not have to change.
+ */
+export function grainOfKey(key: string): PeriodGrain {
+  if (key.length === 4) return "year";
+  return key.includes("Q") ? "quarter" : "month";
+}
+
+/** Months since year zero, so spans and walks are plain arithmetic. */
+const monthIndex = (ym: string) => {
+  const [y, m] = ym.split("-").map(Number);
+  return y * 12 + (m - 1);
+};
+
+/**
+ * Bucket width from the span, so the axis never carries much more than a
+ * dozen columns.
+ *
+ * Thirty-six monthly columns in a 668px plot is 18px a slot — bars thin enough
+ * to read as hairlines and labels that have to be thinned to every third one
+ * to fit. Widening the bucket instead keeps the count near twelve at any range
+ * the picker can produce, which is 55px+ per label and a column wide enough to
+ * be a column. Twelve quarters are also simply easier to read than thirty-six
+ * months: the eye is being asked for a trend, not for March.
+ */
+function grainFor(firstMonth: string, lastMonth: string): PeriodGrain {
+  const months = monthIndex(lastMonth) - monthIndex(firstMonth) + 1;
+  if (months <= 12) return "month";
+  if (months <= 36) return "quarter";
+  return "year";
+}
+
+/** The bucket a month belongs to at a given grain. */
+function bucketKey(month: string, grain: PeriodGrain): string {
+  const [y, m] = month.split("-");
+  if (grain === "year") return y;
+  if (grain === "quarter") return `${y}-Q${Math.floor((Number(m) - 1) / 3) + 1}`;
+  return month;
+}
+
+function bucketLabel(key: string, grain: PeriodGrain): string {
+  if (grain === "year") return key; // '2026' — the century is not noise here
+  const [y, tail] = key.split("-");
+  return grain === "quarter"
+    ? `${tail} ${y.slice(2)}` // 'Q1 26'
+    : `${MONTHS[Number(tail) - 1]} ${y.slice(2)}`; // 'Mar 26'
+}
+
+/** The next bucket along, which is how the quiet ones get filled in. */
+function nextKey(key: string, grain: PeriodGrain): string {
+  if (grain === "year") return String(Number(key) + 1);
+  const [y, tail] = key.split("-");
+  if (grain === "quarter") {
+    const q = Number(tail.slice(1));
+    return q === 4 ? `${Number(y) + 1}-Q1` : `${y}-Q${q + 1}`;
+  }
+  const m = Number(tail);
+  return m === 12
+    ? `${Number(y) + 1}-01`
+    : `${y}-${String(m + 1).padStart(2, "0")}`;
 }
 
 /**
- * Bucket realised P&L by calendar month.
+ * Bucket realised P&L over time, at whatever grain the span calls for.
  *
  * The per-ticker rollup in `realized_pnl` cannot answer "how much did we make
  * in March" — it has no dates on the money. This replays the ledger to
- * attribute each realised dollar to the sale that produced it, then groups by
- * month.
+ * attribute each realised dollar to the sale that produced it, then groups
+ * those sales into calendar buckets.
  *
- * **Empty months are filled in.** A time axis that silently skips the months
+ * **The bucket is chosen, not fixed.** A year of sales is drawn in months, up
+ * to three years in quarters, anything longer in years (`grainFor`) — so the
+ * column count stays near a dozen however wide the caller's range is, and the
+ * axis never has to be squeezed to fit. Only `key` and `label` differ between
+ * grains; every other field means the same thing, so the chart, its tooltip
+ * and the contributor rollup are grain-agnostic.
+ *
+ * **Empty buckets are filled in.** A time axis that silently skips the periods
  * nothing happened in compresses the gaps and makes activity look steadier
  * than it was.
  */
-export function realizedByMonth(
+export function realizedByPeriod(
   sells: SellAttribution[],
   /**
    * Per-ticker P&L corrections from the summary table, so the chart totals
@@ -255,22 +331,30 @@ export function realizedByMonth(
 
   sells = applyOverrideDeltas(sells, deltaByTicker);
 
+  // The grain comes off the span of the SALES, which is also the span the
+  // axis will be drawn over — the empty-bucket fill runs between the same two
+  // endpoints, so what is measured here is exactly what gets rendered.
+  const months = sells.map((s) => s.tradeDate.slice(0, 7)).sort();
+  const grain = grainFor(months[0], months[months.length - 1]);
+
+  const blank = (key: string): RealizedPeriod => ({
+    key,
+    label: bucketLabel(key, grain),
+    realizedPl: 0,
+    proceeds: 0,
+    costOfSold: 0,
+    saleCount: 0,
+    contributors: [],
+    hasUncosted: false,
+  });
+
   const byKey = new Map<string, RealizedPeriod>();
 
   for (const s of sells) {
-    const key = s.tradeDate.slice(0, 7); // YYYY-MM
+    const key = bucketKey(s.tradeDate.slice(0, 7), grain);
     let p = byKey.get(key);
     if (!p) {
-      p = {
-        key,
-        label: monthLabel(key),
-        realizedPl: 0,
-        proceeds: 0,
-        costOfSold: 0,
-        saleCount: 0,
-        contributors: [],
-        hasUncosted: false,
-      };
+      p = blank(key);
       byKey.set(key, p);
     }
 
@@ -280,7 +364,7 @@ export function realizedByMonth(
     p.saleCount += 1;
     p.hasUncosted = p.hasUncosted || s.noCostBasis;
 
-    // Several sales of one instrument in a month read as one contributor.
+    // Several sales of one instrument in a period read as one contributor.
     const code = s.code || s.parent;
     const existing = p.contributors.find((c) => c.code === code);
     if (existing) {
@@ -297,28 +381,15 @@ export function realizedByMonth(
   }
 
   const keys = [...byKey.keys()].sort();
+  const last = keys[keys.length - 1];
   const out: RealizedPeriod[] = [];
 
-  // Walk every month from first to last, inserting the quiet ones.
-  const [startY, startM] = keys[0].split("-").map(Number);
-  const [endY, endM] = keys[keys.length - 1].split("-").map(Number);
-
-  for (let y = startY, m = startM; y < endY || (y === endY && m <= endM); ) {
-    const key = `${y}-${String(m).padStart(2, "0")}`;
-    out.push(
-      byKey.get(key) ?? {
-        key,
-        label: monthLabel(key),
-        realizedPl: 0,
-        proceeds: 0,
-        costOfSold: 0,
-        saleCount: 0,
-        contributors: [],
-        hasUncosted: false,
-      },
-    );
-    m += 1;
-    if (m > 12) { m = 1; y += 1; }
+  // Walk every bucket from first to last, inserting the quiet ones. The guard
+  // is `>=` rather than `===` so a key that somehow overshoots ends the walk
+  // instead of running it forever.
+  for (let key = keys[0]; ; key = nextKey(key, grain)) {
+    out.push(byKey.get(key) ?? blank(key));
+    if (key >= last) break;
   }
 
   for (const p of out) {

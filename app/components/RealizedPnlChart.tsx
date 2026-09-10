@@ -1,16 +1,21 @@
 "use client";
 
 import React, { useState } from "react";
-import type { RealizedPeriod } from "@/lib/data/compute";
+import { grainOfKey, type RealizedPeriod } from "@/lib/data/compute";
 
 /**
- * Realised P&L over time — a diverging column chart, one column per month.
+ * Realised P&L over time — a diverging column chart, one column per period.
  *
  * FORM: the reader's job is "when did we make money, and how much", which is
  * magnitude plus polarity across an ordered axis. Columns, because time reads
  * left-to-right; diverging from a zero baseline, because the sign is half the
- * story. Months with no sales are still drawn — skipping them would compress
+ * story. Periods with no sales are still drawn — skipping them would compress
  * the gaps and make the desk look busier than it was.
+ *
+ * GRAIN: one column is a month, a quarter or a year, and the bucketer chooses
+ * which from the span (`grainFor` in `compute.ts`) so the count stays near a
+ * dozen at any range. This chart reads the grain back off the bucket key and
+ * spends it on prose only — the geometry is identical at every grain.
  *
  * COLOUR: the design system's diverging pair, --color-gain / --color-loss.
  * Validated against a white surface, that pair passes lightness, chroma and
@@ -20,8 +25,8 @@ import type { RealizedPeriod } from "@/lib/data/compute";
  *   2. the axis itself, with the zero line drawn heavier than the gridlines.
  * A reader who cannot separate the hues still reads the chart correctly.
  *
- * PROVISIONAL COLUMNS: a month containing a sale that drew on no cost basis is
- * hatched. Those "profits" are really just proceeds, and a solid column would
+ * PROVISIONAL COLUMNS: a period containing a sale that drew on no cost basis
+ * is hatched. Those "profits" are really just proceeds, and a solid column would
  * present them as fact.
  */
 
@@ -35,7 +40,7 @@ const H = 300;
  * viewBox; 76 gives it room to grow one more character before that happens
  * again.
  *
- * `PAD_B` carries two stacked lines, the month and the sale count. The second
+ * `PAD_B` carries two stacked lines, the period and the sale count. The second
  * sat at H − PAD_B + 28 against a 46px gutter, which put its descenders past
  * the bottom of the box.
  */
@@ -43,7 +48,7 @@ const PAD_L = 76;
 const PAD_R = 16;
 const PAD_T = 16;
 const PAD_B = 56;
-const MAX_BAR = 44; // ≤ 24px is for thin bar charts; a monthly column reads wider
+const MAX_BAR = 44; // ≤ 24px is for thin bar charts; a period column reads wider
 const R = 4; // rounded data-end
 
 const money = (n: number) =>
@@ -59,17 +64,58 @@ const compact = (n: number) => {
   return `${n < 0 ? "−" : ""}$${s}`;
 };
 
-/** Axis ticks at clean round numbers spanning the data, always including zero. */
-function ticks(min: number, max: number): number[] {
-  const span = Math.max(Math.abs(min), Math.abs(max));
-  if (span === 0) return [0];
-  const step = Math.pow(10, Math.floor(Math.log10(span))) / 2;
-  const out: number[] = [];
-  for (let v = Math.floor(min / step) * step; v <= max + 1e-9; v += step) {
-    out.push(Math.abs(v) < 1e-9 ? 0 : v);
+/**
+ * The y axis: round bounds, and the gridlines between them.
+ *
+ * ── The domain comes from the TICKS, not from the data ────────────────
+ * It was the other way round. The scale mapped the raw `[dataMin, dataMax]`
+ * onto the plot and the ticks were then rounded OUTWARD from that — so the
+ * lowest tick sat below the bottom of the plot and was drawn there anyway,
+ * gridline and figure both, in the band the period labels live in. With a low
+ * of −$4.3k the `−$5k` rule ran straight through `Aug 25 … Jun 26` and its
+ * figure read as the first entry in that row. Rounding first and scaling to
+ * the rounded bounds puts every gridline inside the plot BY CONSTRUCTION, and
+ * it makes the floor and the ceiling of the chart two round numbers, which is
+ * what a reader estimates against anyway.
+ *
+ * ── The step is the finest round one that stays legible ───────────────
+ * `10^floor(log10(span)) / 2` gave two rungs per decade, so a span just over a
+ * power of ten was rounded out to nearly double itself and the tallest column
+ * used two thirds of the height it had. Walking a 1 / 2 / 2.5 / 5 ladder and
+ * taking the first step that fits inside `MAX_INTERVALS` keeps the domain
+ * close to the data while guaranteeing ≥ 32px between figures — which is also
+ * what stops the old 20-gridline case, a span of 999 stepping by 50.
+ *
+ * Zero needs no special case: `min ≤ 0 ≤ max` here, `lo` is a multiple of
+ * `step` and the walk moves in whole steps, so it lands on zero exactly.
+ */
+const MAX_INTERVALS = 7; // eight gridlines across a 228px plot
+const STEP_LADDER = [1, 2, 2.5, 5, 10, 20, 25, 50, 100];
+
+function axisFor(min: number, max: number) {
+  const span = max - min;
+  // Nothing realised, or it all netted off: one rule, and it sits centred
+  // rather than pinned to the top of an empty plot.
+  if (span === 0) return { lo: -1, hi: 1, values: [0] };
+
+  const mag = Math.pow(10, Math.floor(Math.log10(span)) - 1);
+  let step = STEP_LADDER[STEP_LADDER.length - 1] * mag;
+  for (const m of STEP_LADDER) {
+    step = m * mag;
+    if (Math.ceil(max / step) - Math.floor(min / step) <= MAX_INTERVALS) break;
   }
-  if (!out.some((v) => v === 0)) out.push(0);
-  return out.sort((a, b) => a - b);
+
+  const lo = Math.floor(min / step) * step;
+  const hi = Math.ceil(max / step) * step;
+  const values: number[] = [];
+  // `lo + i * step`, not `v += step` — accumulating the step drifts, and a
+  // gridline at 4999.999999 is labelled by `compact` as `$5k` while sitting a
+  // hair off the line above it.
+  for (let i = 0; lo + i * step <= hi + 1e-9; i++) {
+    const v = lo + i * step;
+    values.push(Math.abs(v) < 1e-9 ? 0 : v);
+  }
+  return { lo, hi, values };
 }
 
 /** Column with the data-end rounded and the baseline end square. */
@@ -97,13 +143,14 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
   }
 
   const values = periods.map((p) => p.realizedPl);
-  const maxPos = Math.max(0, ...values);
-  const minNeg = Math.min(0, ...values);
-  const span = maxPos - minNeg || 1;
+  // Zero is always in the domain: a chart of nothing but gains still has to
+  // show the baseline they are gains ABOVE.
+  const axis = axisFor(Math.min(0, ...values), Math.max(0, ...values));
+  const span = axis.hi - axis.lo;
 
   const plotW = W - PAD_L - PAD_R;
   const plotH = H - PAD_T - PAD_B;
-  const zeroY = PAD_T + (maxPos / span) * plotH;
+  const zeroY = PAD_T + (axis.hi / span) * plotH;
   const scaleY = (v: number) => zeroY - (v / span) * plotH;
 
   const slot = plotW / periods.length;
@@ -111,49 +158,78 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
 
   const total = periods.reduce((s, p) => s + p.realizedPl, 0);
   const anyUncosted = periods.some((p) => p.hasUncosted);
+
+  /**
+   * What one column IS, in prose. The grain rides on the bucket key, so the
+   * header, the legend and the tooltip cannot drift out of step with the axis
+   * the way a hard-coded "by month" did the moment a three-year range started
+   * drawing `Q3 25`.
+   */
+  const grain = grainOfKey(periods[0].key);
+
+  /** The bucket that opens a year, which is where the year is worth printing. */
+  const opensYear = (label: string) =>
+    grain === "year" || label.startsWith("Jan") || label.startsWith("Q1");
+
   /**
    * A crowded axis is worse than a sparse one — thin the labels, never the bars.
    *
-   * ── Each line is thinned by its OWN width ──────────────────────────────────
-   * This was two hand-picked thresholds on `slot`, both chosen for the month
-   * label — and the axis has a SECOND line under it, the sale count, which is
-   * wider: `Aug 25` is six monospace characters at 12px (~43px) while
-   * `18 sales` is eight at 10.5px (~50px). So a slot wide enough to be given
-   * every month label was not wide enough for the counts beneath them, and they
-   * ran into each other.
+   * ── Measured off the label that is actually there ──────────────────
+   * These were two constants hand-sized for `Aug 25`, which stopped being the
+   * only thing the axis carries once the bucketer began drawing quarters and
+   * years: `Q3 25` is five characters and `2024` is four, so a month's
+   * threshold turned away labels that had room to spare. Both widths now come
+   * off the longest label in the DATA at the face's own advance, so the axis
+   * degrades at the width it genuinely runs out at rather than at the one
+   * width someone happened to measure.
    *
-   * ── Shorten before thinning ────────────────────────────────────────────────
-   * "Fits" is not the same as "readable". `Aug 25` is ~43px against a 60px slot
-   * at twelve months — 71% of the band, so the labels touched even though the
-   * arithmetic said they fitted. The first response is to drop the YEAR rather
-   * than the label: `Aug` is ~22px, every month stays named, and the year is
-   * still shown where it changes (January) and on the first bar, which is where
-   * a reader looks for it. Only when even that is too wide are labels thinned.
-   *
-   * Measured off the glyph width instead of guessed, and computed rather than
-   * stepped, so it degrades at any range the picker can produce instead of at
-   * the two widths someone happened to try.
+   * ── Shorten before thinning ──────────────────────────────────
+   * The first response to a tight axis is to drop the YEAR, not the label:
+   * `Aug` is ~22px against `Aug 25`'s ~43px, every bucket stays named, and the
+   * year is still shown where it changes and on the first column, which is
+   * where a reader looks for it. Only when even that will not fit are labels
+   * dropped — which now takes a range past a dozen YEARS, because every
+   * shorter one is bucketed down to roughly twelve columns first.
    */
-  const MONTH_FULL_W = 62; // "Aug 25" is ~43px at 12px monospace; 62 leaves a gap
-  const MONTH_SHORT_W = 34; // "Aug" alone is ~22px
+  const CH = 7.2; // one monospace advance at 12px
+  const AIR = 10; // the air two neighbouring labels must leave between them
+  const widest = (pick: (label: string) => string) =>
+    Math.max(...periods.map((p) => pick(p.label).length)) * CH + AIR;
+  const fullLabel = slot >= widest((l) => l);
+  const labelEvery = fullLabel
+    ? 1
+    : Math.max(1, Math.ceil(widest((l) => l.split(" ")[0]) / slot));
   // "18 sales" is eight characters in the PROPORTIONAL face (this line is not
   // `font-mono`), so ~40 units — and at 56 it was being shown in a 60-unit
   // slot, two thirds full, which is the row that still read as crowded after
-  // the month labels were shortened. It now needs half the band free.
+  // the period labels were shortened. It now needs half the band free.
   const SALE_COUNT_W = 80;
-  const fullMonthLabel = slot >= MONTH_FULL_W;
-  const labelEvery = fullMonthLabel
-    ? 1
-    : Math.max(1, Math.ceil(MONTH_SHORT_W / slot));
   const showSaleCounts = slot >= SALE_COUNT_W;
+
+  /**
+   * Tick figures live in the y gutter — and the gutter stops at the plot floor.
+   *
+   * `axisFor` is what keeps the bottom GRIDLINE out of the label band; this
+   * keeps the FIGURE out of it too. Centred on that lowest rule the figure
+   * lands on the floor, one text ascent from the row of period labels and
+   * immediately to the left of the first of them — read across, `−$5k  Aug 25
+   * Sep 25` is a row of periods with a stray figure at the head of it, and the
+   * eye pairs the figure with `Aug 25` rather than with the baseline it
+   * measures. Sitting it just above its own rule instead keeps the gutter a
+   * column of money and the row beneath it a row of dates, which is what each
+   * of them is.
+   */
+  const tickLabelY = (v: number) => Math.min(scaleY(v) + 3.5, H - PAD_B - 6);
 
   return (
     <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
       <div className="px-4.5 py-3.5 border-b border-line select-none flex items-baseline justify-between">
         <div>
-          <b className="text-sm font-semibold text-ink">Realised P&amp;L by month</b>
+          <b className="text-sm font-semibold text-ink">
+            Realised P&amp;L by {grain}
+          </b>
           <div className="text-[11px] text-mut mt-0.5">
-            Attributed to the month each sale settled. Open positions are not
+            Attributed to the {grain} each sale settled. Open positions are not
             shown — nothing is realised until it is sold.
           </div>
         </div>
@@ -186,8 +262,8 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
               </pattern>
             </defs>
           </svg>
-          Hatched months include a sale with no cost basis in the ledger — that
-          figure is overstated.
+          Hatched {grain}s include a sale with no cost basis in the ledger —
+          that figure is overstated.
         </div>
       )}
 
@@ -196,7 +272,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
           viewBox={`0 0 ${W} ${H}`}
           width="100%"
           role="img"
-          aria-label="Realised profit and loss by month"
+          aria-label={`Realised profit and loss by ${grain}`}
           style={{ display: "block" }}
         >
           <defs>
@@ -217,7 +293,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
 
           {/* Gridlines — hairline, solid, recessive. Zero sits heavier: it is
               the reference every column is read against. */}
-          {ticks(minNeg, maxPos).map((t) => (
+          {axis.values.map((t) => (
             <g key={t}>
               <line
                 x1={PAD_L}
@@ -229,7 +305,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
               />
               <text
                 x={PAD_L - 8}
-                y={scaleY(t) + 3.5}
+                y={tickLabelY(t)}
                 textAnchor="end"
                 className="font-mono"
                 fontSize="12"
@@ -248,7 +324,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
             const empty = p.saleCount === 0;
 
             const rawY = scaleY(p.realizedPl);
-            // A non-zero month always gets at least a 2px stub; sub-pixel
+            // A non-zero period always gets at least a 2px stub; sub-pixel
             // columns read as a rendering fault rather than "very small".
             const yTop =
               p.realizedPl === 0
@@ -285,7 +361,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                   />
                 )}
 
-                {/* Month label. Text wears text tokens, never the data colour. */}
+                {/* Period label. Text wears text tokens, never the data colour. */}
                 {i % labelEvery === 0 && (
                   <text
                     x={PAD_L + i * slot + slot / 2}
@@ -295,7 +371,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                     fontSize="12"
                     fill={isHover ? "var(--color-ink)" : "var(--color-mut)"}
                   >
-                    {fullMonthLabel || i === 0 || p.label.startsWith("Jan")
+                    {fullLabel || i === 0 || opensYear(p.label)
                       ? p.label
                       : p.label.split(" ")[0]}
                   </text>
@@ -326,7 +402,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
               {periods[hover].label} {money(periods[hover].realizedPl)}
             </div>
             {periods[hover].saleCount === 0 ? (
-              <div className="opacity-70">No sales settled this month.</div>
+              <div className="opacity-70">No sales settled this {grain}.</div>
             ) : (
               <>
                 <div className="opacity-80">
@@ -362,7 +438,7 @@ export function RealizedPnlChart({ periods }: { periods: RealizedPeriod[] }) {
                 {periods[hover].hasUncosted && (
                   <div className="mt-1 text-[10.5px]" style={{ color: "var(--color-amber)" }}>
                     ^ no purchase in the ledger — booked at $0 cost, so this
-                    month is overstated.
+                    {grain} is overstated.
                   </div>
                 )}
               </>

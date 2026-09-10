@@ -14,7 +14,7 @@ import {
   posCost,
   posPL,
   realizedBetween,
-  realizedByMonth,
+  realizedByPeriod,
   attributeSells,
   monthsBack,
 } from "@/lib/data/compute";
@@ -597,7 +597,12 @@ export function PositionsClient({
   );
 
   /**
-   * The by-month chart, over the same range as everything else on the tab.
+   * The over-time chart, on the same range as everything else on the tab.
+   *
+   * The bucket width is the bucketer's call, not the picker's: a range up to a
+   * year is drawn in months, up to three years in quarters, longer in years —
+   * so the column count stays near a dozen at every range this picker offers
+   * and the axis labels never have to be thinned to fit.
    *
    * A desk correction carries no date of its own, so each corrected company's
    * delta is handed to the bucketer to spread across that company's sale
@@ -608,7 +613,7 @@ export function PositionsClient({
     const inRange = isAllTime
       ? sells
       : sells.filter((s) => s.tradeDate >= rangeFrom && s.tradeDate <= rangeTo);
-    return realizedByMonth(inRange, deltaByTicker);
+    return realizedByPeriod(inRange, deltaByTicker);
   }, [sells, isAllTime, rangeFrom, rangeTo, deltaByTicker]);
 
   // ── The Options tab, through the shared derivation ─────────────────────────
