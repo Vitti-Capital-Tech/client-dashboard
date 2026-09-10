@@ -15,8 +15,9 @@
 --
 --   no workbook session : 438,500 ms   1,210 format reads
 --   with a session      :  18,500 ms   1,212 format reads
---   applying the plan   :        73 writes (16 widths, 16 fills, 39 fonts,
---                                           2 border edges) — four batches
+--   borders per cell    :  24,800 ms   1,691 format reads   (exact; see below)
+--   applying the plan   :       113 writes (16 widths, 16 fills, 39 fonts,
+--                                           42 border edges) — six batches
 --
 -- The read COUNT is not the cost. The workbook is: 13 MB, reloaded on every
 -- request unless a session holds it open. The ingest path always opened one
@@ -45,7 +46,13 @@
 -- ── What this table changes ──────────────────────────────────────────────────
 -- The plan is a pure function of Template: same sheet, same answer. So it is
 -- scanned deliberately, by `npm run tracker:plan`, with a generous budget and a
--- session, and stored. A tab write becomes one row read plus the 73 writes.
+-- session, and stored. A tab write becomes one row read plus the 113 writes.
+--
+-- The border half of that is read one CELL at a time — 480 of them for `A1:P30`
+-- — because `format/borders` never answers `null` where a range's cells disagree
+-- the way `fill` and `font` do; it answers `None`, which is also what "no line"
+-- looks like. Out-of-band that costs ~6s and is exact. In a request it would not
+-- have been attempted, which is the second thing this table buys.
 --
 -- `shape` and `scanned_at` are stored beside the plan so the question nobody
 -- could answer has an answer: the writer already reads Template's used range for

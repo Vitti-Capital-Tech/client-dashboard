@@ -143,29 +143,55 @@ const BORDER_SIDES = [
  * why a range with no inside — a single row, a single column — reports its
  * inside lines as `None` rather than as the line it does have somewhere else.
  */
+/**
+ * Borders as Graph really answers them, which is NOT how this fake used to.
+ *
+ * It used to null every side when a rectangle spanned boxed and unboxed rows,
+ * mirroring how `format/fill` and `format/font` behave. Measured against the
+ * live workbook on 10 Sep 2026, borders do not do that — they never null:
+ *
+ *   Template!A1:P30   InsideVertical=None       InsideHorizontal=None
+ *   Template!L23:N24  InsideVertical=Continuous InsideHorizontal=Continuous
+ *
+ * `L23:N24` is inside `A1:P30`, fully boxed, and the whole-sheet read calls its
+ * interior `None`. A side is reported only when EVERY segment of it carries the
+ * line; otherwise `None`, which is also what "no line" looks like. So the
+ * uniformity signal the halving scan needs simply does not exist for borders.
+ *
+ * The old fake taught the code otherwise, and that is why the real defect — one
+ * stored border region reading `A1:P30 → EdgeRight, EdgeBottom`, with the fee
+ * table's box replayed onto no tab ever — passed a green suite for weeks. Fixed
+ * here first, deliberately: a fake that flatters the code is worse than no fake.
+ */
 function bordersOver(address: string): { value: Record<string, unknown>[] } {
   const rect = rectOf(address);
   if (!rect) return { value: [] };
 
-  const rows: boolean[] = [];
-  for (let row = rect.r1; row <= rect.r2; row++) rows.push(TEMPLATE_BOXED(row));
+  const boxed = (row: number) => row >= rect.r1 && row <= rect.r2 && TEMPLATE_BOXED(row);
 
-  const all = rows.every(Boolean);
-  const none = rows.every((b) => !b);
+  // Every segment of a side, as Graph intersects them.
+  const everyRow = (from: number, to: number) => {
+    for (let row = from; row <= to; row++) if (!boxed(row)) return false;
+    return true;
+  };
 
   return {
     value: BORDER_SIDES.map((sideIndex) => {
-      // Boxed and unboxed rows in one rectangle: Graph cannot answer, so it nulls.
-      if (!all && !none) return { sideIndex, style: null, color: null, weight: null };
+      let hasLine = false;
 
-      const hasInside =
-        sideIndex === "InsideHorizontal"
-          ? rect.r2 > rect.r1
-          : sideIndex === "InsideVertical"
-            ? rect.c2 > rect.c1
-            : true;
+      if (sideIndex === "EdgeTop") hasLine = boxed(rect.r1);
+      else if (sideIndex === "EdgeBottom") hasLine = boxed(rect.r2);
+      // The left and right edges run the full height, so every row must carry it.
+      else if (sideIndex === "EdgeLeft" || sideIndex === "EdgeRight") {
+        hasLine = everyRow(rect.r1, rect.r2);
+      } else if (sideIndex === "InsideHorizontal") {
+        // The boundaries BETWEEN rows: none to report on a single row.
+        hasLine = rect.r2 > rect.r1 && everyRow(rect.r1, rect.r2);
+      } else if (sideIndex === "InsideVertical") {
+        hasLine = rect.c2 > rect.c1 && everyRow(rect.r1, rect.r2);
+      }
 
-      return { sideIndex, ...(all && hasInside ? THIN : NO_EDGE) };
+      return { sideIndex, ...(hasLine ? THIN : NO_EDGE) };
     }),
   };
 }
@@ -622,44 +648,53 @@ test("tracker: the rebuilt tab is BORDERED like Template", async () => {
   assert.ok(reads.every((c) => c.path.includes("Template")), "Template is only ever read");
 });
 
-test("tracker: a boxed block is put back together, and stays a partition", async () => {
+test("tracker: a boxed table is ONE region with six sides, and the regions partition", async () => {
   /**
-   * Two things at once, because they pull against each other.
+   * Template's boxed rows arrive from the scan as one read per CELL, because
+   * borders have no uniformity signal to halve on (see `readCellBorders`). Left
+   * that way a gridded `A5:P22` would cost 288 cells x 4 edges = 1,152 writes,
+   * for something Excel expresses as one range with six sides set.
    *
-   * The scan halves rectangles, so Template's boxed table arrives as five or six
-   * pieces. Painting them piecemeal is correct but costs an edge write per piece
-   * per side, so `bordersMergeable` glues back the ones where gluing cannot lose
-   * the line at the join — a fully gridded table is exactly that case, and comes
-   * back as ONE region.
+   * `collapseBoxedGrids` is what closes that, and it does the one thing
+   * `mergeRegions` may not: it SYNTHESISES the merged value. A rectangle whose
+   * every cell is boxed is reproduced exactly by its four outer edges plus both
+   * inside lines — every internal boundary gets a line, and so does the border.
    *
-   * What must survive the gluing is that the regions still partition: no region
-   * inside another, no two overlapping. A border write lands on the edges of
-   * whatever rectangle it names, so an overlap is a line drawn in the wrong place.
+   * This used to expect TWO regions, rows 5-21 and row 22 alone, and the split
+   * was an artefact of the fake: a range-level read reported a single row's
+   * `InsideHorizontal` as `None`, so the old code treated row 22's value as
+   * genuinely different. Per cell there is no such distinction, and one region
+   * is the honest answer.
    */
   const { graph, calls } = fakeGraph({ sheets: ["Template", "LGF"], overview: OVERVIEW });
   await writeDealToTracker(DEAL, { graph, target });
 
-  const rects = [
-    ...new Set(
-      calls
-        .filter((c) => c.method === "PATCH" && c.path.includes("/format/borders/"))
-        .map((c) => addressIn(c.path)),
-    ),
-  ].map((a) => rectOf(a)!);
+  const edges = calls.filter(
+    (c) => c.method === "PATCH" && c.path.includes("/format/borders/") && c.path.includes("PGF"),
+  );
+  const rects = [...new Set(edges.map((c) => addressIn(c.path)))].map((a) => rectOf(a)!);
 
-  // Rows 5-21 come back as ONE region — the halving cut them into four or five
-  // pieces and every join was safe to undo.
-  //
-  // Row 22 stands alone, and that is correct rather than a missed merge: a
-  // single-row rectangle HAS no inside, so Graph reports its `InsideHorizontal`
-  // as `None` and its value is genuinely not the value the block above it has.
-  // Refusing a merge on that costs five edge writes; assuming one would be the
-  // class of guess this whole module exists to avoid.
-  assert.deepEqual(rects, [
-    { r1: 5, c1: 1, r2: 21, c2: 16 },
-    { r1: 22, c1: 1, r2: 22, c2: 16 },
-  ]);
+  assert.deepEqual(rects, [{ r1: 5, c1: 1, r2: 22, c2: 16 }], "the boxed table, whole");
 
+  // Six sides, not four: without the two inside lines the rectangle would be a
+  // box drawn around eighteen rows with nothing between them.
+  assert.deepEqual(
+    new Set(edges.map((c) => c.path.slice(c.path.lastIndexOf("/") + 1))),
+    new Set([
+      "EdgeTop",
+      "EdgeBottom",
+      "EdgeLeft",
+      "EdgeRight",
+      "InsideHorizontal",
+      "InsideVertical",
+    ]),
+  );
+  for (const c of edges) {
+    assert.deepEqual(c.body, { style: "Continuous", color: "#000000", weight: "Thin" });
+  }
+
+  // A border write lands on the edges of whatever rectangle it names, so two
+  // regions overlapping is a line drawn somewhere nobody asked for.
   const overlaps = (a: (typeof rects)[number], b: typeof a) =>
     a.r1 <= b.r2 && b.r1 <= a.r2 && a.c1 <= b.c2 && b.c1 <= a.c2;
 
@@ -670,24 +705,45 @@ test("tracker: a boxed block is put back together, and stays a partition", async
   }
 });
 
-test("tracker: the shading scan splits rather than walking every cell", async () => {
-  // A1:P30 is 480 cells. Asking about each one would be 480 reads inside a cron
-  // that has 60 seconds for the whole ingest. Asking about rectangles and only
-  // splitting the ones that come back non-uniform costs a couple of dozen.
+test("tracker: fills and fonts split; borders have to walk every cell", async () => {
+  /**
+   * Two different costs, for two different reasons, and this used to assert one
+   * ceiling over all three.
+   *
+   * **Fills and fonts halve.** Graph answers a range with the value where its
+   * cells agree and `null` where they do not, so asking about rectangles and
+   * splitting the ones that come back null costs a couple of dozen reads instead
+   * of 480 for `A1:P30`.
+   *
+   * **Borders cannot.** They never answer null — a side is reported only when
+   * every segment of it carries the line, and otherwise `None`, which is also
+   * what "no line" looks like. Measured on the live workbook: `A1:P30` calls its
+   * interior `None` while `L23:N24` inside it is fully boxed. So there is no
+   * cheaper question to ask and the scan reads each cell. That is 480 reads, and
+   * it is affordable because the plan is scanned out-of-band and STORED
+   * (`tracker-style-store.ts`) rather than re-learned inside a 60s route.
+   */
   const { graph, calls } = fakeGraph({ sheets: ["Template"], overview: OVERVIEW });
   await writeDealToTracker(DEAL, { graph, target });
 
-  const reads = calls.filter((c) =>
-    c.method === "GET" && /\/format\/(fill|font|borders)/.test(c.path),
-  );
-  assert.ok(reads.length < 90, `expected a few dozen format reads, got ${reads.length}`);
+  const readsOf = (kind: string) =>
+    calls.filter((c) => c.method === "GET" && c.path.includes(`/format/${kind}`)).length;
+
+  assert.ok(readsOf("fill") < 60, `fills should halve, not walk — got ${readsOf("fill")}`);
+  assert.ok(readsOf("font") < 60, `fonts should halve, not walk — got ${readsOf("font")}`);
+
+  // A1:P30 is 480 cells, and the border scan asks about each of them exactly
+  // once. Pinned rather than bounded: if this number ever drops, something has
+  // gone back to trusting a range-level border read.
+  assert.equal(readsOf("borders"), 480, "one border read per cell of A1:P30");
 
   // And they go out batched: twenty independent reads per HTTP request.
   const batches = calls.filter((c) => c.path === "/$batch");
+  const reads = readsOf("fill") + readsOf("font") + readsOf("borders");
   assert.ok(batches.length > 0, "the scan is batched");
   assert.ok(
-    batches.length < reads.length,
-    "fewer round trips than reads, which is the point of batching",
+    batches.length < reads / 10,
+    `fewer round trips than reads, which is the point of batching (${batches.length} vs ${reads})`,
   );
 });
 

@@ -11,7 +11,10 @@ import type { TemplatePlan, ScannedProperty } from "./tracker-style.ts";
  *
  *   no workbook session : 438,500 ms   1,210 format reads
  *   with a session      :  18,500 ms   1,212 format reads
- *   applying the plan   :        73 writes — four batches
+ *   borders per cell    :  24,800 ms   1,691 format reads   (exact — the border
+ *                                                            scan reads cells,
+ *                                                            see `tracker-style.ts`)
+ *   applying the plan   :       113 writes — six batches
  *
  * Graph has no worksheet copy and no `range copyFrom`, in v1.0 or beta, so the
  * reconstruction is not optional. The 24x is the workbook being reloaded per

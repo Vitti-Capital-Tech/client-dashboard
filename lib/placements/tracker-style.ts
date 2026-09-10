@@ -498,23 +498,222 @@ function readFont(body: unknown): TemplateFont | null {
  * disagreement would split the empty majority of the sheet down to single cells
  * and spend the whole budget discovering that none of it has borders.
  */
-function readBorders(body: unknown): TemplateBorders | null {
+/**
+ * ONE CELL's grid lines.
+ *
+ * ── Why borders cannot use the halving scan ──────────────────────────────────
+ * The fill and font scans rest on Graph answering `null` where a range's cells
+ * disagree. **Borders never answer null.** They answer `None`, which is also
+ * what "no line here" looks like — so the two are indistinguishable and the
+ * signal the scan halves on does not exist. Measured on this Template:
+ *
+ *   A1:P30   InsideVertical=None      InsideHorizontal=None
+ *   L23:N24  InsideVertical=Continuous InsideHorizontal=Continuous
+ *
+ * `L23:N24` is *inside* `A1:P30`, fully boxed, and the whole-sheet read reports
+ * its interior as `None`. The old code took that first answer as a uniform
+ * region and never split, so every stored plan carried exactly one border region
+ * — `A1:P30 → EdgeRight, EdgeBottom`, the sheet's outer corner and nothing else
+ * — and the fee table's box was replayed onto no new tab, ever.
+ *
+ * So borders are read per cell instead, which is exact and needs no signal. A
+ * single cell has no interior and a diagonal is not a grid line, so only the four
+ * `Edge*` sides are kept; `None` is dropped, which leaves an unbordered cell with
+ * an empty object and no write.
+ */
+function readCellBorders(body: unknown): TemplateBorders | null {
   const items = (body as { value?: unknown[] } | null)?.value;
   if (!Array.isArray(items)) return null;
 
   const out: TemplateBorders = {};
   for (const raw of items) {
     const b = raw as Partial<TemplateBorder> & { sideIndex?: unknown };
-    if (typeof b.sideIndex !== "string") continue;
-
-    // Null is Graph saying the cells disagree — the signal the whole scan runs on.
-    if (b.style === null) return null;
+    if (typeof b.sideIndex !== "string" || !b.sideIndex.startsWith("Edge")) continue;
     if (typeof b.style !== "string" || b.style === "None") continue;
-    if (typeof b.color !== "string" || typeof b.weight !== "string") return null;
+    if (typeof b.color !== "string" || typeof b.weight !== "string") continue;
 
     out[b.sideIndex] = { style: b.style, color: b.color, weight: b.weight };
   }
   return out;
+}
+
+/** The four sides a single cell can carry. It has no interior and no diagonal. */
+const CELL_EDGES = ["EdgeTop", "EdgeBottom", "EdgeLeft", "EdgeRight"] as const;
+
+/**
+ * The one spec a cell is boxed with on all four sides, or null.
+ *
+ * Null for anything else — three sides, two different weights, a stray key —
+ * because the collapse below is only safe for the uniform case and everything
+ * it declines simply keeps its own per-cell write.
+ */
+function fullBoxSpec(value: TemplateBorders): TemplateBorder | null {
+  const top = value.EdgeTop;
+  if (!top) return null;
+
+  const want = JSON.stringify(top);
+  for (const side of CELL_EDGES) {
+    if (JSON.stringify(value[side] ?? null) !== want) return null;
+  }
+  // A key this does not know about means the cell is doing something the merged
+  // rectangle would not reproduce.
+  return Object.keys(value).every((k) => (CELL_EDGES as readonly string[]).includes(k))
+    ? top
+    : null;
+}
+
+/**
+ * Fully boxed cells, collapsed into the rectangles they actually form.
+ *
+ * ── Why this is needed and `mergeRegions` is not enough ──────────────────────
+ * A cell boxed on four sides has no interior, so `bordersMergeable` correctly
+ * REFUSES to glue two of them: the merged rectangle's `Inside*` would be absent
+ * and the line where they met would never be drawn. Left there, a gridded table
+ * costs four edge writes per cell — 288 cells of a boxed `A5:P22` is 1,152
+ * writes, for something Excel expresses as one range with six sides set.
+ *
+ * The way out is that the merged value is not the cells' value. A rectangle
+ * whose every cell is boxed with one spec is reproduced exactly by setting that
+ * rectangle's four outer edges AND both inside lines — every internal boundary
+ * gets a line, every outer one does, which is what "every cell boxed" means. So
+ * this SYNTHESISES the region value rather than preserving it, which is the one
+ * thing `mergeRegions` is not allowed to do.
+ *
+ * Greedy and maximal-rectangle: grow right while the row agrees, then down while
+ * the whole slice agrees. Anything not fully boxed is handed back untouched for
+ * the ordinary merge to do what it safely can.
+ */
+function collapseBoxedGrids(
+  cells: Region<TemplateBorders>[],
+): { collapsed: Region<TemplateBorders>[]; rest: Region<TemplateBorders>[] } {
+  const spec = new Map<string, { rect: Rect; spec: TemplateBorder }>();
+  const rest: Region<TemplateBorders>[] = [];
+  const at = (r: number, c: number) => `${r}:${c}`;
+
+  for (const cell of cells) {
+    const box = fullBoxSpec(cell.value);
+    if (box) spec.set(at(cell.rect.r1, cell.rect.c1), { rect: cell.rect, spec: box });
+    else rest.push(cell);
+  }
+
+  const taken = new Set<string>();
+  const collapsed: Region<TemplateBorders>[] = [];
+  const specAt = (r: number, c: number) => {
+    const key = at(r, c);
+    return taken.has(key) ? undefined : spec.get(key)?.spec;
+  };
+
+  // Sorted so the sweep is top-left to bottom-right and the rectangles it
+  // produces are stable between runs — a plan that reshuffles on every scan
+  // would make the stored JSON churn for no change in what it paints.
+  const starts = [...spec.values()].sort(
+    (a, b) => a.rect.r1 - b.rect.r1 || a.rect.c1 - b.rect.c1,
+  );
+
+  for (const start of starts) {
+    const { r1, c1 } = start.rect;
+    if (taken.has(at(r1, c1))) continue;
+    const want = JSON.stringify(start.spec);
+
+    let c2 = c1;
+    while (JSON.stringify(specAt(r1, c2 + 1) ?? null) === want) c2++;
+
+    let r2 = r1;
+    for (;;) {
+      let rowAgrees = true;
+      for (let c = c1; c <= c2; c++) {
+        if (JSON.stringify(specAt(r2 + 1, c) ?? null) !== want) {
+          rowAgrees = false;
+          break;
+        }
+      }
+      if (!rowAgrees) break;
+      r2++;
+    }
+
+    for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) taken.add(at(r, c));
+
+    const line = start.spec;
+    const value: TemplateBorders = {
+      EdgeTop: line,
+      EdgeBottom: line,
+      EdgeLeft: line,
+      EdgeRight: line,
+    };
+    // A single cell has no interior to set, and sending `Inside*` on a 1x1 range
+    // is a write that describes nothing.
+    if (r2 > r1) value.InsideHorizontal = line;
+    if (c2 > c1) value.InsideVertical = line;
+
+    collapsed.push({ rect: { r1, c1, r2, c2 }, value });
+  }
+
+  return { collapsed, rest };
+}
+
+/**
+ * Every bordered cell of `root`, then merged back into as few regions as is safe.
+ *
+ * One read per cell — 480 for this Template's `A1:P30`, which is ~7s inside a
+ * workbook session and is why this is affordable at all (see
+ * `tracker-style-store.ts` for the 24x that session is worth). Breadth is not a
+ * choice here the way it is for the halving scan: there is no cheaper question to
+ * ask, because a range's answer provably under-reports its own interior.
+ *
+ * Unbordered cells contribute nothing. What is left goes through `mergeRegions`
+ * with `bordersMergeable`, which keeps a fully boxed cell on its own — merging
+ * two of those would drop the line where they met — while a run of cells
+ * carrying only a top line collapses into one region and one write.
+ */
+async function scanBordersPerCell(
+  graph: GraphCall,
+  root: Rect,
+  urlFor: (address: string) => string,
+  budget: { left: number },
+  sessionId?: string | null,
+): Promise<{ regions: Region<TemplateBorders>[]; truncated: boolean }> {
+  const cells: Rect[] = [];
+  for (let r = root.r1; r <= root.r2; r++) {
+    for (let c = root.c1; c <= root.c2; c++) cells.push({ r1: r, c1: c, r2: r, c2: c });
+  }
+
+  const regions: Region<TemplateBorders>[] = [];
+  let truncated = false;
+
+  for (let from = 0; from < cells.length; from += BATCH_LIMIT) {
+    if (budget.left <= 0) {
+      truncated = true;
+      break;
+    }
+    const asking = cells.slice(from, from + Math.min(BATCH_LIMIT, budget.left));
+    budget.left -= asking.length;
+
+    const answers = await runBatch(
+      graph,
+      asking.map((rect, i) => ({ id: String(i), method: "GET", url: urlFor(addressOf(rect)) })),
+      sessionId,
+    );
+
+    asking.forEach((rect, i) => {
+      const answer = answers.get(String(i));
+      const value = ok(answer) ? readCellBorders(answer!.body) : null;
+      // A cell that could not be read is skipped rather than recorded as
+      // unbordered: claiming "no lines here" on the strength of a failed read is
+      // how a box loses one side and looks deliberate.
+      if (value && Object.keys(value).length > 0) regions.push({ rect, value });
+    });
+  }
+
+  // Boxed rectangles first, because they are the case `mergeRegions` must refuse
+  // and the case that dominates a gridded template; whatever is left goes through
+  // the ordinary merge, which is still worth it for a run of cells carrying one
+  // shared line.
+  const { collapsed, rest } = collapseBoxedGrids(regions);
+
+  return {
+    regions: [...collapsed, ...mergeRegions(rest, bordersMergeable)],
+    truncated,
+  };
 }
 
 /**
@@ -644,16 +843,14 @@ export async function readTemplatePlan(
     sessionId,
   );
 
-  const border = await scanUniform(
+  // Not `scanUniform`: borders have no uniformity signal to scan on. See
+  // `readCellBorders` for the measurement that says so.
+  const border = await scanBordersPerCell(
     graph,
     root,
     (address) => `${rangePath(item, templateSheet, address)}/format/borders`,
-    readBorders,
     { left: perProperty },
     sessionId,
-    // Merged only where putting two blocks back together cannot lose the line
-    // where they met — see `bordersMergeable`.
-    bordersMergeable,
   );
 
   const plan: TemplatePlan = {
@@ -818,26 +1015,21 @@ function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
     });
   }
 
-  // 7. Ensure clean grid borders if border scan was truncated or returned empty
-  if (plan.borders.length === 0 || plan.incomplete.includes("borders")) {
-    const thinBorder: TemplateBorder = { style: "Continuous", color: "#000000", weight: "Thin" };
-    const allEdges: TemplateBorders = {
-      EdgeTop: thinBorder,
-      EdgeBottom: thinBorder,
-      EdgeLeft: thinBorder,
-      EdgeRight: thinBorder,
-      InsideHorizontal: thinBorder,
-      InsideVertical: thinBorder,
-    };
-    if (!plan.borders.some((b) => b.rect.r1 >= 5 && b.rect.r2 <= 22)) {
-      plan.borders.push({ rect: { r1: 5, c1: 1, r2: 21, c2: 16 }, value: allEdges });
-      plan.borders.push({ rect: { r1: 22, c1: 1, r2: 22, c2: 16 }, value: allEdges });
-    }
-    if (!plan.borders.some((b) => b.rect.r1 >= 23 && b.rect.c1 >= 12)) {
-      plan.borders.push({ rect: { r1: 23, c1: 12, r2: 24, c2: 14 }, value: allEdges });
-      plan.borders.push({ rect: { r1: 24, c1: 13, r2: 30, c2: 18 }, value: allEdges });
-    }
-  }
+  // 7. Borders are NOT completed from a hardcoded guess any more.
+  //
+  // There used to be a fallback here that drew a full thin grid over `A5:P21`
+  // and `M25:R30` whenever the border scan came back empty or short. It never
+  // fired, because the broken scan always returned exactly one region — and that
+  // was lucky, because **Template has no borders on the client table at all**.
+  // Verified against the live sheet: `Template!A5:P22` answers with no lines on
+  // any side, and the grid the desk sees there is Excel's own gridlines showing
+  // through unfilled cells, which a new tab gets for free.
+  //
+  // So the fallback would have painted a grid Template does not have, on the one
+  // module whose entire job is to match it. With `scanBordersPerCell` the scan is
+  // exact rather than a guess, and a truncated one is reported by
+  // `plan.incomplete` — which says to re-seed with a bigger budget instead of
+  // quietly inventing lines.
 }
 
 /**

@@ -15,7 +15,8 @@
 //
 //   no session : 438,500 ms   1,210 format reads
 //   session    :  18,500 ms   1,212 format reads   <- same plan, 24x faster
-//   WRITES     :        73    16 widths, 16 fills, 39 fonts, 2 border edges
+//   + borders  :  24,800 ms   1,691 format reads   <- borders read per cell
+//   WRITES     :       113    16 widths, 16 fills, 39 fonts, 42 border edges
 //
 // The read COUNT is not the cost — the workbook is, reloaded on every request
 // unless a session holds it open. This script opens one (below); the first
