@@ -5,6 +5,9 @@ import { LayoutGrid, List } from "lucide-react";
 
 export type NewsView = "list" | "card";
 
+/** What a reader who has never touched the toggle gets. */
+const DEFAULT_VIEW: NewsView = "card";
+
 const STORAGE_KEY = "vitti_news_view";
 
 /**
@@ -22,8 +25,9 @@ const STORAGE_KEY = "vitti_news_view";
  * and calling setState is the obvious fix and the wrong one — it renders once,
  * throws that render away, and is what the lint rule about setState in effects
  * is for. `useSyncExternalStore` has a server snapshot for exactly this: the
- * server and the hydrating client both render `list`, and the subscription
- * swaps in the saved value immediately afterwards, with no mismatch.
+ * server and the hydrating client both render the default, and the
+ * subscription swaps in the saved value immediately afterwards, with no
+ * mismatch.
  */
 let current: NewsView | null = null;
 const listeners = new Set<() => void>();
@@ -34,16 +38,18 @@ function getSnapshot(): NewsView {
   // time React checked for a change.
   if (current) return current;
   try {
-    current = window.localStorage.getItem(STORAGE_KEY) === "card" ? "card" : "list";
+    // Only an explicit "list" opts out: cards are the default, so an absent or
+    // unrecognised value has to land there too.
+    current = window.localStorage.getItem(STORAGE_KEY) === "list" ? "list" : DEFAULT_VIEW;
   } catch {
     // Blocked or unreadable storage is not an error worth showing anybody.
-    current = "list";
+    current = DEFAULT_VIEW;
   }
   return current;
 }
 
 function getServerSnapshot(): NewsView {
-  return "list";
+  return DEFAULT_VIEW;
 }
 
 function subscribe(onChange: () => void): () => void {
@@ -71,8 +77,8 @@ export function useNewsView(): [NewsView, (next: NewsView) => void] {
 }
 
 const OPTIONS = [
-  { key: "list", label: "List", Icon: List },
   { key: "card", label: "Cards", Icon: LayoutGrid },
+  { key: "list", label: "List", Icon: List },
 ] satisfies { key: NewsView; label: string; Icon: typeof List }[];
 
 /**
