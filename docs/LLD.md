@@ -1250,16 +1250,18 @@ Option quantities and classification consistency across the platform:
 
 ### 8.42 Template's look, scanned once instead of per deal (`…_placement_style_plan.sql`, `tracker-style-store.ts`, `scripts/tracker-style-plan.mjs`)
 
-§8.31 describes recovering Template's formatting by treating a range read as a uniformity test. It works. It was also being paid for on every deal, and this is the measurement that ended that:
+§8.31 describes recovering Template's formatting by treating a range read as a uniformity test. It works. It was also being paid for on every deal. Measured against the live workbook, at the same budget and the same read count both times:
 
 ```
-SCAN  : 504,324 ms   1,207 format reads in 69 batches   (complete, budget 1500)
-WRITES:        73    16 widths, 16 fills, 39 fonts, 2 border edges  -> 4 batches
+no workbook session : 438,500 ms   1,210 format reads
+with a session      :  18,500 ms   1,212 format reads   <- same plan, 24x faster
+applying the plan   :        73 writes (16 widths, 16 fills, 39 fonts,
+                                        2 border edges)  -> 4 batches
 ```
 
-Eight and a half minutes to learn the plan; four batches to apply it. **Every ingest route is capped at 60 seconds**, so a live scan cannot finish — meaning whether a tab came out shaded depended on whether the instance answering had already paid for it in a previous invocation.
-
-- **The reads are the whole cost and the writes are nothing**, which is why caching is the fix rather than optimising the scan. The plan was already cached — in a module-scope `Map` with a 6-hour TTL, which serves a warm server and a serverless one not at all: every route here is a cold function often enough that most deals faced the full scan and got part of a plan or none.
+- **A correction, recorded because it changes the argument.** This section first quoted **504,324 ms** and concluded that a live scan "cannot finish inside 60 seconds". That measurement was taken without a workbook session, which the *ingest path always opens* — `writeDealToTracker` creates one for read-after-write consistency and the style pass inherits it. With a session the identical plan takes **18.5s**. The read count is not the cost; the 13 MB workbook is, reloaded per request unless a session holds it open. So the honest case for this table is that scanning per run is **wasteful and unauditable**, not that it is impossible.
+- **The 60 seconds are shared, and that is the first reason.** A route spends them on two upstream feed reads, the deal write and the paint together. A measured mail-hook run had ~20s left of its 60 after 39s of upstream reads — that is the budget a tab write fits into, and BMN on 9 Sep 2026 did not fit it (stored `05:15:03`, `attempts = 0`, picked up by the `06:00` sweep). ~18s of that spent re-learning a plan that changes maybe twice a year is waste however affordable it looks alone.
+- **The in-process `Map` was not the answer either.** A 6-hour TTL serves a warm server; on a serverless platform a cold instance simply pays again. But the deeper problem was not the cost — see the next point.
 - **There is no shortcut in the API, and both candidates were probed rather than assumed.** Neither exists on this tenant, in v1.0 *or* beta, and both answer with the same message the `worksheets/copy` attempt has always got:
 
   ```
@@ -1267,9 +1269,9 @@ Eight and a half minutes to learn the plan; four batches to apply it. **Every in
   POST .../range(address='A100')/copyFrom         -> "Resource not found for the segment 'copyFrom'"
   ```
 
-  So the reconstruction is not optional. Paying for it per deal was.
-- **It had already reached the workbook, silently.** `IPT` and `IPT (b)` were written at different times and carry *identical* column widths — and all sixteen differ from Template's, each about 20pt narrower. Two tabs replayed from the same stale plan after Template had been widened. Nothing anywhere recorded which Template a plan came from, so there was no way to notice; the tabs simply looked cramped. This is the failure the table is shaped around, not a side effect it happens to fix.
-- **The plan is a pure function of Template**, so it is scanned deliberately — `npm run tracker:plan`, where no 60s ceiling applies and the read budget can be generous — and stored as one `jsonb` row. A tab write becomes one row read plus the 73 writes.
+  So the reconstruction is not optional. Paying for it per run was.
+- **Nothing recorded which Template a tab was shaded from, and that is the reason this table exists.** `IPT` and `IPT (b)` were written at different times and carry *identical* column widths — all sixteen about 20pt narrower than Template's. A stale in-process plan and a Template edited after both tabs were written are indistinguishable from the workbook alone, because neither fact was written down anywhere. The tabs simply looked cramped and no one could say why. This is the failure the table is shaped around; the read cost is the lesser half.
+- **The plan is a pure function of Template**, so it is scanned deliberately — `npm run tracker:plan`, with a generous budget and a session — and stored as one `jsonb` row. A tab write becomes one row read plus the 73 writes. Seeded against the live 2026 workbook: `A1:P30`, 16/16/39/2, complete, and carrying Template's *current* column widths, which is what stops the next tab inheriting the narrow ones.
 - **`shape` and `scanned_at` travel with the plan, and the drift check is free.** The writer already reads Template's used range for the cell seed, so comparing it against the shape the plan was scanned at costs nothing and turns silent drift into a note naming what to run. Age (>30 days) and a truncated scan are reported separately, because they want different things done about them — re-run as-is versus re-run with a bigger budget.
 - **An absent plan is not fatal.** No row means the style pass falls back to scanning: a deployment that has never seeded, or a fresh year's workbook, still gets a shaded tab if the budget happens to allow it. A missing *table* names its own migration, because "nothing stored yet" and "the migration was never applied" read identically for as long as nobody looks.
 - **The plan is resolved once per RUN, not per deal (`TrackerSyncDeps.stylePlan`).** A function rather than a value, because the workbook is only known after `target(year)` answers, and memoised by workbook path so a three-deal batch costs one row read. `workbookItemPath()` is exported and shared: the row key is derived from that exact string, and a second copy of the expression would silently miss every stored plan.

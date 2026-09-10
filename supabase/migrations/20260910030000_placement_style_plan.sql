@@ -10,37 +10,47 @@
 --
 -- So `tracker-style.ts` reconstructs the formatting by treating a range read as
 -- a uniformity test — asking about a rectangle, halving whatever comes back
--- `null`, and asking again. It works, and it is expensive:
+-- `null`, and asking again. Measured against the live workbook, at the same
+-- budget and the same read count both times:
 --
---   SCAN  : 504,324 ms  (1,207 format reads in 69 batches)   measured, complete
---   WRITES:        73   (16 widths, 16 fills, 39 fonts, 2 border edges)
+--   no workbook session : 438,500 ms   1,210 format reads
+--   with a session      :  18,500 ms   1,212 format reads
+--   applying the plan   :        73 writes (16 widths, 16 fills, 39 fonts,
+--                                           2 border edges) — four batches
 --
--- Eight and a half minutes to learn the plan; four batches to apply it. The
--- reads are the whole cost and the writes are nothing.
+-- The read COUNT is not the cost. The workbook is: 13 MB, reloaded on every
+-- request unless a session holds it open. The ingest path always opened one
+-- (`writeDealToTracker` does, for read-after-write consistency, and the style
+-- pass inherits it), so it was never paying the 24x — an early version of the
+-- seed script was, and the 504s figure first quoted here came from there.
+-- Corrected in place, because that number made this table look necessary rather
+-- than merely right, and the difference matters to whoever reads this next.
 --
--- ── Why in-process caching could not fix that ────────────────────────────────
--- The plan was cached in a module-scope Map with a 6-hour TTL. That serves a
--- warm server and a serverless one not at all: every route here has a 60-second
--- ceiling, so a cold instance cannot finish the scan at all, let alone inside
--- the budget it shares with the deal write. Whether a tab came out shaded was
--- therefore a question of which instance happened to answer.
+-- ── Why store it, at 18.5s ───────────────────────────────────────────────────
+-- Two reasons.
 --
--- It showed up in the workbook. `IPT` and `IPT (b)`, written at different times,
--- carry identical column widths — and all sixteen differ from Template's, each
--- about 20pt narrower. Two tabs replayed from the same stale plan long after
--- Template had been widened, with nothing anywhere recording which Template the
--- plan came from.
+-- **The 60 seconds are shared.** A route spends them on two upstream feed reads,
+-- the deal write and the paint together. A measured mail-hook run had ~20s left
+-- of its 60 after 39s of upstream reads — that is the budget a tab write fits
+-- into, and BMN on 9 Sep 2026 did not fit it: stored at 05:15:03, never
+-- attempted, picked up by the 06:00 sweep. ~18s of that spent re-learning a plan
+-- that changes maybe twice a year is waste, however affordable it is alone.
+--
+-- **Nothing recorded which Template a tab was shaded from**, and that is the one
+-- that bit. `IPT` and `IPT (b)`, written at different times, carry identical
+-- column widths — all sixteen about 20pt narrower than Template's. A stale
+-- in-process plan and a Template edited afterwards were indistinguishable,
+-- because neither fact was written down anywhere.
 --
 -- ── What this table changes ──────────────────────────────────────────────────
 -- The plan is a pure function of Template: same sheet, same answer. So it is
--- scanned deliberately — by `npm run tracker:plan`, where no 60-second ceiling
--- applies and the read budget can be generous — and stored. A tab write becomes
--- one row read plus the 73 writes, which fits the budget with room to spare.
+-- scanned deliberately, by `npm run tracker:plan`, with a generous budget and a
+-- session, and stored. A tab write becomes one row read plus the 73 writes.
 --
--- `shape` and `scanned_at` are stored beside the plan so the staleness that
--- caused the width drift is visible rather than inferred: the writer already
--- reads Template's used range for the cell seed, so a plan whose `shape` no
--- longer matches is caught for free and reported.
+-- `shape` and `scanned_at` are stored beside the plan so the question nobody
+-- could answer has an answer: the writer already reads Template's used range for
+-- the cell seed, so a plan whose `shape` no longer matches is caught for free
+-- and reported.
 --
 -- Not a source of truth. Template is; this is a materialisation of it, and a
 -- stale one is a real risk — which is exactly the failure it exists to make
@@ -73,7 +83,7 @@ CREATE TABLE IF NOT EXISTS placement_style_plans (
 );
 
 COMMENT ON TABLE placement_style_plans IS
-  'Template''s replayed formatting, scanned out-of-band. See the migration header: the scan is ~8.5 minutes of Graph reads and the routes have 60 seconds.';
+  'Template''s replayed formatting, scanned out-of-band. See the migration header: ~18.5s and 1,210 Graph reads, against a 60s route budget already spent on the feed and the deal write.';
 
 -- ----------------------------------------------------------------------------
 -- RLS — staff only. An operational table belonging to no client.

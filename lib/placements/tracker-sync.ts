@@ -81,8 +81,8 @@ export type TrackerSyncDeps<T extends CandidateFeedItem = CandidateFeedItem> = {
    *
    * A function rather than a value because the workbook is only known after
    * `target(year)` has answered, and memoised here because a three-deal batch
-   * must cost one row read rather than three. The scan it replaces costs ~504s
-   * against a 60s route — see `tracker-style-store.ts`.
+   * must cost one row read rather than three. The scan it replaces is ~18.5s and
+   * 1,210 Graph reads out of a 60s route — see `tracker-style-store.ts`.
    *
    * Returning null is fine and means "scan it the old way": a deployment that
    * has never seeded still gets a shaded tab if the budget allows.

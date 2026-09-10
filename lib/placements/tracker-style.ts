@@ -954,11 +954,12 @@ export async function dressSheetLikeTemplate(
   try {
     const options = typeof opts === "object" && opts !== null ? opts : { sessionId: opts ?? null };
 
-    // A plan handed in is a plan already scanned — see `tracker-style-store.ts`
-    // for the 504s that buys back. Falling through to the scan when there is
-    // none is deliberate: a deployment that has never seeded, or a fresh year's
-    // workbook, still gets a shaded tab if the budget happens to allow it, and a
-    // tab shaded badly is a far smaller problem than a tab not filed.
+    // A plan handed in is a plan already scanned — ~18.5s and 1,210 Graph reads
+    // this route does not have to spend, and a record of which Template it came
+    // from. See `tracker-style-store.ts`. Falling through to the scan when there
+    // is none is deliberate: a deployment that has never seeded, or a fresh
+    // year's workbook, still gets a shaded tab, and a tab shaded badly is a far
+    // smaller problem than a tab not filed.
     const plan = options.plan ?? (await readTemplatePlan(graph, item, templateSheet, shape, options));
     if (!plan) return [];
     return await paintSheetLikeTemplate(graph, item, sheet, plan, options.sessionId);

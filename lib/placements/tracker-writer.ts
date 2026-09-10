@@ -603,11 +603,13 @@ export type TrackerWriteDeps = {
   /**
    * Template's formatting, already scanned.
    *
-   * Learning it costs ~504s of Graph reads and this route has 60, so a live scan
-   * cannot finish — see `tracker-style-store.ts`. Resolved once per RUN by the
-   * caller and passed down, rather than read here: a batch of three deals must
-   * not read the same row three times, and this module stays free of the
-   * database. Absent, the style pass falls back to scanning.
+   * Learning it is ~18.5s and 1,210 Graph reads, out of a 60-second route that
+   * also has to fit the feed reads and the deal write — and a stored plan records
+   * which Template it came from, which nothing did before. See
+   * `tracker-style-store.ts`. Resolved once per RUN by the caller and passed
+   * down, rather than read here: a batch of three deals must not read the same
+   * row three times, and this module stays free of the database. Absent, the
+   * style pass falls back to scanning.
    */
   stylePlan?: TemplatePlan | null;
 };

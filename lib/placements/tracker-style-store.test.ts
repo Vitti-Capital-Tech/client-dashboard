@@ -14,11 +14,15 @@ import type { TemplatePlan } from "./tracker-style.ts";
 /**
  * Tests for Template's formatting, stored instead of re-learned per deal.
  *
- * The reason this table exists is a measurement: the scan costs ~504s and 1,207
- * Graph reads while every route that needs it has 60 seconds. So what is worth
- * pinning is not the storage — it is the three ways a stored plan goes wrong
- * WITHOUT anything failing, since that is exactly how the column-width drift ran
- * for weeks. A missing row, a stale one and a truncated one all have to speak.
+ * The scan is ~18.5s and 1,210 Graph reads against a 60-second route already
+ * spending most of that on the feed and the deal write. But the reason this
+ * table exists is the other half: nothing recorded which Template a tab had been
+ * shaded from, so a stale plan and an edited Template were indistinguishable —
+ * which is how the column-width drift went unnoticed.
+ *
+ * So what is worth pinning here is not the storage. It is the three ways a stored
+ * plan goes wrong WITHOUT anything failing: a missing row, a stale one and a
+ * truncated one all have to speak.
  */
 
 const ITEM = "/drives/d1/items/i1/workbook";

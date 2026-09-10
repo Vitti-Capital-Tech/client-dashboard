@@ -11,20 +11,31 @@
 //   POST .../range(address='A100')/copyFrom       segment '…'"
 //
 // So `tracker-style.ts` reconstructs it by treating a range read as a uniformity
-// test. Measured against the live workbook:
+// test. Measured against the live workbook, same budget and same read count:
 //
-//   SCAN  : 504,324 ms   1,207 format reads in 69 batches   (plan complete)
-//   WRITES:        73    16 widths, 16 fills, 39 fonts, 2 border edges
+//   no session : 438,500 ms   1,210 format reads
+//   session    :  18,500 ms   1,212 format reads   <- same plan, 24x faster
+//   WRITES     :        73    16 widths, 16 fills, 39 fonts, 2 border edges
 //
-// Eight and a half minutes to learn it; four batches to apply it. Every ingest
-// route is capped at 60 seconds, so the scan can only ever have finished on an
-// instance that had already paid for it — and when it had not, the tab came out
-// plain. Worse, silently: `IPT` and `IPT (b)` both carry column widths ~20pt
-// narrower than Template's, replayed from a plan scanned before Template was
-// widened, with nothing recording which Template it came from.
+// The read COUNT is not the cost — the workbook is, reloaded on every request
+// unless a session holds it open. This script opens one (below); the first
+// version of it did not, and took 438s for the identical plan.
+//
+// ── Why this is still a script and not part of the ingest ────────────────────
+// 18.5s is affordable on its own and not affordable there: the route has 60
+// seconds for the upstream feed reads, the deal write AND the paint. A measured
+// mail-hook run had ~20s left of its 60 after 39s of upstream reads, and that is
+// the budget a tab write has to fit inside. Spending ~18s of it re-learning a
+// plan that changes maybe twice a year is waste.
+//
+// The second reason is the one that actually bit. `IPT` and `IPT (b)` carry
+// identical column widths, all sixteen ~20pt narrower than Template's — and
+// nothing recorded which Template a tab was shaded from, so a stale plan and a
+// Template edited afterwards were indistinguishable. A stored plan carries its
+// `shape` and `scanned_at`, so that question has an answer.
 //
 // The plan is a pure function of Template, so it is scanned HERE, deliberately,
-// with no ceiling and a generous budget, and read back by the ingest as one row.
+// with a generous budget, and read back by the ingest as one row.
 //
 // Run:
 //   npm run tracker:plan                  every configured workbook, this year
@@ -102,6 +113,27 @@ if (!target) {
 
 const item = workbookItemPath(target);
 
+// ── A workbook session, and it is worth 24x ─────────────────────────────────
+// Without one, every format read makes Graph load a 13 MB workbook from
+// scratch: 438s against 18.5s for the identical plan and the same ~1,210 reads.
+// `writeDealToTracker` opens a session for a different reason — read-after-write
+// consistency — and the style pass inherits it there, so the INGEST path was
+// never paying this. The first version of this script was, which is why the
+// 504s figure originally quoted everywhere was wrong about why it was slow.
+//
+// `persistChanges: false`: this reads and never writes, and a read-only session
+// cannot leave the workbook altered if it is dropped. Closed at the end, though
+// an unclosed one expires by itself.
+const session = await graph(`${item}/createSession`, {
+  method: "POST",
+  body: { persistChanges: false },
+});
+const sessionId = session.ok ? (session.body?.id ?? null) : null;
+if (!sessionId) {
+  console.log(`(no workbook session — ${JSON.stringify(session.body).slice(0, 160)})`);
+  console.log("(continuing without one; expect this to take considerably longer)");
+}
+
 const used = await graph(`${item}/worksheets('${TEMPLATE_SHEET}')/usedRange?$select=address`);
 if (!used.ok) die(`Could not read ${TEMPLATE_SHEET}'s used range: ${JSON.stringify(used.body)}`);
 const shape = String(used.body.address).split("!").pop();
@@ -115,12 +147,16 @@ console.log(
         (existing.shape !== shape ? "   <-- Template has changed shape since" : "")
     : "Stored   : nothing yet",
 );
-console.log(`\nScanning with a per-property budget of ${budget}. This takes minutes, not seconds.\n`);
+console.log(`\nScanning with a per-property budget of ${budget}. ~20s with a session, minutes without.\n`);
 
 clearTemplatePlanCache();
 const startedAt = Date.now();
-const plan = await readTemplatePlan(graph, item, TEMPLATE_SHEET, shape, { budget });
+const plan = await readTemplatePlan(graph, item, TEMPLATE_SHEET, shape, { budget, sessionId });
 const scanMs = Date.now() - startedAt;
+
+// Best effort. A session left open expires on its own, and failing to close one
+// is not a reason to throw away a scan that just took minutes.
+if (sessionId) await graph(`${item}/closeSession`, { method: "POST", body: {} }).catch(() => {});
 
 if (!plan) die("The scan returned no plan at all — check the Graph permissions on the workbook.");
 

@@ -126,10 +126,10 @@ export async function writeOwedDealsToTracker(
     graph,
     target: (year) => resolveTrackerTarget(urls, year, graph),
     // Template's formatting, read from the table rather than re-learned. The
-    // scan costs ~504s of Graph reads and this route has 60, so before this it
-    // could only ever finish on a warm instance that had already paid for it —
-    // which is why two tabs came out shaded to a Template that had since been
-    // widened. See `tracker-style-store.ts`.
+    // scan is ~18.5s and 1,210 Graph reads, and this route has 60 seconds for
+    // the feed reads, the deal write and the paint together — a measured run had
+    // ~20s left after 39s of upstream reads. It also records WHICH Template a tab
+    // was shaded from, which nothing did before. See `tracker-style-store.ts`.
     stylePlan: async (item) => {
       const { stored, note } = await readStylePlan(db, item, TEMPLATE_SHEET);
       if (!stored) {

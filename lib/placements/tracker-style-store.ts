@@ -5,28 +5,39 @@ import type { TemplatePlan, ScannedProperty } from "./tracker-style.ts";
 /**
  * Template's formatting plan, kept in Postgres instead of re-learned per deal.
  *
- * ── The number that forced this ──────────────────────────────────────────────
- * Recovering Template's look costs **504,324 ms and 1,207 format reads** (69
- * batches, measured against the live workbook, plan complete). Applying it costs
- * **73 writes** — four batches. Graph has no worksheet copy and no `range
- * copyFrom`, in v1.0 or beta, so the reconstruction is not optional; paying for
- * it on every deal is.
+ * ── What it costs, measured ──────────────────────────────────────────────────
+ * Recovering Template's look, at the same budget and the same read count both
+ * times:
  *
- * The plan is a pure function of Template, so it is scanned deliberately
- * (`npm run tracker:plan`, no 60-second ceiling) and read back as one row.
+ *   no workbook session : 438,500 ms   1,210 format reads
+ *   with a session      :  18,500 ms   1,212 format reads
+ *   applying the plan   :        73 writes — four batches
  *
- * ── Why the in-process Map was not enough ────────────────────────────────────
- * It had a 6-hour TTL and served a warm server. Every route here is capped at 60
- * seconds, so a cold instance could not finish the scan at all — meaning whether
- * a tab came out shaded depended on which instance answered. The workbook shows
- * it: `IPT` and `IPT (b)` were written at different times and carry identical
- * column widths, all sixteen about 20pt narrower than Template's. Two tabs
- * replayed from the same stale plan after Template had been widened, and nothing
- * recorded which Template the plan came from.
+ * Graph has no worksheet copy and no `range copyFrom`, in v1.0 or beta, so the
+ * reconstruction is not optional. The 24x is the workbook being reloaded per
+ * request without a session; the ingest path always had one, so it was never
+ * paying that. An earlier version of the seed script was, and the 504s figure
+ * this file used to quote came from there — recorded because the wrong number
+ * made storing the plan look necessary rather than merely right.
  *
- * That is why `shape` and `scannedAt` travel with the plan. The writer already
- * reads Template's used range for the cell seed, so comparing it costs nothing
- * and turns silent drift into a reported note.
+ * ── Why store it, at 18.5s ───────────────────────────────────────────────────
+ * Two reasons, and the second is the one that actually bit.
+ *
+ * **The budget is shared.** A route has 60 seconds for the upstream feed reads,
+ * the deal write and the paint together. A measured mail-hook run had ~20s left
+ * of its 60 after 39s of upstream reads — that is the budget a tab write fits
+ * into, and BMN on 9 Sep 2026 did not fit it: stored at 05:15:03, never
+ * attempted, picked up by the 06:00 sweep. Spending ~18s of that re-learning a
+ * plan that changes maybe twice a year is waste, however affordable it looks in
+ * isolation.
+ *
+ * **Nothing recorded which Template a tab was shaded from.** `IPT` and `IPT (b)`
+ * carry identical column widths, all sixteen ~20pt narrower than Template's, and
+ * there was no way to tell a stale in-process plan from a Template edited
+ * afterwards because neither fact was written down. That is why `shape` and
+ * `scannedAt` travel with the plan: the writer already reads Template's used
+ * range for the cell seed, so comparing it costs nothing and turns a question
+ * nobody could answer into a note.
  *
  * ── The trap: a stored plan has the style RULES baked into it ────────────────
  * `readTemplatePlan` runs `ensurePlacementStyleCompleteness` before returning,
