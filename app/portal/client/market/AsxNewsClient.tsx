@@ -28,6 +28,49 @@ function annTime(iso: string): string {
     .toLowerCase();
 }
 
+/**
+ * What the price was doing going into a filing.
+ *
+ * Measured upstream from bars that closed before the announcement and passed
+ * through untouched, so this page and the ASX dashboard state the same figures
+ * for the same filing. Nothing here is generated — these are the part of a row
+ * a reader can check against a chart, which is why they sit above the AI
+ * summary rather than under it.
+ *
+ * A thinly traded stock's ratios are shown in the muted tone with its turnover
+ * named, rather than coloured like a signal: a volume spike on A$4,000 a day is
+ * two people, and presenting it as interest would be the lie.
+ */
+function ContextChips({ ctx }: { ctx: NonNullable<AsxAnnouncement["context"]> }) {
+  const tone = !ctx.liquid
+    ? "bg-paper-2 text-mut"
+    : ctx.brokeOut || ctx.atHigh
+      ? "bg-green-bg text-green-d"
+      : ctx.atLow
+        ? "bg-loss-bg text-loss-d"
+        : "bg-paper-2 text-mut";
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+      {ctx.notes.slice(0, 2).map((n) => (
+        <span key={n} className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${tone}`}>
+          {n}
+        </span>
+      ))}
+      {/* Not decoration: these are pre-announcement figures, and a reader who
+          takes them as live would draw the wrong conclusion. */}
+      <span className="font-mono text-[9.5px] text-mut-d">to {ctx.asOf}</span>
+      {/* A footnote, not a chip. As a chip this was a full sentence wrapping
+          over two lines, and it displaced the observations it qualifies. */}
+      {ctx.caveat && (
+        <span className="w-full text-[10px] text-mut-d first-letter:uppercase">
+          {ctx.caveat}
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   /** Already sorted upstream: holdings first, newest within each group. */
   items: AsxAnnouncement[];
@@ -223,8 +266,10 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                     {a.headline}
                   </div>
 
+                  {a.context && <ContextChips ctx={a.context} />}
+
                   {a.summary[0] && (
-                    <p className="text-xs text-mut leading-relaxed mt-1 line-clamp-2">
+                    <p className="text-xs text-mut leading-relaxed mt-1.5 line-clamp-2">
                       {a.summary[0]}
                     </p>
                   )}
@@ -283,6 +328,8 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                   <div className="font-semibold text-[13.5px] leading-snug mt-1 group-hover:underline line-clamp-3">
                     {a.headline}
                   </div>
+
+                  {a.context && <ContextChips ctx={a.context} />}
 
                   {a.summary[0] && (
                     <p className="text-xs text-mut leading-relaxed mt-1.5 line-clamp-3">
