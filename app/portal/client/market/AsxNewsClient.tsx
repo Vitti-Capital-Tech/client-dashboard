@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { TablePagination } from "@/app/components/TablePagination";
+import { NewsViewToggle, useNewsView } from "@/app/components/NewsViewToggle";
 import { WatchButton } from "@/app/components/WatchButton";
 import type { AsxAnnouncement, AsxSentiment } from "@/lib/asx/news";
 
@@ -53,6 +54,8 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  // Shared with Insights and remembered per browser, so the choice is made once.
+  const [view, setView] = useNewsView();
 
   const held = useMemo(() => new Set(heldCodes), [heldCodes]);
   const watched = useMemo(() => new Set(watchedCodes), [watchedCodes]);
@@ -141,21 +144,36 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
             ))}
           </div>
 
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Search ticker, company or headline"
-            aria-label="Search announcements"
-            className="w-full sm:w-60 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
-          />
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search ticker, company or headline"
+              aria-label="Search announcements"
+              className="flex-1 min-w-0 sm:flex-none sm:w-60 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
+            />
+            <NewsViewToggle view={view} onChange={setView} className="flex-none" />
+          </div>
         </div>
 
-        {/* Rows */}
-        {visible.length > 0 ? (
+        {/* Rows — the same filings either way; only the shape changes. The list
+            is the density-first read, the grid is the scannable one, and which
+            of those somebody wants depends on whether they are working through
+            the day or looking for one name in it. */}
+        {visible.length === 0 ? (
+          <div className="px-4.5 py-10 text-center">
+            <b className="text-sm font-semibold text-ink block">No filings match</b>
+            <p className="text-xs text-mut mt-1">
+              {search.trim()
+                ? "Try a different ticker or company."
+                : "Nothing in this category today."}
+            </p>
+          </div>
+        ) : view === "list" ? (
           <div className="divide-y divide-line">
             {visible.map((a) => {
               const owned = held.has(a.code);
@@ -215,13 +233,65 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
             })}
           </div>
         ) : (
-          <div className="px-4.5 py-10 text-center">
-            <b className="text-sm font-semibold text-ink block">No filings match</b>
-            <p className="text-xs text-mut mt-1">
-              {search.trim()
-                ? "Try a different ticker or company."
-                : "Nothing in this category today."}
-            </p>
+          <div className="p-4.5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visible.map((a) => {
+              const owned = held.has(a.code);
+              return (
+                <a
+                  key={a.id}
+                  href={a.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex flex-col border border-line rounded-[12px] bg-white p-3.5
+                             hover:bg-paper hover:border-line-2 transition-colors"
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
+                      <span
+                        className={`code font-mono text-[11px] px-1 rounded-sm font-bold ${owned ? "text-green-d" : "text-ink"}`}
+                      >
+                        {a.code} {owned && "●"}
+                      </span>
+                      <span
+                        className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${SENTIMENT_PILL[a.sentiment]}`}
+                      >
+                        {a.sentiment}
+                      </span>
+                    </div>
+
+                    <span className="flex items-center gap-1.5 flex-none">
+                      <WatchButton
+                        code={a.code}
+                        name={a.company || a.code}
+                        initiallyWatching={watched.has(a.code)}
+                      />
+                      <ArrowUpRight
+                        aria-hidden
+                        className="w-3.5 h-3.5 text-mut-d transition-all
+                                   group-hover:text-green-d group-hover:-translate-y-px"
+                      />
+                    </span>
+                  </div>
+
+                  <div className="font-mono text-[10px] text-mut uppercase tracking-wider truncate mt-1.5">
+                    {a.company} &middot; {annTime(a.released)}
+                  </div>
+
+                  {/* Clamped rather than left to run: in a grid an unclamped
+                      headline stretches its whole row, and a row of cards that
+                      are tall because one of them is tall reads as broken. */}
+                  <div className="font-semibold text-[13.5px] leading-snug mt-1 group-hover:underline line-clamp-3">
+                    {a.headline}
+                  </div>
+
+                  {a.summary[0] && (
+                    <p className="text-xs text-mut leading-relaxed mt-1.5 line-clamp-3">
+                      {a.summary[0]}
+                    </p>
+                  )}
+                </a>
+              );
+            })}
           </div>
         )}
 

@@ -1,4 +1,3 @@
-import { ArrowUpRight, Layers, Newspaper } from "lucide-react";
 import { getActiveClientId } from "@/lib/session";
 import { getSecurityMap, getWatchlist } from "@/lib/data/queries";
 import { getAsxSectors } from "@/lib/asx/directory";
@@ -6,7 +5,7 @@ import { getClientStoredPnl } from "@/lib/data/pnl";
 import { getClientPnlOverrides } from "@/lib/data/holdings";
 import { clientSummary } from "@/lib/pnl/client-portfolio";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
-import { WatchButton } from "@/app/components/WatchButton";
+import { HoldingsNews, SectorNews } from "./InsightsNews";
 
 export const metadata = {
   title: "Insights — Vitti Capital",
@@ -112,97 +111,12 @@ export default async function ClientInsightsPage() {
         </p>
       </div>
 
-      {/* ── Your holdings, in today's filings ─────────────────────────── */}
-      <section className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-        <div className="px-4.5 py-3.5 border-b border-line flex items-center gap-2 select-none">
-          <Newspaper className="w-4 h-4 text-mut" aria-hidden />
-          <b className="text-sm font-semibold text-ink">Your holdings in the news</b>
-          {mine.length > 0 && (
-            <span className="ml-auto text-[11px] font-mono text-mut">
-              {mine.length} of {feed.total} price-sensitive filings today
-            </span>
-          )}
-        </div>
-
-        {mine.length === 0 ? (
-          <div className="px-4.5 py-10 text-center">
-            <b className="text-sm font-semibold text-ink block">
-              Nothing from your companies today
-            </b>
-            <p className="text-xs text-mut mt-1.5 max-w-90 mx-auto leading-relaxed">
-              {feed.total > 0
-                ? `${feed.total} price-sensitive filings were lodged with the ASX today, none of them by a company you hold. They are all under Market.`
-                : "No price-sensitive filings have come through yet today."}
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-line">
-            {mine.map((a) => (
-              <div key={a.id} className="px-4.5 py-3.5">
-                <div className="flex items-start gap-2">
-                  <div className="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-                  <span className="code font-mono text-[11px] px-1 rounded-sm font-bold text-green-d">
-                    {a.code}
-                  </span>
-                  <span
-                    className={`pill text-[10px] font-bold rounded-full px-2 py-0.5 ${
-                      a.sentiment === "bullish"
-                        ? "bg-green-bg text-green-d"
-                        : a.sentiment === "bearish"
-                        ? "bg-loss-bg text-loss-d"
-                        : "bg-paper-2 text-mut"
-                    }`}
-                  >
-                    {a.sentiment}
-                  </span>
-                  <span className="font-mono text-[10px] text-mut uppercase tracking-wider">
-                    {a.company}
-                  </span>
-                  </div>
-                  <div className="flex items-center gap-2 flex-none">
-                    <WatchButton
-                      code={a.code}
-                      name={a.company || a.code}
-                      initiallyWatching={watching.has(a.code)}
-                    />
-                  </div>
-                </div>
-
-                <a
-                  href={a.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="group block mt-1.5"
-                >
-                  <span className="font-semibold text-[13.5px] leading-snug group-hover:underline">
-                    {a.headline}
-                  </span>
-                  <ArrowUpRight
-                    aria-hidden
-                    className="inline w-3.5 h-3.5 ml-1 -mt-0.5 text-mut-d transition-transform group-hover:-translate-y-px group-hover:text-green-d"
-                  />
-                </a>
-
-                {/* The upstream summary, in full rather than clipped: on Market
-                    it is one line among 59 filings and a teaser is right; here
-                    there are a handful and they are the client's own. */}
-                {a.summary.length > 0 && (
-                  <ul className="mt-1.5 space-y-1">
-                    {a.summary.map((line, i) => (
-                      <li
-                        key={i}
-                        className="text-xs text-mut leading-relaxed pl-3 relative before:content-[''] before:absolute before:left-0 before:top-[0.55em] before:w-1 before:h-1 before:rounded-full before:bg-mut-d"
-                      >
-                        {line}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* ── Your holdings, in today's filings ───────────────────── */}
+      <HoldingsNews
+        items={mine}
+        watchedCodes={[...watching]}
+        feedTotal={feed.total}
+      />
 
       {/* ── Elsewhere in your sectors ──────────────────────────────────
           Not a second Market page: only the sectors this client is exposed
@@ -210,70 +124,7 @@ export default async function ClientInsightsPage() {
           on the days the section above is empty, which for a book of seven
           holdings is most of them. */}
       {sectorNews.length > 0 && (
-        <section className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
-          <div className="px-4.5 py-3.5 border-b border-line flex items-center gap-2 select-none">
-            <Layers className="w-4 h-4 text-mut" aria-hidden />
-            <b className="text-sm font-semibold text-ink">Elsewhere in your sectors</b>
-            <span className="ml-auto text-[11px] font-mono text-mut">
-              {mySectors.size} sector{mySectors.size === 1 ? "" : "s"} held
-            </span>
-          </div>
-
-          <div className="divide-y divide-line">
-            {sectorNews.map(([sector, items]) => (
-              <div key={sector} className="px-4.5 py-3.5">
-                <div className="text-[10.5px] font-semibold uppercase tracking-wider text-mut mb-2">
-                  {sector}
-                </div>
-                <div className="space-y-2.5">
-                  {items.map((a) => (
-                    <a
-                      key={a.id}
-                      href={a.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="group block"
-                    >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="code font-mono text-[11px] px-1 rounded-sm font-bold text-ink">
-                          {a.code}
-                        </span>
-                        <span
-                          className={`pill text-[9.5px] font-bold rounded-full px-2 py-0.5 ${
-                            a.sentiment === "bullish"
-                              ? "bg-green-bg text-green-d"
-                              : a.sentiment === "bearish"
-                              ? "bg-loss-bg text-loss-d"
-                              : "bg-paper-2 text-mut"
-                          }`}
-                        >
-                          {a.sentiment}
-                        </span>
-                        <span className="font-mono text-[10px] text-mut uppercase tracking-wider truncate">
-                          {a.company}
-                        </span>
-                      </div>
-                      <div className="text-[12.5px] font-semibold text-ink leading-snug mt-1 group-hover:underline">
-                        {a.headline}
-                        <ArrowUpRight
-                          aria-hidden
-                          className="inline w-3 h-3 ml-1 -mt-0.5 text-mut-d group-hover:text-green-d"
-                        />
-                      </div>
-                    </a>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="px-4.5 py-3 border-t border-line bg-paper-2/40">
-            <p className="text-[11px] text-mut leading-relaxed">
-              Companies you do not hold, in the sectors you do. Shown for
-              context — not a recommendation.
-            </p>
-          </div>
-        </section>
+        <SectorNews groups={sectorNews} sectorCount={mySectors.size} />
       )}
     </div>
   );
