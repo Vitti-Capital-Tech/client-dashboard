@@ -19,6 +19,39 @@ import { cache } from "react";
 
 export type AsxSentiment = "bullish" | "bearish" | "neutral";
 
+/**
+ * What the price was doing going into the filing, measured upstream from bars
+ * that closed before it. Taken as given rather than recomputed here: fetching
+ * prices on this side would produce slightly different numbers from the ones
+ * the ASX dashboard shows for the same announcement, and two surfaces
+ * disagreeing about a figure is worse than one surface not having it.
+ */
+export type AsxPriceContext = {
+  /** Date of the last bar used. These are pre-announcement figures. */
+  asOf: string;
+  /** Observations only, authored upstream so phrasing cannot drift. */
+  notes: string[];
+  /**
+   * What THIS filing's figures mean, in sentences — the help tooltip's content.
+   * Authored upstream and specific to the announcement, replacing a generic
+   * explanation of the feature that was read once and useless afterwards.
+   */
+  reading: string[];
+  /**
+   * Why the observations may be worth little, or null. Not one of the notes:
+   * it qualifies them, and rendering it as a chip put a two-line sentence in a
+   * pill and pushed the real signals out.
+   */
+  caveat: string | null;
+  /** False when turnover is too small for the ratios to mean anything. */
+  liquid: boolean;
+  turnoverAud: number | null;
+  volumeTrendRatio: number | null;
+  brokeOut: boolean;
+  atHigh: boolean;
+  atLow: boolean;
+};
+
 export type AsxAnnouncement = {
   /** ASX document id. Stable, so safe as a React key or an upsert key. */
   id: string;
@@ -35,6 +68,8 @@ export type AsxAnnouncement = {
   tags: string[];
   /** The upstream AI summary — three bullets. */
   summary: string[];
+  /** Null when the upstream had no price history for it. */
+  context: AsxPriceContext | null;
 };
 
 /** What the page needs: the list, plus figures describing the whole day. */
@@ -79,6 +114,7 @@ type ApiItem = {
   document_type?: unknown;
   tags?: unknown;
   summary?: unknown;
+  market_context?: unknown;
 };
 
 const SENTIMENTS: readonly AsxSentiment[] = ["bullish", "bearish", "neutral"];
@@ -89,6 +125,30 @@ function str(v: unknown): string {
 
 function strArray(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Narrow the upstream context, or null. Absent is a supported state. */
+function toContext(v: unknown): AsxPriceContext | null {
+  if (!v || typeof v !== "object") return null;
+  const c = v as Record<string, unknown>;
+  const notes = strArray(c.notes);
+  if (!notes.length) return null; // nothing worth showing
+  return {
+    asOf: str(c.as_of),
+    notes,
+    reading: strArray(c.reading),
+    liquid: c.liquid === true,
+    caveat: typeof c.caveat === "string" && c.caveat ? c.caveat : null,
+    turnoverAud: num(c.avg_turnover_aud),
+    volumeTrendRatio: num(c.volume_trend_ratio),
+    brokeOut: c.broke_out === true,
+    atHigh: c.at_3m_high === true || c.at_52w_high === true,
+    atLow: c.at_3m_low === true || c.at_52w_low === true,
+  };
 }
 
 /**
@@ -127,6 +187,7 @@ function toAnnouncement(raw: ApiItem): AsxAnnouncement | null {
     documentType: str(raw.document_type),
     tags: strArray(raw.tags),
     summary: strArray(raw.summary),
+    context: toContext(raw.market_context),
   };
 }
 

@@ -28,6 +28,99 @@ function annTime(iso: string): string {
     .toLowerCase();
 }
 
+/**
+ * The (i) beside a filing's price figures, and what it opens.
+ *
+ * Shows what THAT filing's numbers mean, not what the feature is. It began as
+ * a generic explanation — what a 20-day average is, why the date is yesterday's
+ * — which is worth reading exactly once. The useful question is what this
+ * particular stock was doing going into this particular announcement, so the
+ * sentences are composed upstream per filing and named for the ticker.
+ *
+ * Opens on hover and on keyboard focus, so it is not mouse-only.
+ */
+function ContextHelp({ reading }: { reading: string[] }) {
+  if (!reading.length) return null;
+  return (
+    <span className="relative inline-flex group/info align-middle">
+      <button type="button" aria-label="What do these figures mean?"
+        className="w-3.5 h-3.5 rounded-full bg-line-2 text-mut text-[9px] font-bold
+                   leading-none flex items-center justify-center cursor-help outline-none">
+        i
+      </button>
+      <span role="tooltip"
+        className="pointer-events-none absolute left-0 top-5 z-50 w-[min(21rem,72vw)] p-3
+                   rounded-[12px] bg-white border border-line shadow-shadow-lg text-left
+                   opacity-0 invisible transition-opacity duration-150
+                   group-hover/info:opacity-100 group-hover/info:visible
+                   group-focus-within/info:opacity-100 group-focus-within/info:visible">
+        <span className="block font-mono text-[10px] tracking-wider uppercase text-mut mb-1.5">
+          What this means
+        </span>
+        {reading.map((line) => (
+          <span key={line} className="block text-[11px] leading-relaxed text-ink/80 mb-1.5 normal-case">
+            {line}
+          </span>
+        ))}
+        <span className="block text-[10px] leading-relaxed text-mut-d pt-1 border-t border-line normal-case">
+          Measured from exchange data, not written by the AI.
+        </span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * What the price was doing going into a filing.
+ *
+ * Measured upstream from bars that closed before the announcement and passed
+ * through untouched, so this page and the ASX dashboard state the same figures
+ * for the same filing. Nothing here is generated — these are the part of a row
+ * a reader can check against a chart, which is why they sit above the AI
+ * summary rather than under it.
+ *
+ * A thinly traded stock's ratios are shown in the muted tone with its turnover
+ * named, rather than coloured like a signal: a volume spike on A$4,000 a day is
+ * two people, and presenting it as interest would be the lie.
+ */
+function ContextChips({ ctx }: { ctx: NonNullable<AsxAnnouncement["context"]> }) {
+  const tone = !ctx.liquid
+    ? "bg-paper-2 text-mut"
+    : ctx.brokeOut || ctx.atHigh
+      ? "bg-green-bg text-green-d"
+      : ctx.atLow
+        ? "bg-loss-bg text-loss-d"
+        : "bg-paper-2 text-mut";
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+      {ctx.notes.slice(0, 2).map((n) => (
+        <span key={n}
+          title={
+            ctx.caveat
+              ? `Measured from exchange data up to the ${ctx.asOf} close, before this announcement. Note: ${ctx.caveat} — so treat this figure as close to meaningless.`
+              : `Measured from exchange data up to the ${ctx.asOf} close, before this announcement came out.`
+          }
+          className={`text-[10px] font-medium rounded-full px-2 py-0.5 cursor-help ${tone}`}>
+          {n}
+        </span>
+      ))}
+      {/* Not decoration: these are pre-announcement figures, and a reader who
+          takes them as live would draw the wrong conclusion. */}
+      <span className="font-mono text-[9.5px] text-mut-d">to {ctx.asOf}</span>
+      <ContextHelp reading={ctx.reading} />
+      {/* A footnote, not a chip. As a chip this was a full sentence wrapping
+          over two lines, and it displaced the observations it qualifies. */}
+      {ctx.caveat && (
+        <span className="w-full text-[10px] text-mut-d first-letter:uppercase cursor-help"
+          title="Turnover is the dollar value traded per day. When it is this small, a volume spike can be one or two people, so the ratios above describe noise rather than genuine interest.">
+          {ctx.caveat}
+        </span>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   /** Already sorted upstream: holdings first, newest within each group. */
   items: AsxAnnouncement[];
@@ -223,8 +316,10 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                     {a.headline}
                   </div>
 
+                  {a.context && <ContextChips ctx={a.context} />}
+
                   {a.summary[0] && (
-                    <p className="text-xs text-mut leading-relaxed mt-1 line-clamp-2">
+                    <p className="text-xs text-mut leading-relaxed mt-1.5 line-clamp-2">
                       {a.summary[0]}
                     </p>
                   )}
@@ -283,6 +378,8 @@ export function AsxNewsClient({ items, heldCodes, watchedCodes, total, asAt }: P
                   <div className="font-semibold text-[13.5px] leading-snug mt-1 group-hover:underline line-clamp-3">
                     {a.headline}
                   </div>
+
+                  {a.context && <ContextChips ctx={a.context} />}
 
                   {a.summary[0] && (
                     <p className="text-xs text-mut leading-relaxed mt-1.5 line-clamp-3">
