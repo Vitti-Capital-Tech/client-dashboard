@@ -129,11 +129,10 @@ export function clientSummary(
   stored: StoredPnlRow[],
   overrides: PnlOverrideRow[] = [],
 ): ClientSummary {
-  // Keyed by `parent` exactly as the staff page keys it, so a correction lands
-  // on the same row for both of them.
-  const overrideMap = new Map(overrides.map((o) => [o.parent, { ...o, parent: o.parent }]));
-
-  const summary = storedToSummaryRows(stored, overrideMap);
+  // Handed over as they came. `storedToSummaryRows` indexes them by account AND
+  // parent itself — an override is stored per account, so keyed by code alone
+  // two accounts' corrections on one company collapsed into a single entry.
+  const summary = storedToSummaryRows(stored, overrides);
 
   // Taken while the rows still carry `excludedFromTotal`.
   const total = grandTotal(summary);

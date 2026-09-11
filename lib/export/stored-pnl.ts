@@ -103,6 +103,37 @@ function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
   return "Unmatched";
 }
 
+/** A desk correction, carrying the account it was authored against. */
+export type ScopedPnlOverride = PnlOverride & { accountId: string };
+
+/**
+ * How an override is addressed: by ACCOUNT and ordinary code, both.
+ *
+ * `pnl_overrides` is keyed `PRIMARY KEY (account_id, parent_code)`, so one
+ * client can hold a correction on the same company in two accounts — and
+ * `pnl_summary` is keyed `(account_id, ticker)`, so they have a row each to
+ * land on. Keyed by code alone, the two collapsed into one map entry: under
+ * "All accounts" one correction was silently dropped and the survivor was
+ * applied to BOTH rows, which moved a Grand Total and an export by the size of
+ * somebody else's edit.
+ *
+ * The separator is a character neither half can contain — an account id is a
+ * UUID (hex and hyphens) and a ticker is alphanumeric — so no pair of values
+ * can spell another pair's key.
+ */
+const overrideKey = (accountId: string, parent: string) => `${accountId}|${parent}`;
+
+/**
+ * Index the corrections so a row can find its own.
+ *
+ * Built here rather than by the caller on purpose: the key has to agree with
+ * the lookup below, and every caller that built its own map was one place the
+ * two could drift apart. Handing in a flat array makes that impossible.
+ */
+function indexOverrides(overrides: ScopedPnlOverride[]): Map<string, ScopedPnlOverride> {
+  return new Map(overrides.map((o) => [overrideKey(o.accountId, o.parent), o]));
+}
+
 /**
  * Overrides are keyed by the ORDINARY code while stored rows are keyed by
  * ticker, so an option line (EOSO) never picks up the underlying's correction
@@ -112,17 +143,21 @@ function statusOf(r: StoredPnlRow, eff: EffectiveState): string {
  */
 function overrideFor(
   r: StoredPnlRow,
-  overrides: Map<string, PnlOverride>,
+  overrides: Map<string, ScopedPnlOverride>,
 ): PnlOverride | undefined {
-  return r.isOption || r.isUnlistedOption ? undefined : overrides.get(r.ticker);
+  return r.isOption || r.isUnlistedOption
+    ? undefined
+    : overrides.get(overrideKey(r.accountId, r.ticker));
 }
 
 export function storedToSummaryRows(
   stored: StoredPnlRow[],
-  overrides: Map<string, PnlOverride> = new Map(),
+  overrides: ScopedPnlOverride[] = [],
 ): PnlSummaryRow[] {
+  const byAccountAndParent = indexOverrides(overrides);
+
   const rows: PnlSummaryRow[] = stored.map((r) => {
-    const o = overrideFor(r, overrides);
+    const o = overrideFor(r, byAccountAndParent);
 
     const isOption = Boolean(
       r.isOption ||
@@ -217,6 +252,10 @@ export function storedToSummaryRows(
     // An edited row is no longer a pure derivation. Not an error, but a fact
     // the reader is entitled to, so it never travels silently.
     return {
+      // Carried so the row keeps the other half of its own identity. Under
+      // "All accounts" a client holding EOS in two accounts has two EOS rows,
+      // and every consumer that keyed off `ticker` alone treated them as one.
+      accountId: r.accountId,
       ticker: r.ticker,
       name: r.company || r.ticker,
       buyQty,

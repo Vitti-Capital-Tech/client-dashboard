@@ -63,6 +63,22 @@ export const isRowUnmatched = (r: PnlSummaryRow): boolean =>
 
 export const isRowEquity = (r: PnlSummaryRow): boolean => !isRowOption(r);
 
+/**
+ * What identifies ONE row of the Historical P&L table.
+ *
+ * Not the ticker. `pnl_summary` is keyed `(account_id, ticker)`, so under "All
+ * accounts" a client holding EOS in two accounts has two EOS rows — and every
+ * consumer that used the ticker as an identity treated them as one thing: React
+ * saw duplicate keys, and the staff table's inline editor opened on both rows
+ * from a single click.
+ *
+ * Falls back to the ticker where a row carries no account, which is the
+ * computed path (`buildPnlSummary`) — a single scope, where the ticker really
+ * is unique.
+ */
+export const pnlRowId = (r: PnlSummaryRow): string =>
+  r.accountId ? `${r.accountId}|${r.ticker}` : r.ticker;
+
 // ---------------------------------------------------------------------------
 // The Historical P&L filter bar
 // ---------------------------------------------------------------------------

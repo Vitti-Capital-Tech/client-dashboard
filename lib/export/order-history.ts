@@ -73,6 +73,17 @@ export type OverriddenFields = {
 };
 
 export type PnlSummaryRow = {
+  /**
+   * Which account the row belongs to.
+   *
+   * Optional because the computed path (`buildPnlSummary`) works a single
+   * scope and has no account to name. Set on the stored path, where a client's
+   * accounts are aggregated and `ticker` alone stops identifying a row: two
+   * accounts holding EOS produce two EOS rows, and anything keyed on the
+   * ticker — a React key, an open editor, an override lookup — treated them as
+   * one.
+   */
+  accountId?: string;
   ticker: string;
   name: string;
   /** Units the LEDGER saw bought/sold, unless overridden. Zero on a holding

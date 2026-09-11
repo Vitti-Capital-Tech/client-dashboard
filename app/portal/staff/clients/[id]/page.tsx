@@ -9,7 +9,7 @@ import {
   getClientTrades,
   type PlacementRow,
 } from "@/lib/data/queries";
-import { getClientRealized, getClientPnlOverrides } from "@/lib/data/holdings";
+import { getClientPnlOverrides } from "@/lib/data/holdings";
 import { getClientStoredPnl, getClientLatestPnlRuns } from "@/lib/data/pnl";
 import { getQueuedAccountIds } from "@/lib/data/ingest";
 import { offLedgerBuyLines } from "@/lib/pnl/off-ledger-buys";
@@ -39,7 +39,6 @@ export default async function Page({
     alerts,
     signals,
     trades,
-    realized,
     overrides,
     storedPnl,
     pnlRuns,
@@ -52,7 +51,6 @@ export default async function Page({
     getAlerts(id),
     getSignals(),
     getClientTrades(id),
-    getClientRealized(id),
     getClientPnlOverrides(id),
     // The P&L table now renders what the recompute STORED, rather than deriving
     // it here — the full calculation depends on live spot prices and the
@@ -108,7 +106,6 @@ export default async function Page({
       alerts={alerts}
       signalsMap={signalsMap}
       trades={trades}
-      realized={realized}
       overrides={overrides}
       storedPnl={storedPnl}
       offLedgerByScope={offLedgerByScope}

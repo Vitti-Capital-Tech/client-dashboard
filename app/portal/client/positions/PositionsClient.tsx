@@ -16,7 +16,6 @@ import {
   realizedBetween,
   realizedByPeriod,
   attributeSells,
-  monthsBack,
 } from "@/lib/data/compute";
 import {
   buildPnlSummaryCsv,
@@ -33,6 +32,7 @@ import { buildPnlSummaryXlsx } from "@/app/actions/exports";
 import {
   isRowUnlistedOption,
   filterPnlRows,
+  pnlRowId,
   pnlFilterCounts,
   optionSummaryRows,
   filterOptionRows,
@@ -52,6 +52,8 @@ import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import { PnlRow } from "@/app/components/PnlRow";
 import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { TablePagination } from "@/app/components/TablePagination";
+import { RealisedRangePicker } from "@/app/components/RealisedRangePicker";
+import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { TransactionsTable } from "./TransactionsTable";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
@@ -96,14 +98,6 @@ const returnPct = (pl: number, cost: number): number | null =>
 
 const pct1 = (n: number | null) => (n === null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`);
 
-
-/** The presets, in the order they read: shortest window first. */
-const RANGE_PRESETS: { label: string; months: number }[] = [
-  { label: "3M", months: 3 },
-  { label: "6M", months: 6 },
-  { label: "1Y", months: 12 },
-  { label: "3Y", months: 36 },
-];
 
 export function PositionsClient({
   accounts,
@@ -339,18 +333,6 @@ export function PositionsClient({
     [sells, rangeFrom, rangeTo, deltaByTicker],
   );
 
-  /** Which preset, if any, the current range corresponds to — for the pills. */
-  const activePreset = useMemo(() => {
-    // All time has its own pill. Without this guard a client whose sale history
-    // happens to be almost exactly a year long would see both it and `1Y` lit,
-    // which is two answers to "what am I looking at".
-    if (isAllTime || !lastSaleDate || rangeTo !== lastSaleDate) return null;
-    return (
-      RANGE_PRESETS.find((p) => monthsBack(lastSaleDate, p.months).from === rangeFrom)
-        ?.label ?? null
-    );
-  }, [isAllTime, lastSaleDate, rangeFrom, rangeTo]);
-
   /**
    * Changing the period changes WHICH TABLE is on screen — all-time parcels, or
    * the sales inside a window — so the filter and the page number go back to
@@ -362,14 +344,6 @@ export function PositionsClient({
     setPnlFilter("all");
     setPnlPage(1);
   };
-
-  const pickPreset = (months: number) => {
-    if (!lastSaleDate) return;
-    pickRange(monthsBack(lastSaleDate, months));
-  };
-
-  /** Back to `null`, which is All time AND the table's reference view. */
-  const pickAllTime = () => pickRange(null);
 
   // Custom states for trade execution inside modal
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
@@ -453,81 +427,14 @@ export function PositionsClient({
   const realizedTotal = window_?.realizedPl ?? 0;
 
   /**
-   * The sales in the range, as table rows.
-   *
-   * A date range can only describe money that changed hands, so this is what
-   * the table shows once one is picked. Built into the same `PnlSummaryRow`
-   * shape the all-time rows use, so ONE table body renders both and the two
-   * views cannot drift into looking like different tables.
-   *
-   * ── The row is the INSTRUMENT, and it carries its classification across ────
-   * It used to be keyed on `c.parent`, which folded an option into its
-   * ordinary: `OD6O`'s sale landed on a row labelled `OD6` wearing the option's
-   * company name, and every option line the all-time view lists disappeared.
-   * The window now groups per instrument (see `realizedBetween`), and each row
-   * inherits the stored row's own flags so the filter bar means the same thing
-   * in both views — an option is still an option inside a date range.
-   *
-   * `buyQty` is the units CLOSED, which the FIFO consumed to make this sale, so
-   * the column is populated rather than reading "—". It is deliberately not
-   * "units bought in the window": the parcel was acquired earlier, quite
-   * possibly outside the range, and claiming otherwise would invite the reader
-   * to check it against a purchase that is not on screen.
+   * The sales in the range, as table rows — the shared builder, which the desk
+   * console renders from too. See lib/pnl/realised-window.ts for what a row in
+   * a window is and why it is keyed on the instrument.
    */
-  const realisedRows: PnlSummaryRow[] = useMemo(() => {
-    if (!window_) return [];
-
-    const storedBy = new Map(summaryRows.map((r) => [r.ticker, r]));
-
-    return window_.contributors.map((c) => {
-      const stored = storedBy.get(c.code) ?? storedBy.get(c.parent);
-      return {
-      ticker: c.code,
-      name: stored?.name ?? c.code,
-      buyQty: c.units,
-      sellQty: c.units,
-      heldQty: 0,
-      buyPrice: c.costOfSold,
-      sellOrCurrent: c.proceeds,
-      pnl: c.realizedPl,
-      // Taken from the stored row rather than forced false: a part-sold parcel
-      // realised money inside the window AND is still held, and the Open pill
-      // has to be able to say so in a range exactly as it does over all time.
-      openPosition: Boolean(stored?.openPosition),
-      isOption: stored?.isOption,
-      isUnlistedOption: stored?.isUnlistedOption,
-      // The status column reads "Closed" off these — which is the truth about a
-      // sale — and the cost warning travels in the wording instead.
-      //
-      // A FREE GRANT is not a warning. The firm's treatment puts a placement's
-      // whole cost on the shares and none on the attaching options, so a $0
-      // cost there is the answer rather than a gap — 187 such sales worth
-      // $255,139 were reading "cost base not on file" in red, sending the
-      // reader to look for something that was never missing.
-      type: c.freeGrant
-        ? "Realised · free grant"
-        : c.noCostBasis
-          ? "Realised · cost base not on file"
-          : "Realised",
-      flagged: c.noCostBasis && !c.freeGrant,
-      edited: false,
-      overridden: {
-        buyQty: false,
-        sellQty: false,
-        buyPrice: false,
-        sellOrCurrent: false,
-      },
-      note: null,
-      computed: {
-        buyQty: c.units,
-        sellQty: c.units,
-        buyPrice: c.costOfSold,
-        sellOrCurrent: c.proceeds,
-        pnl: c.realizedPl,
-      },
-      };
-    });
-  }, [window_, summaryRows]);
+  const realisedRows: PnlSummaryRow[] = useMemo(
+    () => (window_ ? realisedWindowRows(window_.contributors, summaryRows) : []),
+    [window_, summaryRows],
+  );
 
   /**
    * All-time rows, MINUS the parcels that are purely open.
@@ -871,14 +778,6 @@ export function PositionsClient({
    * "historical P&L". Part-sold parcels stay: their realised half is the point.
    */
   const renderRangeBar = () => {
-    const dateStr = (iso: string) =>
-      new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-AU", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        timeZone: "UTC",
-      });
-
     // No sales at all: there is nothing a range could narrow, so the controls
     // are replaced by the reason rather than drawn over nothing.
     if (!lastSaleDate) {
@@ -891,89 +790,12 @@ export function PositionsClient({
     }
 
     return (
-      <div className="px-4.5 py-3 border-b border-line bg-paper-2/40 space-y-2.5 select-none">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button
-              onClick={pickAllTime}
-              className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
-                isAllTime ? "bg-navy text-white" : "bg-white border border-line text-mut hover:text-ink"
-              }`}
-            >
-              All time
-            </button>
-            {RANGE_PRESETS.map((p) => (
-              <button
-                key={p.label}
-                onClick={() => pickPreset(p.months)}
-                className={`text-[11.5px] font-semibold px-2.5 py-1.5 rounded-[7px] cursor-pointer transition-colors ${
-                  activePreset === p.label
-                    ? "bg-navy text-white"
-                    : "bg-white border border-line text-mut hover:text-ink"
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          {/* `min`/`max` are pinned to the sale history, so the range cannot be
-              dragged somewhere there was never anything to realise. */}
-          <div className="flex items-end gap-3">
-            <div className="space-y-1">
-              <label
-                htmlFor="pnl-from"
-                className="block text-[10px] font-semibold uppercase tracking-wider text-mut"
-              >
-                From
-              </label>
-              <input
-                id="pnl-from"
-                type="date"
-                value={rangeFrom}
-                min={firstSaleDate}
-                max={lastSaleDate}
-                onChange={(e) => pickRange({ from: e.target.value, to: rangeTo })}
-                className="border border-line-2 bg-white rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-mono focus:border-green focus:outline-none"
-              />
-            </div>
-            <div className="space-y-1">
-              <label
-                htmlFor="pnl-to"
-                className="block text-[10px] font-semibold uppercase tracking-wider text-mut"
-              >
-                To
-              </label>
-              <input
-                id="pnl-to"
-                type="date"
-                value={rangeTo}
-                min={firstSaleDate}
-                max={lastSaleDate}
-                onChange={(e) => pickRange({ from: rangeFrom, to: e.target.value })}
-                className="border border-line-2 bg-white rounded-[8px] px-2.5 py-1.5 text-[11.5px] font-mono focus:border-green focus:outline-none"
-              />
-            </div>
-          </div>
-        </div>
-
-        <p className="text-[11px] text-mut leading-normal">
-          {isAllTime ? (
-            <>
-              Every parcel that has sold, in full or in part. Sales run{" "}
-              {dateStr(firstSaleDate)} – {dateStr(lastSaleDate)} — narrow the
-              period to see just what was <b>realised</b> in it. Positions you
-              still hold — shares and option grants alike — are on{" "}
-              <b>Holdings</b> above, not here.
-            </>
-          ) : (
-            <>
-              Showing what was <b>realised</b> between {dateStr(rangeFrom)} and{" "}
-              {dateStr(rangeTo)}. Holdings you still own are not in these figures.
-            </>
-          )}
-        </p>
-      </div>
+      <RealisedRangePicker
+        range={range}
+        firstSaleDate={firstSaleDate}
+        lastSaleDate={lastSaleDate}
+        onPick={pickRange}
+      />
     );
   };
 
@@ -1286,14 +1108,14 @@ export function PositionsClient({
                   </tr>
                 ) : (
                   <>
-                    {/* Keyed by position in the list, not by ticker: under All
-                        accounts a client who holds EOS in two accounts has two
-                        EOS rows, and a duplicate key silently drops one of
-                        them. The rows arrive in a stable order (P&L desc, then
-                        ticker) so the index is stable across renders. */}
-                    {page.map((r, i) => (
+                    {/* Keyed by account AND ticker: under All accounts a
+                        client who holds EOS in two accounts has two EOS rows,
+                        and a ticker-only key silently drops one of them. This
+                        used to key on the list position, which worked but tied
+                        a row's identity to where it happened to be paged. */}
+                    {page.map((r) => (
                       <PnlRow
-                        key={`${r.ticker}-${(pnlPage - 1) * pnlSize + i}`}
+                        key={pnlRowId(r)}
                         row={r}
                         money2={money2}
                         readOnly

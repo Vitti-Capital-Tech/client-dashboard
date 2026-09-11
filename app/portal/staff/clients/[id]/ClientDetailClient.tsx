@@ -15,17 +15,15 @@ import type {
 } from "@/lib/data/queries";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
 import {
-  rollUpRealized,
   attributeSells,
   realizedByPeriod,
-  type RealizedRow,
+  realizedBetween,
 } from "@/lib/data/compute";
 import {
   buildPnlSummaryCsv,
   grandTotal,
   pnlSummaryFilename,
   SUMMARY_HEADERS,
-  type PnlOverride,
 } from "@/lib/export/order-history";
 import { storedToSummaryRows } from "@/lib/export/stored-pnl";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
@@ -34,6 +32,7 @@ import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import {
   isRowUnlistedOption,
   filterPnlRows,
+  pnlRowId,
   pnlFilterCounts,
   optionSummaryRows,
   filterOptionRows,
@@ -53,6 +52,8 @@ import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
 import { TablePagination } from "@/app/components/TablePagination";
 import { PnlRow } from "@/app/components/PnlRow";
 import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
+import { RealisedRangePicker, type DateRange } from "@/app/components/RealisedRangePicker";
+import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { posValue, posCost, posPL, unlistedValue } from "@/lib/data/compute";
 
 /**
@@ -121,7 +122,6 @@ export function ClientDetailClient({
   alerts,
   signalsMap,
   trades,
-  realized,
   overrides,
   storedPnl,
   offLedgerByScope,
@@ -136,7 +136,6 @@ export function ClientDetailClient({
   alerts: AlertRow[];
   signalsMap: Record<string, SignalRow>;
   trades: TradeRow[];
-  realized: RealizedRow[];
   overrides: PnlOverrideRow[];
   storedPnl: StoredPnlRow[];
   /**
@@ -152,6 +151,15 @@ export function ClientDetailClient({
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabId>("holdings");
   const [pnlFilter, setPnlFilter] = useState<PnlFilter>("all");
+  /**
+   * The period the Historical P&L tab is taken over, or `null` for All time.
+   *
+   * Nullable rather than two seeded strings: seeded state does not re-seed, so
+   * alongside the account filter two strings would leave the pickers pinned to
+   * the previous account's sale history — a range whose own min/max no longer
+   * contained it, reading $0 over a window nobody chose.
+   */
+  const [range, setRange] = useState<DateRange | null>(null);
   const [pnlSearch, setPnlSearch] = useState<string>("");
   const [optionsTabFilter, setOptionsTabFilter] = useState<OptionFilter>("all");
   const [optionsSearch, setOptionsSearch] = useState<string>("");
@@ -159,10 +167,18 @@ export function ClientDetailClient({
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
   const [acctFilter, setAcctFilter] = useState<string>("all");
-  // Which summary row has its inline editor open, by ticker.
+  /**
+   * Which summary row has its inline editor open.
+   *
+   * Held as `account:ticker` rather than as a ticker. Under "All accounts" a
+   * client with EOS in two accounts has two EOS rows, and a ticker opened the
+   * editor on both of them at once — over two different sets of figures, with
+   * only one of them able to save.
+   */
   const [editing, setEditing] = useState<string | null>(null);
 
   // Pagination states for all tabs
+  const [holdSearch, setHoldSearch] = useState("");
   const [holdingsPage, setHoldingsPage] = useState(1);
   const [holdingsPageSize, setHoldingsPageSize] = useState(10);
 
@@ -178,8 +194,26 @@ export function ClientDetailClient({
   const [alertsPage, setAlertsPage] = useState(1);
   const [alertsPageSize, setAlertsPageSize] = useState(10);
 
+  /**
+   * Picking a period changes WHICH table is on screen — all-time rows, or the
+   * sales inside a window — so the filter and the page number go back to the
+   * start with it. A `Matched` pill carried into a realised view would match
+   * nothing and read as an empty book.
+   */
+  const pickRange = (next: DateRange | null) => {
+    setRange(next);
+    setPnlFilter("all");
+    setPnlPage(1);
+    setEditing(null);
+  };
+
   const handleSelectAccount = (id: string) => {
     setAcctFilter(id);
+    // The sale history the pickers are bounded by belongs to the old scope.
+    setRange(null);
+    // The row being edited may not be in the new scope at all, and an editor
+    // left open on it reappears the moment the filter comes back.
+    setEditing(null);
     setHoldingsPage(1);
     setPnlPage(1);
     setOptionsPage(1);
@@ -197,27 +231,21 @@ export function ClientDetailClient({
 
   // Order history follows the same account filter. Already newest-first from
   // the DAL, so no re-sort here.
-  const visibleTrades = trades.filter((t) => inAcct(t.accountId));
-  // Realised P&L arrives at account grain so it honours the same filter as the
-  // table above it — otherwise the chart and the rows would disagree.
-  const realizedMap = rollUpRealized(realized.filter((r) => inAcct(r.accountId)));
+  // Memoised because the ledger replay below is keyed on it — the same shape
+  // the client's Portfolio uses for the same reason.
+  const visibleTrades = useMemo(
+    () =>
+      acctFilter === "all"
+        ? trades
+        : trades.filter((t) => t.accountId === acctFilter),
+    [trades, acctFilter],
+  );
 
   // Settled trades are the only ones that moved money; the rest are shown for
   // completeness but excluded from every total below.
-  const settledTrades = visibleTrades.filter((t) => t.status === "SETTLED");
-  const boughtTotal = settledTrades
-    .filter((t) => t.side === "BUY")
-    .reduce((s, t) => s + t.value, 0);
-  const soldTotal = settledTrades
-    .filter((t) => t.side === "SELL")
-    .reduce((s, t) => s + t.value, 0);
-  const feesTotal = settledTrades.reduce(
-    (s, t) => s + t.brokerage + t.otherCharges + t.gst,
-    0,
-  );
-  const realizedTotal = [...realizedMap.values()].reduce(
-    (s, r) => s + r.realizedPl,
-    0,
+  const settledTrades = useMemo(
+    () => visibleTrades.filter((t) => t.status === "SETTLED"),
+    [visibleTrades],
   );
 
   // ONE array drives the table, the CSV and the .xlsx. That is what makes the
@@ -234,13 +262,14 @@ export function ClientDetailClient({
   //
   // Overrides are still applied HERE rather than baked in, so correcting a row
   // keeps tracking the sources underneath it.
-  const overrideMap = new Map<string, PnlOverride>(
-    overrides
-      .filter((o) => inAcct(o.accountId))
-      .map((o) => [o.parent, { ...o, parent: o.parent }]),
-  );
+  // Scoped, then handed over as an array. This used to be a Map keyed by
+  // `parent` alone, which under "All accounts" collapsed two accounts'
+  // corrections on one company into a single entry — one silently dropped, the
+  // survivor applied to both rows. `storedToSummaryRows` now keys them by
+  // account AND parent, which is how `pnl_overrides` itself is keyed.
+  const visibleOverrides = overrides.filter((o) => inAcct(o.accountId));
   const visibleStoredPnl = storedPnl.filter((r) => inAcct(r.accountId));
-  const summaryRows = storedToSummaryRows(visibleStoredPnl, overrideMap);
+  const summaryRows = storedToSummaryRows(visibleStoredPnl, visibleOverrides);
 
   /**
    * The purchases the ledger never recorded — chiefly placement parcels, which
@@ -257,13 +286,135 @@ export function ClientDetailClient({
    * `summaryRows` points at, which makes every `useMemo` keyed on it
    * unpreservable.
    */
-  const offLedger = offLedgerByScope[acctFilter] ?? offLedgerByScope.all ?? [];
+  // Memoised rather than picked inline: `sells` below is keyed on it, and a
+  // fresh `[]` from the fallback on every render would rebuild the whole ledger
+  // replay each time — which is also what the compiler warns about here.
+  const offLedger = useMemo(
+    () => offLedgerByScope[acctFilter] ?? offLedgerByScope.all ?? [],
+    [offLedgerByScope, acctFilter],
+  );
 
-  const pnlTabCounts = useMemo(() => pnlFilterCounts(summaryRows), [summaryRows]);
+  /**
+   * How far each corrected row's P&L moved from what the engine computed.
+   *
+   * A desk edit carries no date of its own, so the delta is handed to whatever
+   * dates the sales — the chart's buckets and the window's contributors alike —
+   * to spread across that company's sale months. Without it an edited row would
+   * move the table's total and leave both of them behind.
+   */
+  const chartDeltas = useMemo(
+    () =>
+      new Map(
+        summaryRows
+          .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
+          .map((r) => [r.ticker, r.pnl - r.computed.pnl]),
+      ),
+    [summaryRows],
+  );
+
+  const sells = useMemo(
+    () => attributeSells(visibleTrades, offLedger),
+    [visibleTrades, offLedger],
+  );
+
+  /**
+   * The bounds a period can be picked between — every sale on file.
+   *
+   * `to` is the last day anything actually sold rather than today: a book whose
+   * last sale was in June would otherwise open on a range ending today, and
+   * every preset inside it would read $0.
+   */
+  const lastSaleDate = useMemo(
+    () => sells.reduce((latest, x) => (x.tradeDate > latest ? x.tradeDate : latest), ""),
+    [sells],
+  );
+  const firstSaleDate = useMemo(
+    () =>
+      sells.reduce(
+        (earliest, x) => (!earliest || x.tradeDate < earliest ? x.tradeDate : earliest),
+        "",
+      ),
+    [sells],
+  );
+
+  const isAllTime = range === null;
+  const rangeFrom = range?.from ?? firstSaleDate;
+  const rangeTo = range?.to ?? lastSaleDate;
+
+  const window_ = useMemo(
+    () =>
+      rangeFrom && rangeTo
+        ? realizedBetween(sells, rangeFrom, rangeTo, chartDeltas)
+        : null,
+    [sells, rangeFrom, rangeTo, chartDeltas],
+  );
+
+  /** The sales inside the window, through the same builder the client uses. */
+  const realisedRows = useMemo(
+    () => (window_ ? realisedWindowRows(window_.contributors, summaryRows) : []),
+    [window_, summaryRows],
+  );
+
+  /**
+   * What the table is showing.
+   *
+   * ── Where the desk deliberately parts company with the client ─────────────
+   * All time here is EVERY stored row, open positions included. The client's
+   * own screen drops parcels that have never sold — they are on their Holdings
+   * table, and "Historical P&L" is not where a live position belongs — but the
+   * desk is the one party that has to be able to see the whole book in one
+   * table, including the rows nobody has traded yet. That is the 31-row gap
+   * between the two screens, and it is the intended one.
+   *
+   * A RANGE means the same thing on both: a period can only describe money that
+   * changed hands, so it is the sales inside it.
+   */
+  const tableRows = isAllTime ? summaryRows : realisedRows;
+
+  /**
+   * The trades inside the selected period, which is what the tiles count.
+   *
+   * All time is not special-cased in the arithmetic: the range then spans every
+   * sale on file. It IS special-cased here only to keep trades that predate the
+   * first sale — a book that has bought and never sold has no sale dates to
+   * bound a range with, and its Bought tile must not read $0.
+   */
+  const rangedTrades = useMemo(
+    () =>
+      isAllTime
+        ? settledTrades
+        : settledTrades.filter(
+            (t) => t.tradeDate >= rangeFrom && t.tradeDate <= rangeTo,
+          ),
+    [settledTrades, isAllTime, rangeFrom, rangeTo],
+  );
+
+  const boughtTotal = rangedTrades
+    .filter((t) => t.side === "BUY")
+    .reduce((s, t) => s + t.value, 0);
+  const soldTotal = rangedTrades
+    .filter((t) => t.side === "SELL")
+    .reduce((s, t) => s + t.value, 0);
+  const feesTotal = rangedTrades.reduce(
+    (s, t) => s + t.brokerage + t.otherCharges + t.gst,
+    0,
+  );
+
+  /**
+   * Realised P&L over the period, read off the SAME window as the table.
+   *
+   * This used to sum `realized_pnl` straight from the database, which was a
+   * second source for a figure the table below already states — and it took no
+   * account of desk overrides, so a corrected row moved the table and the chart
+   * and left this tile reading the uncorrected number. One window, one answer.
+   */
+  const realizedTotal = window_?.realizedPl ?? 0;
+
+  const pnlTabCounts = useMemo(() => pnlFilterCounts(tableRows), [tableRows]);
 
   const filteredSummaryRows = useMemo(
-    () => filterPnlRows(summaryRows, pnlFilter, pnlSearch),
-    [summaryRows, pnlFilter, pnlSearch],
+    () => filterPnlRows(tableRows, pnlFilter, pnlSearch),
+    [tableRows, pnlFilter, pnlSearch],
   );
 
   const filteredSummaryTotal = useMemo(
@@ -301,25 +452,19 @@ export function ClientDetailClient({
    */
   const pendingRecomputes = queuedAccountIds.filter((id) => inAcct(id)).length;
 
-  // The chart needs realised P&L WITH dates on it, which the per-ticker rollup
-  // cannot supply. Replaying the visible ledger through the same cost-basis
-  // walk the importer uses gives per-sale attribution, which then buckets by
-  // month, quarter or year depending on how much history there is — so the
-  // chart and the table are two views of one number.
-  //
-  // Desk edits carry no date of their own, so each corrected company's delta is
-  // handed to the bucketer to spread across that company's sale months. Without
-  // it an edited row would move the table's total and leave the chart behind.
-  const chartDeltas = new Map(
-    summaryRows
-      .filter((r) => r.edited && Math.abs(r.pnl - r.computed.pnl) > 0.005)
-      .map((r) => [r.ticker, r.pnl - r.computed.pnl]),
-  );
-
-  const chartPeriods = realizedByPeriod(
-    attributeSells(visibleTrades, offLedger),
-    chartDeltas,
-  );
+  /**
+   * The over-time chart, on the same period as everything else on the tab.
+   *
+   * The bucket width is the bucketer's call, not the picker's: a range up to a
+   * year is drawn in months, up to three years in quarters, longer in years — so
+   * the column count stays near a dozen at every range this picker offers.
+   */
+  const chartPeriods = useMemo(() => {
+    const inRange = isAllTime
+      ? sells
+      : sells.filter((x) => x.tradeDate >= rangeFrom && x.tradeDate <= rangeTo);
+    return realizedByPeriod(inRange, chartDeltas);
+  }, [sells, isAllTime, rangeFrom, rangeTo, chartDeltas]);
 
   /** Export honours the account filter, so the file always matches the screen. */
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -449,12 +594,6 @@ export function ClientDetailClient({
     .filter((r) => inAcct(r.bid.accountId));
 
   // Paginated slices for each tab
-  const paginatedPositions = useMemo(() => {
-    if (holdingsPageSize >= visiblePositions.length) return visiblePositions;
-    const start = (holdingsPage - 1) * holdingsPageSize;
-    return visiblePositions.slice(start, start + holdingsPageSize);
-  }, [visiblePositions, holdingsPage, holdingsPageSize]);
-
   const paginatedPnlRows = useMemo(() => {
     if (pnlPageSize >= filteredSummaryRows.length) return filteredSummaryRows;
     const start = (pnlPage - 1) * pnlPageSize;
@@ -477,6 +616,62 @@ export function ClientDetailClient({
     () => optionFilterCounts(allOptionSummaryRows),
     [allOptionSummaryRows],
   );
+
+  /**
+   * The unlisted grants, as holdings.
+   *
+   * `sellOrCurrent` is a VALUE for the whole parcel, so the per-option figure is
+   * derived rather than read. It is a modelled price, not a market one — nothing
+   * quotes these — which is why the row says so on its face.
+   */
+  const unlistedHoldings = useMemo(
+    () =>
+      allOptionSummaryRows
+        .filter((o) => isRowUnlistedOption(o.row))
+        .map((o) => ({
+          code: o.row.ticker,
+          name: o.row.name,
+          qty: o.qty,
+          value: o.row.sellOrCurrent,
+          cost: o.row.buyPrice,
+          pnl: o.row.pnl,
+        })),
+    [allOptionSummaryRows],
+  );
+
+  /**
+   * One row per holding, listed and unlisted together.
+   *
+   * A tagged union rather than two tables, which is how the client's own
+   * Portfolio reads it: they answer the same question — what is held and what
+   * is it worth — and splitting them left the reader adding two subtotals off
+   * two different tabs to get one position.
+   */
+  type HoldingRow =
+    | { kind: "listed"; position: Position }
+    | { kind: "unlisted"; option: (typeof unlistedHoldings)[number] };
+
+  const holdingRows = useMemo<HoldingRow[]>(() => {
+    const rows: HoldingRow[] = [
+      ...visiblePositions.map((p): HoldingRow => ({ kind: "listed", position: p })),
+      ...unlistedHoldings.map((o): HoldingRow => ({ kind: "unlisted", option: o })),
+    ];
+
+    const q = holdSearch.trim().toLowerCase();
+    if (!q) return rows;
+
+    return rows.filter((r) => {
+      const code = r.kind === "listed" ? r.position.code : r.option.code;
+      const name = (r.kind === "listed" ? r.position.name : r.option.name) ?? "";
+      return code.toLowerCase().includes(q) || name.toLowerCase().includes(q);
+    });
+  }, [visiblePositions, unlistedHoldings, holdSearch]);
+
+  const paginatedHoldings = useMemo(() => {
+    if (holdingsPageSize >= holdingRows.length) return holdingRows;
+    const start = (holdingsPage - 1) * holdingsPageSize;
+    return holdingRows.slice(start, start + holdingsPageSize);
+  }, [holdingRows, holdingsPage, holdingsPageSize]);
 
   const filteredOptionRows = useMemo(
     () => filterOptionRows(allOptionSummaryRows, optionsTabFilter, optionsSearch),
@@ -528,11 +723,17 @@ export function ClientDetailClient({
 
   const unlisted = unlistedValue(visibleOptions);
 
+  // Over everything the Holdings table lists — the grants are rows in it now,
+  // so a footer that skipped them would total less than the rows above it.
   let tv = 0;
   let tc = 0;
   visiblePositions.forEach(p => {
     tv += posValue(p);
     tc += posCost(p);
+  });
+  unlistedHoldings.forEach((o) => {
+    tv += o.value;
+    tc += o.cost;
   });
 
   const tpl = tv - tc;
@@ -643,7 +844,23 @@ export function ClientDetailClient({
       {activeTab === "holdings" && (
         <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
           <div className="px-4.5 py-3.5 border-b border-line bg-white select-none">
-            <b className="text-sm font-semibold text-ink">Equities portfolio</b>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <b className="text-sm font-semibold text-ink">Portfolio</b>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
+                <input
+                  type="search"
+                  value={holdSearch}
+                  onChange={(e) => {
+                    setHoldSearch(e.target.value);
+                    setHoldingsPage(1);
+                  }}
+                  placeholder="Search ticker or name"
+                  aria-label="Search holdings"
+                  className="w-56 border border-line-2 bg-white rounded-[9px] pl-8.5 pr-3 py-1.5 text-xs focus:border-green focus:outline-none transition-colors"
+                />
+              </div>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left text-xs font-medium">
@@ -660,14 +877,68 @@ export function ClientDetailClient({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
-                {paginatedPositions.length === 0 ? (
+                {paginatedHoldings.length === 0 ? (
                   <tr>
                     <td colSpan={8} className="text-center text-mut py-8">
-                      No equity positions on record for this account.
+                      {holdSearch.trim()
+                        ? "Nothing matches that search."
+                        : "No positions on record for this account."}
                     </td>
                   </tr>
                 ) : (
-                  paginatedPositions.map(p => {
+                  paginatedHoldings.map((row, i) => {
+                    // Position, not code: under All accounts the same security
+                    // held in two accounts is two rows.
+                    const rowKey = (code: string) =>
+                      `${code}-${(holdingsPage - 1) * holdingsPageSize + i}`;
+
+                    if (row.kind === "unlisted") {
+                      const o = row.option;
+                      const isUp = o.pnl >= 0;
+                      // Derived, because the parcel is valued whole. Kept to four
+                      // places: these are quoted in fractions of a cent, and
+                      // $0.00 against a real value would look like a bug.
+                      const perOption = o.qty > 0 ? o.value / o.qty : 0;
+                      const perCost = o.qty > 0 ? o.cost / o.qty : 0;
+                      return (
+                        <tr key={rowKey(o.code)} className="hover:bg-paper-2/60 transition-colors">
+                          <td className="px-4.5 py-3">
+                            <span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{o.code}</span>
+                          </td>
+                          <td className="px-4.5 py-3 text-mut">
+                            <span className="text-ink font-semibold">{o.name}</span>
+                            <div className="text-[10px] mt-0.5">
+                              Unlisted option &middot; carried at modelled value
+                            </div>
+                          </td>
+                          <td className="px-4.5 py-3 text-right font-mono">{o.qty.toLocaleString("en-AU")}</td>
+                          <td className="px-4.5 py-3 text-right font-mono text-mut">
+                            ${perCost.toFixed(4)}
+                          </td>
+                          <td
+                            className="px-4.5 py-3 text-right font-mono text-mut"
+                            title="Modelled value per option — an unlisted grant has no market price of its own"
+                          >
+                            ${perOption.toFixed(4)}
+                          </td>
+                          <td className="px-4.5 py-3 text-right font-mono font-semibold">${money2(o.value)}</td>
+                          <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
+                            ${money2(o.pnl)}
+                            {/* No percentage: a grant costs nothing, so a return
+                                on cost is undefined rather than infinite. */}
+                            {o.cost > 0 && (
+                              <div className="text-[10px]">
+                                {isUp ? "+" : ""}{((o.pnl / o.cost) * 100).toFixed(1)}%
+                              </div>
+                            )}
+                          </td>
+                          {/* No signal on a grant the desk does not trade. */}
+                          <td className="px-4.5 py-3 text-center text-mut-d">&mdash;</td>
+                        </tr>
+                      );
+                    }
+
+                    const p = row.position;
                     const pl = posPL(p);
                     const cost = posCost(p);
                     // Free-carried options (placement attachers) have a zero cost
@@ -676,9 +947,12 @@ export function ClientDetailClient({
                     const isUp = pl >= 0;
                     const sg = signalsMap[p.code];
                     return (
-                      <tr key={p.code} className="hover:bg-paper-2/60 transition-colors">
+                      <tr key={rowKey(p.code)} className="hover:bg-paper-2/60 transition-colors">
                         <td className="px-4.5 py-3"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span></td>
-                        <td className="px-4.5 py-3 text-mut">{p.name}</td>
+                        <td className="px-4.5 py-3 text-mut">
+                          <span className="text-ink font-semibold">{p.name}</span>
+                          <div className="text-[10px] mt-0.5">{p.sector ?? "—"}</div>
+                        </td>
                         <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
                         <td className="px-4.5 py-3 text-right font-mono">${p.cost.toFixed(2)}</td>
                         <td className="px-4.5 py-3 text-right font-mono">${(p.last ?? 0).toFixed(2)}</td>
@@ -708,13 +982,13 @@ export function ClientDetailClient({
 
                   Quantities are not totalled — units of different companies are
                   not the same thing. */}
-              {visiblePositions.length > 0 && (
+              {holdingRows.length > 0 && (
                 <tfoot>
                   <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
                     <td className="px-4.5 py-3" colSpan={2}>
                       Grand Total
-                      {paginatedPositions.length !== visiblePositions.length
-                        ? ` (all ${visiblePositions.length} positions)`
+                      {paginatedHoldings.length !== holdingRows.length
+                        ? ` (all ${holdingRows.length} holdings)`
                         : ""}
                     </td>
                     <td className="px-4.5 py-3" />
@@ -737,13 +1011,13 @@ export function ClientDetailClient({
             </table>
           </div>
           <TablePagination
-            totalItems={visiblePositions.length}
+            totalItems={holdingRows.length}
             currentPage={holdingsPage}
             pageSize={holdingsPageSize}
             onPageChange={setHoldingsPage}
             onPageSizeChange={setHoldingsPageSize}
             pageSizeOptions={[5, 10, 25, 50]}
-            itemLabel="positions"
+            itemLabel="holdings"
           />
         </div>
       )}
@@ -807,19 +1081,22 @@ export function ClientDetailClient({
               <div>
                 <b className="text-sm font-semibold text-ink">P&amp;L by company</b>
                 <div className="text-[11px] text-mut mt-0.5">
-                  {filteredSummaryRows.length !== summaryRows.length ? (
+                  {filteredSummaryRows.length !== tableRows.length ? (
                     <>
                       <span className="font-semibold text-ink">{filteredSummaryRows.length}</span> of{" "}
-                      {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"}
+                      {tableRows.length} row{tableRows.length === 1 ? "" : "s"}
                     </>
                   ) : (
                     <>
-                      {summaryRows.length} row{summaryRows.length === 1 ? "" : "s"}
+                      {tableRows.length} row{tableRows.length === 1 ? "" : "s"}
                     </>
                   )}{" "}
-                  from {settledTrades.length} settled trade
-                  {settledTrades.length === 1 ? "" : "s"}
-                  {visibleTrades.length !== settledTrades.length &&
+                  from {rangedTrades.length} settled trade
+                  {rangedTrades.length === 1 ? "" : "s"}
+                  {/* Only worth saying over all time: inside a period the
+                      difference counts cancellations from outside it, which is
+                      a number about a window the reader is not looking at. */}
+                  {isAllTime && visibleTrades.length !== settledTrades.length &&
                     ` · ${visibleTrades.length - settledTrades.length} cancelled/reversed excluded`}
                   {" · exports match this table exactly"}
                 </div>
@@ -884,6 +1161,27 @@ export function ClientDetailClient({
                 </button>
               </div>
             </div>
+
+            {/* The period every figure below is taken over. All time is every
+                stored row, open positions included — the desk's view of the
+                whole book. Narrow it and only the sales inside the window
+                remain, which is the one thing a date range can honestly
+                describe: unrealised P&L is a cost base against today's price
+                and belongs to no date. */}
+            {lastSaleDate ? (
+              <RealisedRangePicker
+                range={range}
+                firstSaleDate={firstSaleDate}
+                lastSaleDate={lastSaleDate}
+                onPick={pickRange}
+                allTimeIncludesOpen
+              />
+            ) : (
+              <div className="px-4.5 py-3 border-b border-line bg-paper-2/40 text-[11px] text-mut leading-relaxed select-none">
+                Nothing has been sold from this client&rsquo;s accounts yet, so there is
+                no period to choose between — the table below covers the whole book.
+              </div>
+            )}
 
             {/* Filter Tabs & Search Controls Bar */}
             <div className="px-4.5 py-3 border-b border-line bg-white space-y-2.5 select-none">
@@ -967,7 +1265,7 @@ export function ClientDetailClient({
                 {(pnlFilter !== "all" || pnlSearch) && (
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] text-mut">
-                      Showing <strong className="text-ink">{filteredSummaryRows.length}</strong> of {summaryRows.length}
+                      Showing <strong className="text-ink">{filteredSummaryRows.length}</strong> of {tableRows.length}
                     </span>
                     <button
                       type="button"
@@ -1012,21 +1310,28 @@ export function ClientDetailClient({
                     </tr>
                   ) : (
                     <>
-                      {paginatedPnlRows.map((r) => (
+                      {paginatedPnlRows.map((r) => {
+                        // The account AND the ticker: under "All accounts" the
+                        // ticker alone is shared by a row per account, which
+                        // gave React duplicate keys and opened one click's
+                        // editor on every one of them.
+                        const rowId = pnlRowId(r);
+                        return (
                         <PnlRow
                           // Remount when the editor opens or closes, so its
                           // inputs always re-seed from the values currently in
                           // force rather than whatever was typed last time.
-                          key={`${r.ticker}:${editing === r.ticker}`}
+                          key={`${rowId}:${editing === rowId}`}
                           row={r}
-                          editing={editing === r.ticker}
-                          onEdit={() => setEditing(r.ticker)}
+                          editing={editing === rowId}
+                          onEdit={() => setEditing(rowId)}
                           onClose={() => setEditing(null)}
                           accountId={acctFilter === "all" ? null : acctFilter}
                           clientId={cid}
                           money2={money2}
                         />
-                      ))}
+                        );
+                      })}
 
                       {/* Grand Total — the same three columns the exports sum.
                           Quantities are not totalled: units of different

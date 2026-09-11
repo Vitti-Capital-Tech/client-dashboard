@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { storedToSummaryRows } from "./stored-pnl.ts";
 import { grandTotal, positionStatus, type PnlOverride } from "./order-history.ts";
+import { pnlRowId } from "../pnl/summary-rows.ts";
 import type { StoredPnlRow } from "../data/pnl.ts";
 
 /**
@@ -90,21 +91,19 @@ test("stored: an unknown buy side is kept off the Grand Total", () => {
 test("stored: correcting the buy side by hand puts the row back in the total", () => {
   // This is the whole point of the override: a blank row is not permanently
   // exiled, it rejoins as soon as someone supplies what the sources could not.
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EUR",
-      {
-        parent: "EUR",
-        buyQty: 115385,
-        sellQty: null,
-        buyPrice: 25000,
-        sellOrCurrent: null,
-        note: "Cost from the June statement",
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EUR",
+      buyQty: 115385,
+      sellQty: null,
+      buyPrice: 25000,
+      sellOrCurrent: null,
+      note: "Cost from the June statement",
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const rows = storedToSummaryRows(
     [
@@ -131,21 +130,19 @@ test("stored: correcting the buy side by hand puts the row back in the total", (
 });
 
 test("stored: P&L is recomputed from the values in force, never overridden directly", () => {
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: null,
-        sellQty: null,
-        buyPrice: 6000,
-        sellOrCurrent: null,
-        note: null,
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: null,
+      sellQty: null,
+      buyPrice: 6000,
+      sellOrCurrent: null,
+      note: null,
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows([row()], overrides);
   assert.equal(r.buyPrice, 6000);
@@ -157,21 +154,19 @@ test("stored: P&L is recomputed from the values in force, never overridden direc
 test("stored: an option line never inherits the underlying's override", () => {
   // The override was authored against the company row (EOS). Applying it to a
   // separate option position (EOSO) would change a figure nobody edited.
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOSO",
-      {
-        parent: "EOSO",
-        buyQty: null,
-        sellQty: null,
-        buyPrice: 999,
-        sellOrCurrent: null,
-        note: null,
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOSO",
+      buyQty: null,
+      sellQty: null,
+      buyPrice: 999,
+      sellOrCurrent: null,
+      note: null,
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ ticker: "EOSO", isOption: true, buyPrice: 0, isMatched: false })],
@@ -187,21 +182,19 @@ test("stored: correcting the quantities leaves the row matched, not Unmatched", 
   // row went on reading "Unmatched" — and went on being counted by the client
   // profile's Unmatched tab — because the status was still being read off the
   // stored flag the correction exists to overrule.
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: 1000,
-        sellQty: null,
-        buyPrice: null,
-        sellOrCurrent: null,
-        note: "Missing parcel from the May contract note",
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: 1000,
+      sellQty: null,
+      buyPrice: null,
+      sellOrCurrent: null,
+      note: "Missing parcel from the May contract note",
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ buyQty: 900, sellQty: 1000, openQty: 0, isMatched: false })],
@@ -215,21 +208,19 @@ test("stored: correcting the quantities leaves the row matched, not Unmatched", 
 });
 
 test("stored: a quantity correction that does NOT balance stays a mismatch", () => {
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: 950,
-        sellQty: null,
-        buyPrice: null,
-        sellOrCurrent: null,
-        note: null,
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: 950,
+      sellQty: null,
+      buyPrice: null,
+      sellOrCurrent: null,
+      note: null,
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ buyQty: 900, sellQty: 1000, openQty: 0, isMatched: false })],
@@ -245,21 +236,19 @@ test("stored: a quantity correction that does NOT balance stays a mismatch", () 
 });
 
 test("stored: correcting the sell side closes the open position", () => {
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: null,
-        sellQty: 1000,
-        buyPrice: null,
-        sellOrCurrent: null,
-        note: null,
-        updatedBy: "desk",
-        updatedAt: "2026-08-07T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: null,
+      sellQty: 1000,
+      buyPrice: null,
+      sellOrCurrent: null,
+      note: null,
+      updatedBy: "desk",
+      updatedAt: "2026-08-07T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ buyQty: 1000, sellQty: 400, openQty: 600, isMatched: false })],
@@ -287,22 +276,20 @@ test("stored: supplying the missing buy quantity retires the Buy Side Unknown fl
   const withQty = (over: Partial<PnlOverride>) =>
     storedToSummaryRows(
       [unknown],
-      new Map<string, PnlOverride>([
-        [
-          "EUR",
-          {
-            parent: "EUR",
-            buyQty: null,
-            sellQty: null,
-            buyPrice: null,
-            sellOrCurrent: null,
-            note: null,
-            updatedBy: "desk",
-            updatedAt: "2026-08-07T00:00:00Z",
-            ...over,
-          },
-        ],
-      ]),
+      [
+        {
+          accountId: "a1",
+          parent: "EUR",
+          buyQty: null,
+          sellQty: null,
+          buyPrice: null,
+          sellOrCurrent: null,
+          note: null,
+          updatedBy: "desk",
+          updatedAt: "2026-08-07T00:00:00Z",
+          ...over,
+        },
+      ],
     )[0];
 
   assert.equal(withQty({ buyQty: 115385, buyPrice: 25000 }).type, "Matched (edited)");
@@ -407,22 +394,20 @@ test("stored: Mark Open's override reconciles without inventing a sale", () => {
    * equal, which balanced the row by reporting the very sale that never
    * happened.
    */
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: 2500,
-        sellQty: 0,
-        heldQty: 2500,
-        buyPrice: 2900,
-        sellOrCurrent: 2900,
-        note: "Open position — 2,500 units still held, carried at cost by the desk.",
-        updatedBy: "desk",
-        updatedAt: "2026-08-26T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: 2500,
+      sellQty: 0,
+      heldQty: 2500,
+      buyPrice: 2900,
+      sellOrCurrent: 2900,
+      note: "Open position — 2,500 units still held, carried at cost by the desk.",
+      updatedBy: "desk",
+      updatedAt: "2026-08-26T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ buyQty: 0, sellQty: 2500, heldQty: 0, openQty: 0, isMatched: false })],
@@ -441,22 +426,20 @@ test("stored: correcting held units alone counts as an edit", () => {
   // Held has no cell of its own in the table, so it is not in `OverriddenFields`
   // — but a row whose held count was typed by hand is no longer a pure
   // derivation, and the reader is entitled to know that.
-  const overrides = new Map<string, PnlOverride>([
-    [
-      "EOS",
-      {
-        parent: "EOS",
-        buyQty: null,
-        sellQty: null,
-        heldQty: 1000,
-        buyPrice: null,
-        sellOrCurrent: null,
-        note: null,
-        updatedBy: "desk",
-        updatedAt: "2026-08-26T00:00:00Z",
-      },
-    ],
-  ]);
+  const overrides = [
+    {
+      accountId: "a1",
+      parent: "EOS",
+      buyQty: null,
+      sellQty: null,
+      heldQty: 1000,
+      buyPrice: null,
+      sellOrCurrent: null,
+      note: null,
+      updatedBy: "desk",
+      updatedAt: "2026-08-26T00:00:00Z",
+    },
+  ];
 
   const [r] = storedToSummaryRows(
     [row({ buyQty: 1000, sellQty: 0, heldQty: 0, openQty: 1000, isMatched: false })],
@@ -555,3 +538,106 @@ test("stored: options (listed and unlisted) have buyQty equal to sellQty and non
   assert.equal(listed.computed.sellQty, 25_000);
 });
 
+
+test("stored: one company, two accounts — each keeps its own correction", () => {
+  /**
+   * The bug this covers: `pnl_overrides` is keyed (account_id, parent_code) and
+   * `pnl_summary` is keyed (account_id, ticker), so a client holding EOS in two
+   * accounts has a row and a correction in EACH. Indexed by code alone — which
+   * is how both islands built the map — the two overrides collapsed into one
+   * entry, so one was silently dropped and the survivor was applied to both
+   * rows. Under "All accounts" that moved a Grand Total and an export by the
+   * size of an edit nobody made to that account.
+   */
+  const rows = storedToSummaryRows(
+    [
+      row({ accountId: "a1" }),
+      row({ accountId: "a2" }),
+    ],
+    [
+      {
+        accountId: "a1",
+        parent: "EOS",
+        buyQty: null,
+        sellQty: null,
+        buyPrice: 1000,
+        sellOrCurrent: null,
+        note: "a1 only",
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+      {
+        accountId: "a2",
+        parent: "EOS",
+        buyQty: null,
+        sellQty: null,
+        buyPrice: 2000,
+        sellOrCurrent: null,
+        note: "a2 only",
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+    ],
+  );
+
+  assert.equal(rows.length, 2);
+  const a1 = rows.find((r) => r.accountId === "a1")!;
+  const a2 = rows.find((r) => r.accountId === "a2")!;
+
+  // Each row took its OWN account's correction, and its own note with it.
+  assert.equal(a1.buyPrice, 1000);
+  assert.equal(a2.buyPrice, 2000);
+  assert.equal(a1.note, "a1 only");
+  assert.equal(a2.note, "a2 only");
+
+  // P&L stays `sell - buy` on the values in force, so the two rows differ by
+  // exactly the difference between the two corrections.
+  assert.equal(a1.pnl, 7000);
+  assert.equal(a2.pnl, 6000);
+
+  // And the Grand Total is the sum of both, not one figure counted twice.
+  assert.equal(grandTotal(rows).pnl, 13000);
+});
+
+test("stored: an account's correction does not reach another account's row", () => {
+  // The other half of the same bug: only ONE account has an override, and the
+  // account without one must keep tracking the sources underneath it.
+  const rows = storedToSummaryRows(
+    [
+      row({ accountId: "a1" }),
+      row({ accountId: "a2" }),
+    ],
+    [
+      {
+        accountId: "a2",
+        parent: "EOS",
+        buyQty: null,
+        sellQty: null,
+        buyPrice: 1000,
+        sellOrCurrent: null,
+        note: null,
+        updatedBy: "desk",
+        updatedAt: "2026-08-07T00:00:00Z",
+      },
+    ],
+  );
+
+  const a1 = rows.find((r) => r.accountId === "a1")!;
+  const a2 = rows.find((r) => r.accountId === "a2")!;
+
+  assert.equal(a1.edited, false);
+  assert.equal(a1.buyPrice, 5000);
+  assert.equal(a2.edited, true);
+  assert.equal(a2.buyPrice, 1000);
+});
+
+test("stored: pnlRowId separates two accounts holding the same company", () => {
+  // What every React key and the staff table's open-editor state now use. Keyed
+  // on the ticker, the two rows below were one row to all of them.
+  const [a, b] = storedToSummaryRows([
+    row({ accountId: "a1" }),
+    row({ accountId: "a2" }),
+  ]);
+
+  assert.notEqual(pnlRowId(a), pnlRowId(b));
+});
