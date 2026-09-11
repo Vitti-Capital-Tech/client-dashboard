@@ -94,9 +94,15 @@ export async function changePassword(
  * carries a six-digit code rather than a link, so there is no host to get wrong.
  * The old template, built on `SiteURL`, mailed clients `localhost:3000`.
  *
- * `clients.email` is still moved by the trigger on `auth.users` rather than from
- * here — see 20260907090000_client_settings.sql. The trigger observes the actual
- * change, which is the only thing that cannot disagree with it.
+ * The `client_emails` row is still moved by the trigger on `auth.users` rather
+ * than from here — see 20260907090000_client_settings.sql. The trigger observes
+ * the actual change, which is the only thing that cannot disagree with it.
+ *
+ * ── This still MOVES one address; it does not add one ──────────────────────
+ * A client may hold several logins now (20260911090000_client_emails.sql), and
+ * this changes the one the caller is signed in as, leaving their others alone.
+ * Adding a second address is `./emails.ts`, which is a different act with a
+ * different outcome: after this, the old address stops working.
  *
  * ── What is refused, and why here as well as in the database ────────────────
  * A staff-domain target is refused by a trigger, because
@@ -132,12 +138,17 @@ export async function startEmailChange(newEmail: string): Promise<ActionResult> 
     };
   }
 
-  // `clients.email` is UNIQUE and is what resolves a client row, so an address
-  // already spoken for cannot be taken. Checked with the service role because
-  // RLS on `clients` shows the caller only their own row — they would see no
-  // conflict and hit a constraint on confirmation instead, days later.
+  // `client_emails.email` is UNIQUE and is what resolves a client row, so an
+  // address already spoken for cannot be taken. Checked there rather than
+  // against `clients.email`, which since 20260911090000_client_emails.sql only
+  // mirrors each client's PRIMARY address — an address that is somebody's
+  // second login would not appear in it, and this check would wave through a
+  // change that the unique index then refuses on confirmation.
+  //
+  // With the service role because RLS shows the caller only their own rows:
+  // they would see no conflict and hit a constraint days later.
   const { data: taken, error: takenError } = await admin
-    .from("clients")
+    .from("client_emails")
     .select("id")
     .eq("email", address)
     .maybeSingle();
@@ -191,10 +202,12 @@ export async function startEmailChange(newEmail: string): Promise<ActionResult> 
  * posted a different address here would otherwise be verifying a token for an
  * address nothing had validated.
  *
- * ── `clients.email` is still not touched here ──────────────────────────────
+ * ── `client_emails` is still not touched here ─────────────────────────────
  * `sync_client_email_from_auth` observes the change inside the auth transaction
  * (20260907090000_client_settings.sql). Doing it here as well would be a second
  * writer to the same fact, and the trigger is the one that cannot be skipped.
+ * It moves the row for the OLD address, so a client who changes a secondary
+ * login keeps their primary where it was.
  */
 export async function confirmEmailChange(code: string): Promise<ActionResult> {
   const { supabase, user } = await currentUser();

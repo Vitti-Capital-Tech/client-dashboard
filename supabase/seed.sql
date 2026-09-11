@@ -54,11 +54,27 @@ INSERT INTO market_indices (code, name, last, chg, decimal_places) VALUES
 -- Clients & accounts
 -- ----------------------------------------------------------------------------
 -- Clients are now just the person/login (account_type + s708 moved to accounts).
-INSERT INTO clients (ref, email, display_name, initials) VALUES
-  ('C1', 'james@halloran.com.au',     'James Halloran',          'JH'),
-  ('C2', 'margaret.chen@outlook.com', 'Margaret Chen',           'MC'),
-  ('C3', 'office@endeavourfo.com.au', 'Endeavour Family Office', 'EF'),
-  ('C4', 'david.okafor@gmail.com',    'David Okafor',            'DO');
+--
+-- `email` is NOT set here. Since 20260911090000_client_emails.sql it is a
+-- mirror of the client's primary row in `client_emails`, maintained by trigger
+-- — and `current_client_id()` resolves a login through that table, not this
+-- column. Seeding the column directly would produce four clients who look like
+-- they have logins and cannot sign in.
+INSERT INTO clients (ref, display_name, initials) VALUES
+  ('C1', 'James Halloran',          'JH'),
+  ('C2', 'Margaret Chen',           'MC'),
+  ('C3', 'Endeavour Family Office', 'EF'),
+  ('C4', 'David Okafor',            'DO');
+
+-- The logins. C3 has two, because a family office with only the principal able
+-- to sign in is the case this table was added for — and a seed with no example
+-- of the feature is a seed that never exercises it.
+INSERT INTO client_emails (client_id, email, is_primary) VALUES
+  ((SELECT id FROM clients WHERE ref='C1'), 'james@halloran.com.au',     true),
+  ((SELECT id FROM clients WHERE ref='C2'), 'margaret.chen@outlook.com', true),
+  ((SELECT id FROM clients WHERE ref='C3'), 'office@endeavourfo.com.au', true),
+  ((SELECT id FROM clients WHERE ref='C3'), 'accounts@endeavourfo.com.au', false),
+  ((SELECT id FROM clients WHERE ref='C4'), 'david.okafor@gmail.com',    true);
 
 -- Investment accounts. C1 (James) holds TWO accounts to exercise multi-account;
 -- the others hold one each. account_type + s708 + cash live here now.

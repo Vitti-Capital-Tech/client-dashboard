@@ -2,7 +2,7 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { KeyRound, Mail, MonitorSmartphone, CheckCircle2, Palette } from "lucide-react";
+import { KeyRound, Mail, MonitorSmartphone, CheckCircle2, Palette, Users } from "lucide-react";
 import { CustomiseClient } from "@/app/components/CustomiseClient";
 import { LeavingOverlay } from "@/app/components/LeavingOverlay";
 import { LEAVING_MS, SESSIONS_ENDED_TIPS } from "@/lib/ui/leaving";
@@ -14,6 +14,13 @@ import {
   type ActionResult,
 } from "@/app/actions/profile";
 import { requestPasswordResetCode, resetPassword } from "@/app/actions/session";
+import {
+  startAddLoginEmail,
+  confirmAddLoginEmail,
+  removeLoginEmail,
+  setPrimaryLoginEmail,
+  type LoginEmail,
+} from "@/app/actions/emails";
 import { PasswordInput } from "@/app/components/PasswordInput";
 import { CodeInput, CODE_LENGTH, emptyCode, codeComplete } from "@/app/components/CodeInput";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password";
@@ -37,12 +44,14 @@ export function SettingsClient({
   email,
   hasPassword,
   accounts,
+  logins,
   emailNotice,
 }: {
   name: string;
   email: string;
   hasPassword: boolean;
   accounts: AccountLine[];
+  logins: LoginEmail[];
   emailNotice: "confirmed" | "invalid" | null;
 }) {
   return (
@@ -80,14 +89,20 @@ export function SettingsClient({
         a page that reads as long when it holds four short cards.
 
         The pairing is not arbitrary. Left is who you are and how you get in:
-        the account, then the password. Right is what changes and what ends: the
-        login address, then every session. `items-start` so each card is its own
-        height — stretching them to match would leave whitespace inside the
-        shorter one, which is the same problem moved indoors.
+        the account, who can sign in to it, then the password. Right is what
+        changes and what ends: your own login address, then every session.
+        `items-start` so each card is its own height — stretching them to match
+        would leave whitespace inside the shorter one, which is the same problem
+        moved indoors.
+
+        "Who can sign in" sits directly under the details it expands on, and
+        deliberately far from "Login email" in the other column: the two are
+        one keystroke apart in meaning and opposite in effect.
       */}
       <div className="grid lg:grid-cols-2 gap-5 items-start max-w-5xl">
         <div className="space-y-5">
-          <Details name={name} email={email} accounts={accounts} />
+          <Details name={name} email={email} accounts={accounts} logins={logins} />
+          <Logins logins={logins} />
           {hasPassword ? <ChangePassword /> : <SetFirstPassword email={email} />}
         </div>
         <div className="space-y-5">
@@ -131,16 +146,26 @@ function Details({
   name,
   email,
   accounts,
+  logins,
 }: {
   name: string;
   email: string;
   accounts: AccountLine[];
+  logins: LoginEmail[];
 }) {
   return (
     <Card title="Your details">
       <dl className="space-y-3">
         <Row label="Name" value={name} />
-        <Row label="Login email" value={email} mono />
+        {/* "Signed in as" rather than "Login email": there may be several, and
+            this row is about THIS browser. The full list is the next card. */}
+        <Row label="Signed in as" value={email} mono />
+        {logins.length > 1 && (
+          <Row
+            label="Other logins"
+            value={`${logins.length - 1} more address${logins.length > 2 ? "es" : ""}`}
+          />
+        )}
         <div>
           <dt className="text-xs font-semibold text-mut mb-1.5">
             Accounts on this login ({accounts.length})
@@ -168,6 +193,259 @@ function Details({
         </div>
       </dl>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Logins — every address that reaches this account
+// ---------------------------------------------------------------------------
+/**
+ * ── Why this is a separate card from "Login email" ─────────────────────────
+ * They read as the same thing and are opposites. This ADDS a way in and leaves
+ * the others working; the card below MOVES the address you are signed in as,
+ * and the old one stops working. Merged into one card, the difference would
+ * come down to which button somebody pressed — and the consequence of guessing
+ * wrong is either a second person who cannot get in or a second person who
+ * still can when they should not.
+ *
+ * ── Why the list is rendered even when there is one ────────────────────────
+ * A client with a single login sees a one-row list and an "Add another"
+ * button, which is how they find out this is possible at all. Hiding the list
+ * until there are two would mean the feature only exists for people who
+ * already know about it.
+ */
+function Logins({ logins }: { logins: LoginEmail[] }) {
+  const router = useRouter();
+  const [adding, setAdding] = useState(false);
+  const [next, setNext] = useState("");
+  const [sent, setSent] = useState(false);
+  const [digits, setDigits] = useState(emptyCode());
+  const { busy, result, run, setResult } = useAction();
+
+  const target = next.trim().toLowerCase();
+
+  const reset = () => {
+    setAdding(false);
+    setSent(false);
+    setNext("");
+    setDigits(emptyCode());
+    setResult(null);
+  };
+
+  const send = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(() => startAddLoginEmail(next), () => {
+      setDigits(emptyCode());
+      setSent(true);
+    });
+  };
+
+  const confirm = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(() => confirmAddLoginEmail(target, digits.join("")), () => {
+      setAdding(false);
+      setSent(false);
+      setNext("");
+      setDigits(emptyCode());
+      // The list is resolved on the server, so the new row only appears after
+      // a refresh.
+      router.refresh();
+    });
+  };
+
+  return (
+    <Card title="Who can sign in" icon={<Users className="w-4 h-4" aria-hidden="true" />}>
+      <ul className="space-y-1.5 mb-4">
+        {logins.map((login) => (
+          <li
+            key={login.email}
+            className="bg-paper-2 rounded-[9px] px-3 py-2.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5"
+          >
+            <div className="min-w-0">
+              <span className="font-mono text-xs break-all">{login.email}</span>
+              <div className="flex flex-wrap gap-1.5 mt-1">
+                {login.isPrimary && <Tag tone="green">Primary</Tag>}
+                {login.isCurrent && <Tag tone="mut">This device</Tag>}
+              </div>
+            </div>
+
+            {/* The primary address has neither action: it cannot be removed
+                (the database refuses it) and it is already primary. Rendering
+                disabled buttons there would be two dead controls on the row
+                people look at first. */}
+            {!login.isPrimary && (
+              <div className="flex items-center gap-3 shrink-0">
+                <RowAction
+                  busy={busy}
+                  onClick={() =>
+                    run(() => setPrimaryLoginEmail(login.email), () => router.refresh())
+                  }
+                >
+                  Make primary
+                </RowAction>
+                {/* Not for the address this browser is signed in as: the call
+                    would succeed and the person would find out by losing the
+                    page they are standing on. */}
+                {!login.isCurrent && (
+                  <RowAction
+                    busy={busy}
+                    tone="bad"
+                    onClick={() =>
+                      run(() => removeLoginEmail(login.email), () => router.refresh())
+                    }
+                  >
+                    Remove
+                  </RowAction>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {!adding ? (
+        <div className="space-y-3">
+          <Feedback result={result} />
+          <button
+            type="button"
+            onClick={() => {
+              setResult(null);
+              setAdding(true);
+            }}
+            className="btn rounded-[10px] py-2.5 px-4 text-[13px] font-semibold cursor-pointer select-none bg-navy text-white hover:bg-slate-800 transition-colors"
+          >
+            Add another address
+          </button>
+          <p className="text-[11.5px] text-mut leading-relaxed">
+            Everyone here sees the same accounts and holdings, signs in with
+            their own password, and is recorded separately in the audit trail.
+          </p>
+        </div>
+      ) : !sent ? (
+        <form onSubmit={send} className="space-y-4" noValidate>
+          <div className="space-y-1.5">
+            <label htmlFor="add-email" className="block text-xs font-semibold text-ink">
+              Their email
+            </label>
+            <input
+              id="add-email"
+              name="add-email"
+              type="email"
+              autoComplete="off"
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              placeholder="them@example.com"
+              required
+              className="w-full border border-line-2 bg-white rounded-[10px] px-3.5 py-3 text-[15px] focus:border-green focus:outline-none transition-colors"
+            />
+          </div>
+
+          <Feedback result={result} />
+
+          <Submit
+            busy={busy}
+            disabled={next.trim() === ""}
+            label="Email them a code"
+            busyLabel="Sending…"
+          />
+
+          <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
+            We send a {CODE_LENGTH}-digit code to that address. Nothing is added
+            until the code is entered here, so you will need it from them.
+          </p>
+
+          <Cancel busy={busy} onClick={reset}>
+            Cancel
+          </Cancel>
+        </form>
+      ) : (
+        <form onSubmit={confirm} className="space-y-4" noValidate>
+          <p className="text-[13.5px] text-mut leading-relaxed">
+            Enter the {CODE_LENGTH}-digit code sent to{" "}
+            <span className="font-semibold text-ink break-all">{target}</span>.
+            They will be able to sign in as soon as it is accepted.
+          </p>
+
+          <CodeInput
+            digits={digits}
+            onChange={setDigits}
+            onError={(m) => setResult({ ok: false, error: m })}
+            disabled={busy}
+          />
+
+          <Feedback result={result} />
+
+          <Submit
+            busy={busy}
+            disabled={!codeComplete(digits)}
+            label="Add this address"
+            busyLabel="Adding…"
+          />
+
+          <Cancel busy={busy} onClick={reset}>
+            Use a different address
+          </Cancel>
+        </form>
+      )}
+    </Card>
+  );
+}
+
+function Tag({ tone, children }: { tone: "green" | "mut"; children: React.ReactNode }) {
+  return (
+    <span
+      className={`text-[10.5px] font-semibold uppercase tracking-wider rounded-full px-2 py-0.5 ${
+        tone === "green" ? "text-green-d bg-green-bg" : "text-mut bg-line"
+      }`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function RowAction({
+  busy,
+  tone = "normal",
+  onClick,
+  children,
+}: {
+  busy: boolean;
+  tone?: "normal" | "bad";
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className={`text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors ${
+        tone === "bad" ? "text-red-700 hover:text-red-800" : "text-mut hover:text-ink"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Cancel({
+  busy,
+  onClick,
+  children,
+}: {
+  busy: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="w-full text-xs font-semibold text-mut hover:text-ink disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+    >
+      {children}
+    </button>
   );
 }
 

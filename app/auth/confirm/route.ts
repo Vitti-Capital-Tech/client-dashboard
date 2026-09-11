@@ -72,11 +72,13 @@ export async function GET(request: NextRequest) {
     return settled("email=invalid");
   }
 
-  // `clients.email` is NOT updated here. It follows `auth.users.email` through a
-  // trigger, because this route only sees whichever confirmation happens to be
-  // last, and with double confirmation that may be the old address, the new one,
-  // or neither if the person finishes on their phone. The trigger observes the
-  // actual change inside the same transaction. See
-  // 20260907090000_client_settings.sql.
+  // The `client_emails` row is NOT updated here. It follows `auth.users.email`
+  // through a trigger, because this route only sees whichever confirmation
+  // happens to be last, and with double confirmation that may be the old
+  // address, the new one, or neither if the person finishes on their phone. The
+  // trigger observes the actual change inside the same transaction, and moves
+  // the row for the address that actually moved — which matters now that a
+  // client may hold several. See 20260907090000_client_settings.sql and
+  // 20260911090000_client_emails.sql.
   return settled("email=confirmed");
 }

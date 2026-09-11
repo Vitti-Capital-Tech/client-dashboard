@@ -211,16 +211,38 @@ export async function completeSignUp(input: {
  * be matched against `current_client_id()`. That is a wider grant than doing it
  * here with the service role on a single, fully-specified row.
  *
- * ── Why it is idempotent ────────────────────────────────────────────────────
- * `clients.email` is UNIQUE and an existing client can legitimately reach this
- * point (see the enumeration note in `startSignUp`). Inserting unconditionally
- * would fail on the constraint and strand somebody who already had an account
- * mid-flow. Their existing row — and every account hanging off it — is left
- * exactly as it is.
+ * ── Why it is idempotent, and in two places ────────────────────────────────
+ * An existing client can legitimately reach this point (see the enumeration
+ * note in `startSignUp`), and since 20260911090000_client_emails.sql the row is
+ * really two: a `clients` row and the `client_emails` row that makes an address
+ * resolve to it. Both are checked before either is written.
+ *
+ * The middle step — a `clients` row whose mirrored email matches but which has
+ * no `client_emails` row — is not hypothetical. It is what a previous run of
+ * this function looks like if it created the client and then failed on the
+ * link, and it is also every row the backfill could not reach. Recognising it
+ * and completing the pair is the difference between a retry that works and one
+ * that hits a unique violation on `clients.email` forever.
  */
 async function ensureClientRow(address: string, name: string): Promise<string | null> {
   const admin = createAdminClient();
 
+  const { data: login, error: loginError } = await admin
+    .from("client_emails")
+    .select("client_id")
+    .eq("email", address)
+    .maybeSingle();
+
+  if (loginError) {
+    console.error("signup: could not read logins for %s — %s", address, loginError.message);
+    return "Your account was created but the profile could not be read. Contact the Vitti desk.";
+  }
+  // Already a login for some client — theirs. Nothing to create, and that
+  // client's accounts are left exactly as they are.
+  if (login) return null;
+
+  // `clients.email` mirrors the primary login, so a row here with no link above
+  // is the half-written case described in the header.
   const { data: existing, error: lookupError } = await admin
     .from("clients")
     .select("id")
@@ -231,16 +253,37 @@ async function ensureClientRow(address: string, name: string): Promise<string | 
     console.error("signup: could not read clients for %s — %s", address, lookupError.message);
     return "Your account was created but the profile could not be read. Contact the Vitti desk.";
   }
-  if (existing) return null;
 
-  const { error } = await admin.from("clients").insert({
-    email: address,
-    display_name: name,
-    initials: initialsFrom(name),
-  });
+  let clientId = existing?.id ?? null;
 
-  if (error) {
-    console.error("signup: could not create a client row for %s — %s", address, error.message);
+  if (!clientId) {
+    // `email` is NOT set here. It is a mirror maintained by
+    // `mirror_primary_client_email`, and the link inserted below is what fills
+    // it — writing it twice would make this function the second author of a
+    // column that already has one.
+    const { data: created, error } = await admin
+      .from("clients")
+      .insert({ display_name: name, initials: initialsFrom(name) })
+      .select("id")
+      .single();
+
+    if (error || !created) {
+      console.error(
+        "signup: could not create a client row for %s — %s",
+        address,
+        error?.message ?? "no row returned",
+      );
+      return "Your email is verified but your profile could not be created. Contact the Vitti desk.";
+    }
+    clientId = created.id;
+  }
+
+  const { error: linkError } = await admin
+    .from("client_emails")
+    .insert({ client_id: clientId, email: address, is_primary: true });
+
+  if (linkError) {
+    console.error("signup: could not link %s to a client — %s", address, linkError.message);
     return "Your email is verified but your profile could not be created. Contact the Vitti desk.";
   }
 

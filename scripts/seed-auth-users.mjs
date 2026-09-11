@@ -48,10 +48,11 @@ if (!url || !serviceKey) {
   process.exit(1);
 }
 
-// A client user's email MUST match clients.email in the DB (see the
-// add_client_email migration) so lib/session.ts can resolve the client row from
-// the auth email. Staff addresses need no such row — they see everything through
-// is_staff(). The domain decides which workspace an address lands in.
+// A client user's email MUST have a row in client_emails (see
+// 20260911090000_client_emails.sql) so lib/session.ts can resolve the client
+// row from the auth email; `npm run client:login` writes both halves together.
+// Staff addresses need no such row — they see everything through is_staff().
+// The domain decides which workspace an address lands in.
 const ROSTER = ["goyal.s@vitti.capital"];
 
 /**

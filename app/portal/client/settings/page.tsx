@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession, getActiveClientId } from "@/lib/session";
 import { getClient, getAccounts } from "@/lib/data/queries";
 import { createClient } from "@/lib/supabase/server";
+import { listLoginEmails } from "@/app/actions/emails";
 import { SettingsClient } from "./SettingsClient";
 
 /**
@@ -41,9 +42,10 @@ export default async function ClientSettingsPage({
   const clientId = await getActiveClientId();
   const supabase = await createClient();
 
-  const [client, accounts, hasPassword] = await Promise.all([
+  const [client, accounts, logins, hasPassword] = await Promise.all([
     getClient(clientId),
     getAccounts(clientId),
+    listLoginEmails(),
     supabase.rpc("user_has_password").then(({ data, error }) => {
       if (error) {
         // Not fatal: the page still works, it just cannot tell which of the two
@@ -76,6 +78,7 @@ export default async function ClientSettingsPage({
         externalRef: a.externalRef,
         accountType: a.accountType,
       }))}
+      logins={logins}
       emailNotice={emailNotice}
     />
   );

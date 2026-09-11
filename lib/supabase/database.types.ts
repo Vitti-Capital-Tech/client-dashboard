@@ -472,6 +472,38 @@ export type Database = {
           },
         ]
       }
+      client_emails: {
+        Row: {
+          client_id: string
+          created_at: string
+          email: string
+          id: string
+          is_primary: boolean
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          email: string
+          id?: string
+          is_primary?: boolean
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          email?: string
+          id?: string
+          is_primary?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_emails_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       clients: {
         Row: {
           created_at: string
@@ -1887,11 +1919,13 @@ export type Database = {
         }
         Returns: Json
       }
+      auth_user_id_for_email: { Args: { addr: string }; Returns: string }
       current_client_id: { Args: never; Returns: string }
       is_staff: { Args: never; Returns: boolean }
       lookup_account_for_claim: { Args: { p_number: string }; Returns: Json }
       normalise_account_number: { Args: { raw: string }; Returns: string }
       role_from_email_domain: { Args: { addr: string }; Returns: string }
+      set_primary_client_email: { Args: { p_email: string }; Returns: undefined }
       user_has_password: { Args: never; Returns: boolean }
     }
     Enums: {

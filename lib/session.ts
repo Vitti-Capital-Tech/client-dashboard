@@ -12,7 +12,9 @@ import { getAccounts } from "@/lib/data/queries";
  * `role` lives in `app_metadata.role` ('admin' | 'client'), stamped when the
  * auth user is created (see scripts/seed-auth-users.mjs).
  *
- * `clientId` is resolved by matching the authenticated email to `clients.email`.
+ * `clientId` is resolved by matching the authenticated email against
+ * `client_emails` — a client may sign in at more than one address, and all of
+ * them resolve to the one row.
  * The only thing still stored in a cookie is `viewClient` — which client a staff
  * member is currently inspecting — since that is UI state, not identity.
  *
@@ -62,14 +64,26 @@ const firstClientId = cache(async (): Promise<string> => {
   return data?.id ?? "";
 });
 
+/**
+ * The client this address signs in as.
+ *
+ * Through `client_emails` and not `clients.email`: a client may have several
+ * login addresses (20260911090000_client_emails.sql), and `clients.email` is
+ * now only a mirror of the primary one — matching against it would resolve the
+ * primary address and leave every additional one attached to nothing.
+ *
+ * This deliberately mirrors what the RLS helper `current_client_id()` does, so
+ * the app and the database agree on who is signed in. They are two readers of
+ * one table rather than two rules.
+ */
 async function clientIdByEmail(email: string): Promise<string | null> {
   const supabase = await createClient();
   const { data } = await supabase
-    .from("clients")
-    .select("id")
+    .from("client_emails")
+    .select("client_id")
     .eq("email", email.toLowerCase())
     .maybeSingle();
-  return data?.id ?? null;
+  return data?.client_id ?? null;
 }
 
 async function viewCookie(): Promise<string | null> {
@@ -144,19 +158,23 @@ export async function getActor(): Promise<{
   clientId: string;
   actor: string;
 }> {
-  const { email, role } = await getAuth();
+  const { role } = await getAuth();
   const clientId = await getActiveClientId();
 
   if (role === "admin") {
     return { role, clientId, actor: "S. Goyal (staff)" };
   }
 
+  // By id, not by address. With several logins per client the address is no
+  // longer a key into `clients`, and the audit log wants the CLIENT's name
+  // regardless of which of their addresses is signed in — two trustees acting
+  // on one SMSF are one actor in the ledger, which is the point of the table.
   const supabase = await createClient();
-  const { data } = email
+  const { data } = clientId
     ? await supabase
         .from("clients")
         .select("display_name")
-        .eq("email", email.toLowerCase())
+        .eq("id", clientId)
         .maybeSingle()
     : { data: null };
   return { role, clientId, actor: data?.display_name ?? "Client" };
