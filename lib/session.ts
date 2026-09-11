@@ -158,24 +158,42 @@ export async function getActor(): Promise<{
   clientId: string;
   actor: string;
 }> {
-  const { role } = await getAuth();
+  const { email, role } = await getAuth();
   const clientId = await getActiveClientId();
 
   if (role === "admin") {
     return { role, clientId, actor: "S. Goyal (staff)" };
   }
 
-  // By id, not by address. With several logins per client the address is no
-  // longer a key into `clients`, and the audit log wants the CLIENT's name
-  // regardless of which of their addresses is signed in — two trustees acting
-  // on one SMSF are one actor in the ledger, which is the point of the table.
+  // Looked up by id, not by address: with several logins per client the
+  // address is no longer a key into `clients`.
+  //
+  // ── Why the address goes into the actor string when there are several ────
+  // The client is the right SUBJECT of an audit row — the rows being changed
+  // are the client's. It is the wrong ACTOR once two people can sign in as
+  // them. "Endeavour Family Office acknowledged this alert" does not say
+  // whether that was the principal or their accountant, and for a firm whose
+  // audit trail exists to answer exactly that, a name shared by two people is
+  // not an answer.
+  //
+  // Appended only when the client actually has more than one login, so the
+  // 50-odd single-login clients keep the audit format they have always had —
+  // for them the address is the client, and printing both is noise.
   const supabase = await createClient();
   const { data } = clientId
     ? await supabase
         .from("clients")
-        .select("display_name")
+        .select("display_name, client_emails(email)")
         .eq("id", clientId)
         .maybeSingle()
     : { data: null };
-  return { role, clientId, actor: data?.display_name ?? "Client" };
+
+  if (!data) return { role, clientId, actor: "Client" };
+
+  const shared = (data.client_emails ?? []).length > 1;
+  return {
+    role,
+    clientId,
+    actor: shared && email ? `${data.display_name} (${email})` : data.display_name,
+  };
 }

@@ -1,4 +1,8 @@
-import { getMergeRequests, getAccountClaims } from "@/lib/data/queries";
+import {
+  getMergeRequests,
+  getAccountClaims,
+  getClaimPreviews,
+} from "@/lib/data/queries";
 import { MergeRequestsClient } from "./MergeRequestsClient";
 
 // Server Component (staff): every client-account request awaiting the desk —
@@ -10,5 +14,19 @@ export default async function StaffMergeRequestsPage() {
     getMergeRequests(),
     getAccountClaims(),
   ]);
-  return <MergeRequestsClient requests={requests} claims={claims} />;
+
+  // Only the pending ones. A decided claim records what it actually did in
+  // `outcome`; predicting what it would do now would be a second, possibly
+  // contradicting answer about the past.
+  const previews = await getClaimPreviews(
+    claims.filter((c) => c.status === "pending").map((c) => c.id),
+  );
+
+  return (
+    <MergeRequestsClient
+      requests={requests}
+      claims={claims}
+      previews={Object.fromEntries(previews)}
+    />
+  );
 }

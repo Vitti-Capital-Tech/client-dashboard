@@ -2,7 +2,7 @@
 
 import React, { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import type { MergeRequestRow, ClaimRequestRow } from "@/lib/data/queries";
+import type { MergeRequestRow, ClaimRequestRow, ClaimPreview } from "@/lib/data/queries";
 import { decideAccountMerge, decideAccountClaim } from "@/app/actions/accounts";
 
 const statusPill: Record<string, string> = {
@@ -19,12 +19,61 @@ function fmt(iso: string): string {
   });
 }
 
+/**
+ * What pressing Verify on this claim will actually do.
+ *
+ * Approval has two outcomes and they are not variations of each other: one
+ * **moves an account** between clients, the other **gives a second person a
+ * login** to an account that stays exactly where it is. The desk has to know
+ * which before they decide, not after — so the row says it in words, and the
+ * button changes its label to match.
+ *
+ * `moved` gets the warning colour on purpose. It is the one that takes data off
+ * somebody's screen, and it is only ever offered when that somebody cannot sign
+ * in — but "cannot sign in today" is not the same as "nobody's account".
+ */
+function ClaimOutcome({ preview }: { preview: ClaimPreview | undefined }) {
+  // No preview at all means the lookup failed, not that there is nothing to
+  // say. Silence is the honest rendering; the button stays enabled and the RPC
+  // remains the authority.
+  if (!preview) return null;
+
+  if (preview.outcome === null) {
+    return (
+      <p className="text-[11.5px] font-semibold text-loss-d bg-loss-bg rounded-[7px] px-2.5 py-1.5 mt-1.5">
+        Cannot approve — {preview.problem ?? "the account could not be resolved"}
+      </p>
+    );
+  }
+
+  if (preview.outcome === "joined") {
+    return (
+      <p className="text-[11.5px] text-green-d bg-green-bg rounded-[7px] px-2.5 py-1.5 mt-1.5">
+        <b>Grants access.</b> {preview.ownerName} keeps the account
+        {preview.accountLabel ? ` (${preview.accountLabel})` : ""}; this person&rsquo;s
+        login is added to it. Nothing moves, and both can sign in afterwards.
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-[11.5px] text-amber-d bg-amber-bg rounded-[7px] px-2.5 py-1.5 mt-1.5">
+      <b>Moves the account.</b> {preview.accountLabel ?? "It"} and all of its
+      holdings, trades and P&amp;L leave {preview.ownerName ?? "its current owner"},
+      who has no login.
+    </p>
+  );
+}
+
 export function MergeRequestsClient({
   requests,
   claims,
+  previews,
 }: {
   requests: MergeRequestRow[];
   claims: ClaimRequestRow[];
+  /** What approving each PENDING claim would do, keyed by claim id. */
+  previews: Record<string, ClaimPreview>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -79,10 +128,13 @@ export function MergeRequestsClient({
         <div className="font-mono text-xs tracking-wider uppercase text-mut">Client account operations</div>
         <h1 className="font-disp font-medium text-[26px] mt-0.5">Account requests</h1>
         <p className="text-xs text-mut mt-1">
-          Two things land here. <b>Adding</b> an account moves an existing broker account onto a
-          client&apos;s login — check the number against the broker record first, because the client
-          only typed it. <b>Merging</b> moves one of a client&apos;s own accounts into another and
-          closes the source.
+          Two things land here. <b>Adding</b> an account does one of two things, and each row says
+          which: if the account&apos;s current owner cannot sign in, approving <b>moves</b> it onto
+          the claimant&apos;s login; if they can, approving instead <b>grants access</b> — the
+          claimant&apos;s login joins that client and the account does not move, so both people can
+          see it afterwards. Either way, check the number against the broker record first, because
+          the client only typed it. <b>Merging</b> moves one of a client&apos;s own accounts into
+          another and closes the source.
         </p>
       </div>
 
@@ -103,7 +155,9 @@ export function MergeRequestsClient({
               Nothing to verify.
             </div>
           ) : (
-            pendingClaims.map((c) => (
+            pendingClaims.map((c) => {
+              const preview = previews[c.id];
+              return (
               <div key={c.id} className="p-4 space-y-3 text-xs">
                 <div className="flex flex-wrap justify-between items-start gap-3">
                   <div className="min-w-0">
@@ -115,6 +169,7 @@ export function MergeRequestsClient({
                       <div className="text-[11.5px] text-mut mt-0.5 truncate">{c.clientEmail}</div>
                     )}
                     {c.note && <p className="text-mut text-[11.5px] mt-0.5">{c.note}</p>}
+                    <ClaimOutcome preview={preview} />
                     <div className="text-[10.5px] font-mono text-mut mt-1">
                       Requested {fmt(c.requestedAt)}
                     </div>
@@ -122,10 +177,16 @@ export function MergeRequestsClient({
                   <div className="flex gap-2 flex-none">
                     <button
                       onClick={() => decideClaim(c.id, true)}
-                      disabled={isPending && busyId === c.id}
+                      disabled={
+                        (isPending && busyId === c.id) ||
+                        // A preview that came back with a `problem` is one the
+                        // RPC will refuse anyway. Better a disabled button with
+                        // the reason beside it than an error after the click.
+                        (preview != null && preview.outcome == null)
+                      }
                       className="btn bg-green text-[#08130e] font-semibold px-3.5 py-1.5 rounded-[8px] cursor-pointer disabled:opacity-60"
                     >
-                      Verify &amp; add
+                      {preview?.outcome === "joined" ? "Grant access" : "Verify & add"}
                     </button>
                     <button
                       onClick={() => decideClaim(c.id, false)}
@@ -146,7 +207,8 @@ export function MergeRequestsClient({
                   className="w-full border border-line-2 bg-white rounded-[8px] px-3 py-2 text-[11.5px] focus:border-green focus:outline-none"
                 />
               </div>
-            ))
+              );
+            })
           )}
         </div>
       </div>
@@ -168,6 +230,13 @@ export function MergeRequestsClient({
                     {c.decidedAt ? fmt(c.decidedAt) : fmt(c.requestedAt)}
                     {c.decidedBy && ` · by ${c.decidedBy}`}
                   </div>
+                  {c.outcome && (
+                    <p className="text-[11.5px] text-mut mt-1">
+                      {c.outcome === "joined"
+                        ? "Access granted — the account did not move."
+                        : "Account moved to this client."}
+                    </p>
+                  )}
                   {c.decisionNote && (
                     <p className="text-mut text-[11.5px] mt-1">{c.decisionNote}</p>
                   )}

@@ -49,6 +49,7 @@ export type Database = {
           id: string
           matched_account_id: string | null
           note: string | null
+          outcome: Database["public"]["Enums"]["claim_outcome"] | null
           previous_client_id: string | null
           requested_at: string
           status: Database["public"]["Enums"]["claim_status"]
@@ -62,6 +63,7 @@ export type Database = {
           id?: string
           matched_account_id?: string | null
           note?: string | null
+          outcome?: Database["public"]["Enums"]["claim_outcome"] | null
           previous_client_id?: string | null
           requested_at?: string
           status?: Database["public"]["Enums"]["claim_status"]
@@ -75,6 +77,7 @@ export type Database = {
           id?: string
           matched_account_id?: string | null
           note?: string | null
+          outcome?: Database["public"]["Enums"]["claim_outcome"] | null
           previous_client_id?: string | null
           requested_at?: string
           status?: Database["public"]["Enums"]["claim_status"]
@@ -1920,10 +1923,12 @@ export type Database = {
         Returns: Json
       }
       auth_user_id_for_email: { Args: { addr: string }; Returns: string }
+      client_has_login: { Args: { p_client: string }; Returns: boolean }
       current_client_id: { Args: never; Returns: string }
       is_staff: { Args: never; Returns: boolean }
       lookup_account_for_claim: { Args: { p_number: string }; Returns: Json }
       normalise_account_number: { Args: { raw: string }; Returns: string }
+      preview_account_claim: { Args: { p_request_id: string }; Returns: Json }
       role_from_email_domain: { Args: { addr: string }; Returns: string }
       set_primary_client_email: { Args: { p_email: string }; Returns: undefined }
       user_has_password: { Args: never; Returns: boolean }
@@ -1932,6 +1937,7 @@ export type Database = {
       alert_direction: "above" | "below"
       alert_kind: "expiry" | "itm" | "window" | "price"
       alert_severity: "red" | "amber" | "green"
+      claim_outcome: "moved" | "joined"
       claim_status: "pending" | "approved" | "rejected"
       commentary_run_status: "submitted" | "collected" | "failed"
       merge_status: "pending" | "approved" | "rejected"

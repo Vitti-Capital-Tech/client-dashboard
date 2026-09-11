@@ -126,6 +126,13 @@ export type ClaimRequestRow = {
   matchedAccountId: string | null;
   /** Set by an approval: who held it before. */
   previousClientId: string | null;
+  /**
+   * What an approval actually did — `moved` re-parented the account to the
+   * claimant, `joined` added the claimant's login to the owner and moved
+   * nothing. NULL on a pending claim, and on any decided before both outcomes
+   * existed (…_account_access_claims.sql).
+   */
+  outcome: Enums<"claim_outcome"> | null;
   decidedBy: string | null;
   decidedAt: string | null;
   decisionNote: string | null;
@@ -607,10 +614,83 @@ export const getAccountClaims = cache(
       requestedAt: r.requested_at,
       matchedAccountId: r.matched_account_id,
       previousClientId: r.previous_client_id,
+      outcome: r.outcome,
       decidedBy: r.decided_by,
       decidedAt: r.decided_at,
       decisionNote: r.decision_note,
     }));
+  },
+);
+
+/**
+ * What approving a pending claim would do, per claim — STAFF ONLY.
+ *
+ * Approval has two outcomes now (…_account_access_claims.sql): it re-parents
+ * the account when its owner cannot sign in, and it joins the claimant's login
+ * to the owner when they can. Which one it will be depends on the account the
+ * typed number resolves to and on whether that owner has a login — neither of
+ * which is on the claim row, and neither of which a client may be told.
+ *
+ * So the desk is shown it before they press anything. A queue whose one button
+ * silently does one of two very different things is a queue that gets clicked
+ * through; "Grant access" and "Move account" are different decisions and should
+ * read as different decisions.
+ *
+ * `preview_account_claim` is `SECURITY DEFINER` and staff-gated, and returns
+ * refusals as `problem` rather than raising, so an unresolvable claim renders
+ * as unresolvable instead of offering a button that throws.
+ */
+export type ClaimPreview = {
+  outcome: Enums<"claim_outcome"> | null;
+  /** Why it cannot be approved, when `outcome` is null. */
+  problem: string | null;
+  accountLabel: string | null;
+  ownerName: string | null;
+};
+
+export const getClaimPreviews = cache(
+  async (requestIds: string[]): Promise<Map<string, ClaimPreview>> => {
+    const out = new Map<string, ClaimPreview>();
+    if (requestIds.length === 0) return out;
+
+    const supabase = await createClient();
+
+    // One round trip per pending claim. There are a handful at a time — the
+    // queue is worked daily — and the alternative is a view that re-implements
+    // the resolution the function already owns, which is exactly the
+    // duplication `client_has_login` was extracted to prevent.
+    const results = await Promise.all(
+      requestIds.map(async (id) => {
+        const { data, error } = await supabase.rpc("preview_account_claim", {
+          p_request_id: id,
+        });
+        if (error) {
+          // Not fatal: the row still renders, just without its prediction. A
+          // queue that 500s because one claim could not be previewed is worse
+          // than a queue with one unlabelled row.
+          console.error("claims: could not preview %s — %s", id, error.message);
+          return null;
+        }
+        const p = data as {
+          outcome?: Enums<"claim_outcome"> | null;
+          problem?: string | null;
+          accountLabel?: string | null;
+          ownerName?: string | null;
+        };
+        return [
+          id,
+          {
+            outcome: p.outcome ?? null,
+            problem: p.problem ?? null,
+            accountLabel: p.accountLabel ?? null,
+            ownerName: p.ownerName ?? null,
+          },
+        ] as const;
+      }),
+    );
+
+    for (const r of results) if (r) out.set(r[0], r[1]);
+    return out;
   },
 );
 

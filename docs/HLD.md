@@ -357,7 +357,9 @@ Content-level breakpoints were already in place and are unchanged: the wider tab
    Resolving still decides nothing: `requestAccountClaim` now refuses an unresolvable or ambiguous number, but approval remains staff's, under `approve_account_claim`.
 2. **Desk review:** staff see it at `/portal/staff/merge-requests` alongside merge requests, sharing one nav badge, and check the number against the broker record — the client only typed it.
 3. **Execution (on approve):** `approve_account_claim`, a `SECURITY DEFINER` RPC, resolves `accounts.external_ref`, then moves the account and rewrites `client_id` on `positions`, `option_holdings`, `bids`, `trades`, `realized_pnl`, `pnl_overrides`, `pnl_summary` and `pnl_runs` — in one transaction, because half a re-parent is a client reading someone else's figures. The emptied broker-created client row is marked `merged_into` rather than deleted. The account appears in the client's topbar switcher.
-4. **The rail:** an account whose current owner **has an email** is refused outright — that account is on somebody's screen, and moving it on the strength of a typed number is not a claim decision. The desk is told to confirm the relationship and use a merge instead. Rejection records the decision and an optional note the client sees. (See LLD §8.34.)
+4. **Two outcomes, and the desk is shown which (§4.9a):** if the account's current owner **cannot sign in** — a broker-import stub — approval re-parents the account, as above. If the owner **can** sign in, approval instead moves the *claimant's login* onto that owner: the account does not move, the owner keeps it, and both people can sign in afterwards. The claimant's own `clients` row is retired (`merged_into`). `preview_account_claim` tells the queue which it will be before the button is pressed, and the button reads **Grant access** or **Verify & add** to match.
+
+   *This replaces an outright refusal.* Moving an account away from somebody who can see it, on the strength of a typed number, is still never done — but that was never what the desk wanted. Until several logins could reach one client (§4.9) there was no way to express the right answer, and the refusal pointed at a merge that does not exist across clients.
 
 ### 4.7 Client Self-Registration Lifecycle (`/signup`)
 
@@ -406,3 +408,18 @@ A couple who both want the family portfolio; an SMSF with two trustees; a family
 **A real hole was closed on the way.** `getActiveClientId()` falls back to "the first client" for a signed-in address it cannot resolve (§3.1b). RLS makes that inert for reads. It is not inert for actions that write with the **service role**, and an unresolved session is reachable — sign-up registers an `auth.users` row before the flow completes, so an abandoned registration can still sign in with a code later. Handed the fallback, such a person could have attached their own address to whichever client sorts first and then read that portfolio. These actions therefore resolve the caller themselves, through `client_emails`, and refuse anything that reaches no client.
 
 **What each side sees.** The client gets a *Who can sign in* card listing every address with Primary and This-device tags — placed deliberately far from *Login email*, since the two read alike and do opposite things. The desk gets every login printed on the client detail header (and **none** said plainly for the broker-imported rows that have no login at all), and the register's search matches *any* of a client's addresses, because the person ringing the desk is as likely to be the accountant on the second one as the principal on the first.
+
+### 4.9a Two doors onto the same outcome
+
+Two people, one portfolio, can now be reached from either end — and which door fits depends on who is asking.
+
+| | **Settings** (§4.9) | **Claim at sign-up** (§4.6) |
+| --- | --- | --- |
+| Who acts | the existing client | the new person |
+| Approval | none — the client owns their own account | staff, against the broker record |
+| What it needs | the existing client can sign in and will do it | the new person knows the broker account number |
+| Result | second login added | second login added, account unmoved |
+
+The Settings door is self-serve because the person granting access already holds the account; nothing crosses a boundary the desk has to police. The claim door exists for the case where the *newcomer* is the one making contact — she registers, types her husband's account number, and the desk decides. Neither is a substitute for the other: an existing client who never logs in cannot use the first, and somebody who does not know the account number cannot use the second.
+
+**Both end in the same place** — one `clients` row with two `client_emails` rows — which is why the audit log names the acting address once a client has more than one login. Without that, the two doors would produce an account whose history cannot say which of two people did anything.

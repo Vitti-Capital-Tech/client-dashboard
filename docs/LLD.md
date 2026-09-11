@@ -1366,6 +1366,7 @@ Multi-account has been in the schema since Stage 9 (§8.12), but nothing ever pu
 - **One spelling of a number, defined once.** People type `1102004 `, `1-102-004`, `A/c 1102004`. The partial unique index that prevents duplicate pending claims and the lookup that resolves one on approval are both written in terms of `normalise_account_number(text)`, and `lib/accounts/account-number.ts` mirrors it exactly — if the two disagreed, a client could hold two live claims on one account, or file one that never resolves. Non-alphanumerics are dropped rather than just whitespace, and the result is upper-cased, because not every ref is numeric (`PLACEVITT` is a real account).
 - **Approval is an RPC because it cannot be half-done.** `decideAccountMerge` does its work as sequential PostgREST calls and says so in a `NOTE`. A claim is the case that makes that unacceptable: re-parenting one account rewrites `client_id` on **eight** tables — `positions`, `option_holdings`, `bids`, `trades`, `realized_pnl`, `pnl_overrides`, `pnl_summary`, `pnl_runs` — all of which carry both `account_id` and `client_id` by deliberate denormalization (§8.12). A failure on the seventh leaves the account under one client and its P&L under another, which is a client reading someone else's figures. `approve_account_claim` is one `SECURITY DEFINER` function, so one transaction; it checks `is_staff()` first and explicitly, because a definer function that forgot that check would be an open re-parent endpoint for any authenticated user.
 - **The rail that matters: an owner with an email is refused.** An account whose current `clients` row has an email is an account somebody can sign in and see. Moving it would take live data off one person's screen on the strength of a number the claimant typed. The RPC raises, naming the holder and telling the desk to confirm the relationship and use a merge instead. Every refusal raises rather than returning a status, so the transaction unwinds and the action layer has one thing to catch; the messages are written to be read by staff and are surfaced verbatim.
+  > **Superseded by §8.48.** The refusal was right about the danger and wrong about the remedy — and the remedy it named did not exist, since `requestAccountMerge` requires both accounts to be the caller's own. Approval now has a second outcome: when the owner CAN sign in, the *claimant's login* joins that owner and the account does not move at all. The rail still holds — an account on somebody's screen is never re-parented on the strength of a typed number.
 - **An ambiguous number is refused, not guessed.** `external_ref` is UNIQUE but *normalised* refs need not be: `110-2004` and `1102004` both reduce to `1102004`. A plain `SELECT … INTO` takes whichever row comes first and would re-parent the wrong account silently, so the match is counted first and `> 1` raises.
 - **The emptied client row is marked, never deleted.** `clients.merged_into` is set when the last account leaves a broker-created row. Deleting it instead would (a) anonymise the audit trail of the very operation that emptied it, since `audit_log.client_id` is `ON DELETE SET NULL`, (b) be undone every morning, because `clients.external_ref` is UNIQUE and the import re-creates any ref it does not find, and (c) make an approval given in error unrecoverable. `getClients()` filters `merged_into IS NULL`, so the row does not appear in the staff Clients table as a client with no holdings and no explanation. Its `watchlist_items` and `alerts` move with it; `research_notes` deliberately do not — those are adviser-authored content readable firm-wide, not the client's own data.
 - **The importer had to stop deciding ownership, or the whole feature reverses overnight.** `run-holdings.ts` upserted `accounts` with `client_id` resolved from `clients.external_ref` on **every run**. Harmless while accounts are 1:1 with clients, and fatal here: the next morning's snapshot would hand a claimed account straight back to the empty stub, and the client would watch an account disappear from their switcher. Ownership is now written only when an account is **created**; the broker keeps updating everything it is genuinely the authority on (label, adviser, status). Positions are re-inserted from the snapshot each run and take `client_id` from the account row that is read back, so they follow the owner rather than the ref. Covered by `holdings: a re-parented account keeps its owner across the next import`.
@@ -1812,7 +1813,7 @@ So `callingClient()` resolves the client the way the database does and no other 
 | --- | --- |
 | `current_client_id()` | resolves through `client_emails`. The one line the whole migration exists to change |
 | `clients_select` policy | `id = current_client_id()` instead of comparing the claim, since several claims may reach one row. No recursion: `current_client_id()` reads `client_emails`, not `clients` |
-| `lib/session.ts` | `clientIdByEmail` reads `client_emails`; `getActor` looks the display name up by **id**, because two trustees acting on one SMSF are one actor in the ledger |
+| `lib/session.ts` | `clientIdByEmail` reads `client_emails`; `getActor` looks the display name up by **id**, and appends the signed-in address when the client has more than one login — see §8.48 |
 | `signup.ts` | `ensureClientRow` is idempotent in *two* places now, and recognises the half-written middle state — a `clients` row whose mirrored email matches but which has no link — instead of retrying into a unique violation forever |
 | `sync_client_email_from_auth` | updates `client_emails`, not the mirror |
 | `getClients` | embeds `client_emails`, so `ClientRow.logins` reaches the register and the detail page without a per-client round trip for 54 clients |
@@ -1830,3 +1831,45 @@ So `callingClient()` resolves the client the way the database does and no other 
 It was a second copy of the schema's shape that nothing kept in step with the migrations — `db/schema.sql` had already drifted the same way (it still lists `clients.account_type`, moved to `accounts` in §8.12). The real data arrives through the broker import, so the seed's only job was to make `supabase db reset` produce something renderable, and its cost was a file that had to be corrected every time the schema moved. §8.46 was the second time: it wrote `clients.email` directly, and that column had just become a trigger-maintained mirror, so a reset would have produced four clients who looked like they had logins and could not sign in.
 
 A reset now leaves an empty database. `npm run import:holdings` fills it; `npm run client:login -- <client-id> <email>` gives a row an address to sign in with.
+
+### 8.48 A claim that grants access instead of moving the account (`…_account_access_claims.sql`, `preview_account_claim`, `/portal/staff/merge-requests`)
+
+§8.34 gave `approve_account_claim` exactly one outcome — re-parent the account to the claimant — and refused outright when the account's current owner could sign in:
+
+> Account 1102004 already belongs to …, who has a login (…). Confirm the relationship and use a merge instead of a claim.
+
+**The refusal was right about the danger and wrong about the remedy.** Moving an account away from somebody who can see it, on the strength of a typed number, is exactly what must not happen. But the desk was never asking for that. The case is a wife registering and naming her husband's account, an incoming SMSF trustee, an accountant onboarded by the client's office — and in every one of them *both* people should end up able to see it and the account should not move at all. The suggested remedy was also a dead end: `requestAccountMerge` requires both accounts to belong to the caller, so there was no cross-client merge to send them to.
+
+Nothing could express the right answer until §8.46, because a client *was* an email address. Now two logins can reach one client, so the refusal becomes a second outcome:
+
+| Owner of the claimed account | Approval does | `outcome` |
+| --- | --- | --- |
+| no login (a broker-import stub) | re-parents the account and the eight tables denormalised against it — unchanged | `moved` |
+| has a login | moves the **claimant's** `client_emails` rows onto the owner and retires the claimant's row | `joined` |
+
+#### The direction is the design
+
+In the `joined` path the claimant joins the owner, not the reverse. The account, its trades, its P&L and its history stay under the client row that has always held them; what moves is the new person's login. Re-parenting to the claimant and *then* adding the old owner as a second login would reach the same access through a re-parent of eight tables nobody asked for, and would quietly make the newcomer the client of record.
+
+The claimant's `clients` row is retired with `merged_into` — the same treatment an emptied broker stub gets, and for the same reason: `audit_log.client_id` is `ON DELETE SET NULL`, so deleting it would anonymise the history of the very approval that emptied it.
+
+Their addresses land with `is_primary = false`, without exception. The claimant's own address is primary on their row, and carrying that across would violate `uq_client_emails_primary` — and worse, if it somehow did not, would hand a newcomer the address `clients.email` mirrors and the claim rail reasons about.
+
+#### Two refusals only the join path has
+
+- **A claimant who already holds accounts.** Folding them into another client would take those accounts with them, which is a merge of two portfolios — a decision about *data*, not about *access*. Refused, by name and count.
+- **A claimant with no login.** There is nothing to grant. Reachable only for a desk-created row; the message points at `client:login`.
+
+#### Why the outcome is decided at approval, and previewed before it
+
+Whether the owner can sign in is a fact about the moment of approval, not of the request — a stub can be linked in between. So the function reads it where the `FOR UPDATE` lock already is.
+
+That would leave the desk pressing one button that silently does one of two very different things, which is a button that gets clicked through. `preview_account_claim(uuid)` answers the same question ahead of time and returns refusals as `problem` data rather than raising, so the queue can render an unresolvable claim as unresolvable instead of offering a button that throws. The row states the consequence in words, the button reads **Grant access** or **Verify & add** accordingly, and `moved` carries the warning colour because it is the one that takes data off somebody's screen.
+
+Both functions branch on `client_has_login()`, extracted for exactly that reason: a preview promising `joined` and an approval then *moving* an account would be the worst bug this file could have.
+
+#### `getActor` had to change, and this is the correction
+
+§8.46 first shipped with `getActor()` returning the client's `display_name` alone, and the README claimed each login was "recorded separately in the audit log". **That was false** — both logins audited as the same name.
+
+The client is the right *subject* of an audit row: the rows being changed are the client's. It is the wrong *actor* once two people can sign in as them. For a firm whose audit trail exists to answer "who did this", a name shared by two people is not an answer. `getActor()` now appends the signed-in address — but only when the client actually has more than one login, so the fifty-odd single-login clients keep the format they have always had, where the address *is* the client and printing both is noise.
