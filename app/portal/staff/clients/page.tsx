@@ -4,6 +4,7 @@ import {
   getClientPositions,
   getAccounts,
   type AccountRow,
+  type ClientLogin,
 } from "@/lib/data/queries";
 import { portfolioValue } from "@/lib/data/compute";
 import { ClientsTable, type ClientRegistryRow } from "./ClientsTable";
@@ -32,13 +33,23 @@ function s708Label(iso: string | null): string {
  * the filter then costs one `includes` per row per term.
  */
 function searchKeyFor(
-  client: { name: string; initials: string | null; email: string | null; ref: string | null },
+  client: {
+    name: string;
+    initials: string | null;
+    logins: ClientLogin[];
+    ref: string | null;
+  },
   accounts: AccountRow[],
 ): string {
   return [
     client.name,
     client.initials,
-    client.email,
+    // EVERY login, not just the primary one. A client may sign in at several
+    // addresses, and the desk's most common reason to search by address at all
+    // is that one of them just rang — which is as likely to be the accountant
+    // on the second address as the principal on the first. Matching only the
+    // primary would answer that call with "no such client".
+    ...client.logins.map((l) => l.email),
     client.ref,
     ...accounts.flatMap((a) => [a.label, a.accountType, a.externalRef, a.ref, a.adviserName]),
   ]

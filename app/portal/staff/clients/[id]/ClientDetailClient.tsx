@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Search, X } from "lucide-react";
 import type {
   ClientRow,
+  ClientLogin,
   AccountRow,
   Position,
   OptionRow,
@@ -101,6 +102,57 @@ function s708Label(iso: string | null): string {
     year: "numeric",
     timeZone: "UTC",
   });
+}
+
+/**
+ * Who can sign in as this client.
+ *
+ * ── Why the desk needs to see this at all ──────────────────────────────────
+ * A client may hold several login addresses since
+ * 20260911090000_client_emails.sql, and the register used to show none of them
+ * — the detail page never printed an address. That was survivable while a
+ * client WAS an address. It is not now: when somebody rings the desk, "which
+ * of these people is on the phone" and "how many others can see this
+ * portfolio" are both questions this page has to be able to answer, and
+ * neither is derivable from anything else on it.
+ *
+ * The primary is marked because it is the one that reaches `clients.email` —
+ * the address the claim queue prints and the rail in `approve_account_claim`
+ * reasons about. A desk reading a claim refusal that names an address needs to
+ * be able to find that address here.
+ *
+ * A client with no login at all (every broker-imported row) is said plainly
+ * rather than left blank: "no logins" is a fact about the account somebody may
+ * be about to act on, and an empty space reads as "not loaded".
+ */
+function Logins({ logins }: { logins: ClientLogin[] }) {
+  if (logins.length === 0) {
+    return (
+      <div className="text-xs text-mut mt-1">
+        Logins: <span className="font-semibold">none</span> — this client cannot
+        sign in.
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-xs text-mut mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      <span>
+        {logins.length === 1 ? "Login:" : `Logins (${logins.length}):`}
+      </span>
+      {logins.map((l) => (
+        <span
+          key={l.email}
+          className={`font-mono text-[11px] rounded-full px-2 py-0.5 ${
+            l.isPrimary ? "bg-green-bg text-green-d font-semibold" : "bg-paper-2"
+          }`}
+          title={l.isPrimary ? "Primary address" : "Additional login"}
+        >
+          {l.email}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 const TABS = [
@@ -778,6 +830,7 @@ export function ClientDetailClient({
             <div className="text-xs text-mut mt-1">
               Structure: {headerType} &middot; s708 certificate expires {s708Label(headerS708)}
             </div>
+            <Logins logins={client.logins} />
           </div>
         </div>
 

@@ -214,17 +214,18 @@ client-dashboard/
 │   │                            #   called on sign-out. + 5 tests
 │   └── useDatabaseStore.ts     # Legacy Zustand store — no longer imported by any route (pending removal)
 ├── supabase/
-│   ├── config.toml             # Supabase CLI project config
-│   ├── seed.sql                # Demo seed data (mirrors INITIAL_DATABASE)
+│   ├── config.toml             # Supabase CLI project config (db.seed off — no seed file)
 │   └── migrations/             # init · client-email · RLS · multi-account · account-lifecycle ·
 │                               #   trade-ledger · pnl-overrides · pnl-summary · mail-ingest ·
 │                               #   ingest-cron · recompute-queue + placement-tracker-cache ·
-│                               #   client-placement-aliases
+│                               #   client-placement-aliases · account-claims · password-signup ·
+│                               #   client-settings · client-emails (several logins, one client)
 ├── scripts/
 │   ├── seed-auth-users.mjs     # Provisions auth users — no password, no role (both are owned
 │   │                           #   elsewhere: OTP login, and the auth.users domain trigger)
-│   ├── link-client-login.mjs   # Gives a client row a login: clients.email AND the auth row,
-│   │                           #   together, because half of it done never receives a code
+│   ├── link-client-login.mjs   # Gives a client row a login: the client_emails row AND the auth
+│   │                           #   row, together — half of it done never receives a code. Run it
+│   │                           #   twice to add a SECOND login; --unlink removes them all
 │   │                           #   (npm run client:login -- <client-id> <email> | --unlink)
 │   ├── login-link.mjs          # Break-glass: mints a code + link WITHOUT sending mail, for the
 │   │                           #   dead-mail-provider case that OTP-only login creates
@@ -358,12 +359,16 @@ These workbooks are big — the real 2026 and 2025 trackers are 12.5 MB and 9.3 
 The manual paste field remains for one-offs, and the calculator's **Reset** keeps the standing trackers (they are configuration, not the user's work).
 
 ### 4.3 Database (Supabase)
-Apply the schema and seed the demo data:
+Apply the schema:
 ```bash
 npx supabase link --project-ref <YOUR_PROJECT_REF>
 npx supabase db push          # applies supabase/migrations/*
-# then run supabase/seed.sql in the Dashboard SQL Editor (or via psql)
 ```
+There is no seed file. A fresh database is empty by design — the clients and
+their holdings arrive through the broker import (`npm run import:holdings`),
+and `npm run client:login -- <client-id> <email>` gives one of those rows an
+address to sign in with. The demo seed that used to live here was a second copy
+of the schema's shape that nothing kept in step with the migrations.
 After a schema change, regenerate types: `npx supabase gen types typescript --linked > lib/supabase/database.types.ts`.
 
 ### 4.4 Sign-in (two doors, two credentials)
@@ -383,7 +388,7 @@ After a schema change, regenerate types: `npx supabase gen types typescript --li
 | `signInWithPassword` | if a staff password somehow exists, signs the session **out** and refuses — checked on the verified role, not the address |
 | `block_self_registered_staff` | a `BEFORE INSERT` trigger on `auth.users` refusing a staff row that carries a password with an unconfirmed address |
 
-**Clients created by the desk must still be provisioned**, because such a login needs two halves that live in different places — `clients.email` (so `getActiveClientId()` and the RLS helper `current_client_id()` can resolve the row) and an `auth.users` row. One script does both:
+**Clients created by the desk must still be provisioned**, because such a login needs two halves that live in different places — a `client_emails` row (so `getActiveClientId()` and the RLS helper `current_client_id()` can resolve the client) and an `auth.users` row. One script does both, and running it a second time adds another login rather than replacing the first:
 ```bash
 npm run client:login -- <client-id> someone@example.com   # link
 npm run client:login -- <client-id> --unlink              # undo
@@ -416,20 +421,30 @@ Three steps, and the order is the security argument:
 
 ### 4.4b Client settings (`/portal/client/settings`)
 
-Three things a client can change about their own login, one card each. Read-only details sit on top so you can see what you are changing.
+Four things a client can change about their own login, one card each. Read-only details sit on top so you can see what you are changing.
 
 **Password.** The current one is required, and is verified by *actually signing in with it* — `secure_password_change` is off, so `updateUser({ password })` would otherwise accept a new password on the strength of the session alone. That would turn an unlocked laptop into permanent access: a session expires, a password does not, and the owner would be locked out without ever seeing a prompt.
 
 A client with **no** password sees a different form. Every login the broker import or `client:login` created has none, and asking them for a current password answers "that password is incorrect" — untrue and unactionable. `user_has_password()` decides which form to show; the password-less path sets a first password through the emailed code, because a session is proof of access *now* and a password is access indefinitely.
 
-**Login email.** `startEmailChange` refuses a `@vitti.capital` target (see below) and an address already registered, then calls `updateUser({ email })`. Nothing changes at that moment: with `double_confirm_changes` **both** the old and the new address must confirm, so somebody who reaches an open session cannot quietly redirect the login to an address they own. `clients.email` is moved by a **trigger**, not by the action — confirmation may land days later from a device this app never sees, and if `auth.users.email` moved while `clients.email` did not, the client would be authenticated and attached to nothing.
+**Login email.** `startEmailChange` refuses a `@vitti.capital` target (see below) and an address already registered, then calls `updateUser({ email })`. Nothing changes at that moment: a six-digit code goes to the new address and `confirmEmailChange` verifies it. The client's `client_emails` row is moved by a **trigger**, not by the action — confirmation may land days later from a device this app never sees, and if `auth.users.email` moved while that row did not, the client would be authenticated and attached to nothing.
+
+This **moves** the login. Adding one is the next card, and does the opposite.
 
 Two database guards make this safe (`…_client_settings.sql`):
 
 | Trigger | Why |
 | --- | --- |
 | `block_email_change_to_staff_domain` | `stamp_role_from_email` fires on `UPDATE OF email` too, so a client could rename themselves to `anything@vitti.capital` and be stamped **admin**. Refused outright — somebody who joins the firm gets a staff account created for them, which is a different act by a different person |
-| `sync_client_email_from_auth` | Keeps `clients.email` in lockstep, in the same transaction as the auth change. Also closes a hazard that predates this page: editing an address by hand in the Supabase dashboard silently detached the client |
+| `sync_client_email_from_auth` | Keeps the client's `client_emails` row in lockstep, in the same transaction as the auth change. It matches on the OLD address, so changing a *secondary* login does not disturb the primary. Also closes a hazard that predates this page: editing an address by hand in the Supabase dashboard silently detached the client |
+
+**Who can sign in.** A client may hold several login addresses (`client_emails`) — a spouse, a second SMSF trustee, an accountant. Each is its own `auth.users` row with its own password; what they share is the client they resolve to, so all of them see one portfolio and each is recorded separately in the audit log.
+
+Adding one is sign-up in miniature: the address is registered **without a password**, a code is emailed, and the row that grants access to the portfolio is written only after `verifyOtp` returns. The verification runs on `lib/supabase/detached.ts` — a Supabase client with no cookie adapter — because on the ordinary server client `verifyOtp` would write the session it returns into the request and sign the caller *out* of the account they are editing.
+
+Removing a login deletes its `auth.users` row too: a credential that still authenticates but resolves to no client is access the client believes they revoked. The primary address cannot be removed, only replaced — `clients.email` mirrors it, and the rail in `approve_account_claim` reads that column as "somebody can sign in as this client".
+
+Staff see every login on the client detail header, and the register's search matches any of a client's addresses.
 
 **Devices.** `signOut({ scope: "global" })` — revokes every refresh token, not just this browser's cookie. The case for the button is a device you no longer have.
 
@@ -703,7 +718,7 @@ Every such read now pages until a short page arrives. There are deliberately two
 
 | Layer | State |
 |---|---|
-| Schema + seed on Supabase | ✅ applied (`supabase/migrations/`, `supabase/seed.sql`) |
+| Schema on Supabase | ✅ applied (`supabase/migrations/`). No seed file — real data comes from the broker import |
 | Data-access layer + generated types | ✅ `lib/data/queries.ts`, `lib/supabase/*` |
 | Auth session bridge (`getUser()`) | ✅ `lib/session.ts`, `app/actions/session.ts` |
 | Migrated routes — client | ✅ dashboard, invest, positions, insights, markets, placements, options, watchlist, alerts, askvitti |
@@ -712,7 +727,7 @@ Every such read now pages until a short page arrives. There are deliberately two
 | Portal layout on DAL/session | ✅ server `layout.tsx` fetches session + badges + alerts; interactivity in `PortalShell.tsx` (ack + sign-out call server actions) |
 | Real auth — two doors, two credentials | ✅ Supabase Auth + root `proxy.ts` session refresh + `app_metadata.role`. **Clients** at `/login`: `signInWithPassword`, or `signInWithOtp` → `verifyOtp`. **Staff** at `/staff/login`: code only. The workspace follows the **email domain** via a trigger on `auth.users` (`…_role_from_email_domain.sql`), so `@vitti.capital` addresses self-provision on first sign-in and `is_staff()` / every RLS policy stay untouched. The two pages are UX, **not** a boundary — each refuses the addresses it is not for (`audience`) and links across, reading the rule from the database so there is one copy of it. Desk-provisioned clients still use `npm run client:login` (both halves — `clients.email` **and** the auth row) and sign in by code until they set a password. `npm run login:link` is the break-glass for a dead mail provider. LLD §8.32 |
 | Client self-registration (`/signup`) | ✅ Three steps — details → emailed code → **link a broker account (required)**. Registration runs through `startSignUp` on the **service role**, so project-level signups stay OFF; the user is created **without a password**, and `completeSignUp` sets it and creates the `clients` row only after `verifyOtp` proves the mailbox. Abandon midway and nothing usable exists. An already-registered address gets the identical answer, so the form is not a test for who banks here. Step 3 is enforced by state, not a missing button: `app/portal/layout.tsx` returns any client with no accounts and no pending claim to `/signup`. README §4.4a |
-| Client settings (`/portal/client/settings`) | ✅ Password, login email and devices — the three things a client can change about their own login. **Password:** the current one is verified by actually signing in with it, because `secure_password_change` is off and `updateUser` would otherwise accept a new password on the session alone, turning an unlocked laptop into permanent access. A client with no password (every broker-provisioned login) gets a different form — `user_has_password()` decides which — and sets their first one through the emailed code, since a session is access now and a password is access indefinitely. **Email:** see the row below. **Devices:** `signOut({ scope: "global" })`. Notification preferences are deliberately **absent**: nothing in this app sends a client an email, and switches for mail nobody sends would be controls the client would believe. README §4.4b |
+| Client settings (`/portal/client/settings`) | ✅ Password, login email, who else can sign in, and devices — the four things a client can change about their own login. **Password:** the current one is verified by actually signing in with it, because `secure_password_change` is off and `updateUser` would otherwise accept a new password on the session alone, turning an unlocked laptop into permanent access. A client with no password (every broker-provisioned login) gets a different form — `user_has_password()` decides which — and sets their first one through the emailed code, since a session is access now and a password is access indefinitely. **Email:** see the row below. **Devices:** `signOut({ scope: "global" })`. Notification preferences are deliberately **absent**: nothing in this app sends a client an email, and switches for mail nobody sends would be controls the client would believe. README §4.4b |
 | Changing a login email | ✅ `…_client_settings.sql` + `/auth/confirm`. Three parts, because the login is two halves in two places and the change lands asynchronously: `startEmailChange` refuses a staff-domain or already-taken target and calls `updateUser({ email })`; **both** the old and new address must confirm (`double_confirm_changes`), so nobody can redirect a login from a single open session; and `sync_client_email_from_auth`, an `AFTER UPDATE OF email` trigger, moves the matching `client_emails` row in the same transaction (it moved `clients.email` until `…_client_emails.sql` made that column a mirror) — the app cannot do that itself, because confirmation may land days later from a device it never sees. Without it the client would be authenticated and attached to **nothing**. `block_email_change_to_staff_domain` refuses moving a login onto `@vitti.capital`, which `stamp_role_from_email` would otherwise promote to admin. Also closes a pre-existing hazard: editing an address by hand in the Supabase dashboard silently detached the client |
 | Several logins, one client | ✅ `…_client_emails.sql` + `app/actions/emails.ts`. A couple, two SMSF trustees, a principal and their accountant — all previously answered with "share the password", which is the same account with the audit trail removed. `client_emails` holds every address that can sign in as a client and is what `current_client_id()` and `lib/session.ts` now resolve against; `clients.email` survives as a trigger-maintained **mirror of the primary**, because the staff console, the claim queue and the rail in `approve_account_claim` all want it as a plain column. Adding one is the sign-up flow in miniature — the address is registered without a password, a code is emailed, and the row that grants access to a portfolio is written only after `verifyOtp` returns. That verification runs on `lib/supabase/detached.ts`, a cookie-less client: on the ordinary server client it would return a session, write it to the request, and sign the caller **out of the account they were editing** and in as the address they were adding. Removing a login deletes its `auth.users` row too, since a credential that authenticates and resolves to no client is access the client believes they revoked |
 | `/auth/confirm` — the first auth callback route | ✅ Accepts `type=email_change` **only**. Every other credential here is a typed code, and a route taking every type would be a second way to sign in — a bearer token in a URL, in browser history and referrer headers — beside the code flow chosen to avoid exactly that. Email change is the one flow that cannot be a code: the new address is not a registered user, so there is no session to verify against and no screen belonging to it |

@@ -325,13 +325,14 @@ The store wraps `INITIAL_DATABASE` and exposes both the data and the session con
 ---
 
 ## 7. Production SQL Schema (`db/schema.sql`)
-The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) that re-expresses the flat prototype objects as an integrity-constrained relational model. It is now **applied to a live Supabase project** (as the first ordered migration under `supabase/migrations/`, seeded by `supabase/seed.sql`) and is the persistence layer every route reads and every server action writes (§8). The interface→table mapping below still documents the deliberate divergences from the prototype shape.
+The repository ships a portable PostgreSQL schema (Supabase / Neon / Aurora) that re-expresses the flat prototype objects as an integrity-constrained relational model. It is now **applied to a live Supabase project** (as the first ordered migration under `supabase/migrations/`; there is no seed file, the data arrives through the broker import) and is the persistence layer every route reads and every server action writes (§8). The interface→table mapping below still documents the deliberate divergences from the prototype shape.
 
 ### 7.1 Interface → Table Mapping
 
 | `lib/db.ts` (in-memory) | `db/schema.sql` (relational) | Notes |
 |-------------------------|------------------------------|-------|
-| `Client` | `clients` | `av → initials`, `type → account_type`, `s708 → s708_expiry` (date). Adds `email` (UNIQUE) — login key, resolves which client signs in (natural key for future auth). |
+| `Client` | `clients` | `av → initials`, `type → account_type`, `s708 → s708_expiry` (date). Adds `email` (UNIQUE) — originally the login key. Since §8.46 it is a trigger-maintained **mirror** of the client's primary login and resolves nothing; `client_emails` is the key. |
+| *(no prototype equivalent)* | `client_emails` | Every address that can sign in as a client. `email` UNIQUE across the table, one `is_primary` per client. This is what `current_client_id()` and `lib/session.ts` resolve a JWT against. See §8.46. |
 | *(hardcoded `cashOf()`)* | `client_accounts` | Cash is a real per-client row with `currency`, not a hardcoded map. |
 | `Position` | `positions` | `name`/`sector`/`last` **not** stored — joined from `securities`. Unique `(client_id, security_code)`. |
 | `OptionHolding` | `option_holdings` | `dte` is **computed** from `expiry_date` at read time; `under` comes from `securities` via `underlying_code`. |
@@ -397,12 +398,13 @@ Also here, and **deliberately not in `lib/data/holdings.ts`**: the `RealizedSumm
 
 ### 8.5 Session bridge (`lib/session.ts`, `app/actions/session.ts`) — real Supabase Auth
 Identity is a verified token, not a user-writable cookie. Sign-in offers **two credentials on two pages**: clients use a password or a one-time code at `/login`, staff use a code only at `/staff/login` — see §8.32 for the code path and how the workspace is derived from the email domain, and §8.38 for passwords, self-registration and why staff have neither.
-- **Read (`lib/session.ts`):** all reads go through a `React.cache`-wrapped `getAuth()` that calls `supabase.auth.getUser()`. `role` comes from `user.app_metadata.role` (`'admin' | 'client'`). `getActiveClientId()` resolves the client row by matching `user.email` to `clients.email` (staff → the `vitti_view` cookie's client, else the first seeded client). `getSession()` returns the same `{ role, clientId, viewClient }` shape for back-compat (now `null` when unauthenticated). `getActor()` stamps audit writes — staff act as `"S. Goyal (staff)"`, a client under their `display_name`.
+- **Read (`lib/session.ts`):** all reads go through a `React.cache`-wrapped `getAuth()` that calls `supabase.auth.getUser()`. `role` comes from `user.app_metadata.role` (`'admin' | 'client'`). `getActiveClientId()` resolves the client row by matching `user.email` against `client_emails` — several addresses may reach one client (§8.46) — with staff going to the `vitti_view` cookie's client, else the first seeded client. `getSession()` returns the same `{ role, clientId, viewClient }` shape for back-compat (now `null` when unauthenticated). `getActor()` stamps audit writes — staff act as `"S. Goyal (staff)"`, a client under their `display_name`.
 - **Write (`app/actions/session.ts`, `"use server"`):** `requestLoginCode(email)` emails a code (`signInWithOtp`, `shouldCreateUser: false`) and `verifyLoginCode(email, code)` exchanges it for a session, the `@supabase/ssr` server client setting the cookies — which is the whole reason sign-in lives in a server action rather than the browser. `signOut()` clears the session and `vitti_view`. `setViewClient(id)` (staff only — guarded by `getActor().role`) writes the `vitti_view` cookie.
 - **`viewClient` cookie (`vitti_view`):** the only session data still in a cookie — it is UI state (which client a staff member is inspecting), not identity.
-- **Roles:** `app_metadata.role`, stamped from the email domain by a trigger on `auth.users` (§8.32). Note the asymmetry: a **client** is an `auth.users` row **plus** a `public.clients` row linked by email, whereas an **admin** is an `auth.users` row *only* — there is no staff table, because an admin holds no portfolio. That is why `getActor()` returns a hardcoded `"S. Goyal (staff)"`; a second admin would need a real name source before the audit log stays truthful.
+- **Roles:** `app_metadata.role`, stamped from the email domain by a trigger on `auth.users` (§8.32). Note the asymmetry: a **client** is one or more `auth.users` rows **plus** a `public.clients` row, linked by address through `client_emails` (§8.46), whereas an **admin** is an `auth.users` row *only* — there is no staff table, because an admin holds no portfolio. That is why `getActor()` returns a hardcoded `"S. Goyal (staff)"`; a second admin would need a real name source before the audit log stays truthful.
 - **Route protection (Stage 8):** the root `proxy.ts` redirects unauthenticated `/portal/*` requests to `/login`; the portal layout re-checks (`getSession()` → `redirect`) as defense-in-depth; and `app/portal/staff/layout.tsx` bounces non-`admin` users out of the staff area. The pre-login "first client" fallback is now effectively dead for the portal (kept as a defensive default).
-- **Still deferred:** the `getActiveClientId()` fallback to "the first client" when an authenticated email matches no `clients` row. RLS makes it inert — the read that would find that first client returns nothing for a client — but "show somebody else's client" is the wrong default to have written in an auth file at all.
+- **Still deferred:** the `getActiveClientId()` fallback to "the first client" when an authenticated email matches no `clients` row. RLS makes it inert for READS — the read that would find that first client returns nothing for a client — but "show somebody else's client" is the wrong default to have written in an auth file at all.
+  > It stopped being merely untidy in §8.46. Actions that write with the **service role** are not behind RLS, so a fallback client id there is a live account takeover, not an empty page. `app/actions/emails.ts` therefore resolves the caller itself and refuses an address that reaches no client, rather than calling `getActiveClientId()` at all. Every future service-role action must do the same until the fallback is removed.
 
 ### 8.6 Static discovery config (`lib/data/discovery.ts`)
 `GOALS` and `THEMES` for the `/invest` page — the deliberately-not-persisted UI scaffolding (see §7.2). Client-safe constants, imported directly by `InvestClient`.
@@ -458,7 +460,8 @@ Because the app is on a **hosted** Supabase project, auth users are created out-
 > Since §8.38, clients may hold a password — but only one they chose themselves, after proving the mailbox. These scripts still set none: an account they provision signs in with a code until its owner sets a password through *Forgot password?*. Staff accounts must never acquire one at all (§8.38).
 
 - **Staff do not need any of this.** `@vitti.capital` addresses provision themselves on their first code request (§8.32). Running the seed for one is harmless; it just gets there first.
-- **Clients need both halves, so one script does both.** `link-client-login.mjs` sets `clients.email` *and* creates the auth row, because half of it done is worse than none: the address resolves a client row, asks for a code, and never gets one. It refuses `@vitti.capital` addresses (they become staff and would never see the client portal) and names the client an address is already attached to rather than leaving `clients.email`'s UNIQUE constraint to say it. `--unlink` clears the address; it deliberately does **not** delete the auth user, which is not something a script should do by implication.
+- **Clients need both halves, so one script does both.** `link-client-login.mjs` writes the `client_emails` row *and* creates the auth row, because half of it done is worse than none: the address resolves a client, asks for a code, and never gets one. It refuses `@vitti.capital` addresses (they become staff and would never see the client portal) and names the client an address is already attached to rather than leaving the UNIQUE constraint to say it. `--unlink` clears every address for that client, additional rows before the primary because `block_primary_client_email_delete` refuses the other order; it deliberately does **not** delete the auth user, which is not something a script should do by implication.
+  > **Since §8.46** a second run **adds** an address rather than replacing the first, and marks it primary only if the client had no login at all. Silently moving the primary — which `clients.email` mirrors, and which the staff register and the claim queue both display — is not something a script should do because you ran it twice.
 - **`login-link.mjs` is the break-glass.** `admin.generateLink()` returns the code and link *without sending mail*, for the failure mode OTP-only login creates: no password to fall back on, so a dead mail provider locks out every admin. Both values are credentials — treat them as such.
 - **Env:** `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (server-only; a placeholder line is in `.env.local`, filled from Supabase dashboard → Project Settings → API).
 - **Run:** `node --env-file=.env.local scripts/seed-auth-users.mjs` (safe to re-run — it updates existing users).
@@ -468,6 +471,7 @@ DB-level enforcement of "a client sees/writes only their own rows; staff see/wri
 - **Two helper functions** carry the interim email-based identity model, so the cut-over to `auth.uid()` linkage later touches only these:
   - `is_staff()` → `auth.jwt()->'app_metadata'->>'role' = 'admin'`.
   - `current_client_id()` → `clients.id` where `email = auth.jwt()->>'email'`; **`SECURITY DEFINER`** so it bypasses RLS on `clients` and avoids policy recursion.
+    > **Since §8.46** it reads `client_emails` instead — `SELECT client_id FROM client_emails WHERE email = lower(auth.jwt()->>'email')` — so several addresses may return the same id. `SECURITY DEFINER` now earns its keep twice: `client_emails`'s own policy calls this function, and bypassing RLS is what stops that being a recursion. The `clients` policy became `id = current_client_id()`, since there is no longer a single claim to compare against.
 - **Per-table policies:**
   - *Shared reference* (`securities`, `market_indices`, `placements`, `signals`, `sectors`, `news`, `investment_ideas`, `recommendations`, `research_reports`, `research_notes`): `SELECT` to all authenticated; **staff-only writes** on `securities`/`placements` (the two the settlement engine upserts).
   - *Per-client* (`clients`, `client_accounts`, `positions`, `option_holdings`, `bids`, `watchlist_items`, `alerts`, `audit_log`): `is_staff() OR <owner>`, where `<owner>` is `client_id = current_client_id()` (or `email` for `clients`). `bids`/`watchlist_items`/`alerts` allow the owner full CRUD; `positions`/`option_holdings` are **insert-staff-only** (issued by settlement on the client's behalf); `audit_log` is insert-only (the append-only trigger blocks UPDATE/DELETE).
@@ -1484,7 +1488,8 @@ Nothing that grants access happens before `verifyOtp`. Abandon at step 2 and you
 
 - **The password is never at rest between steps.** It stays in the browser's component state and is sent again with the code. Stashing it server-side would mean a password in a cookie or a table for the minute it takes somebody to read their email; sending it twice over the same TLS connection is cheaper, and an abandoned sign-up then leaves no credential anywhere.
 - **Only calls already proven in this codebase are used.** Step 1 is `provisionStaffAccount`'s `createUser` shape; step 2 is the login page's `verifyOtp({ type: "email" })`. An earlier design created the user *unconfirmed* and relied on `signInWithOtp` doing the right thing for an unconfirmed row — GoTrue's behaviour there differs by version (confirmation mail vs magic link, and a different `verifyOtp` type), and guessing at it is how you ship a flow that silently sends the wrong email.
-- **`ensureClientRow` is idempotent and uses the service role.** `clients` has a SELECT policy and deliberately no INSERT policy — until now every row came from the broker import or a seed script. The alternative, an INSERT policy, would have to read "any authenticated user may insert", since the row does not exist yet to match against `current_client_id()`; that is a wider grant than one fully-specified row written here. Idempotent because `clients.email` is UNIQUE and an existing client can legitimately reach step 2 (below), and a constraint violation would strand them mid-flow.
+- **`ensureClientRow` is idempotent and uses the service role.** `clients` has a SELECT policy and deliberately no INSERT policy — until now every row came from the broker import or a seed script. The alternative, an INSERT policy, would have to read "any authenticated user may insert", since the row does not exist yet to match against `current_client_id()`; that is a wider grant than one fully-specified row written here. Idempotent because an existing client can legitimately reach step 2 (below), and a constraint violation would strand them mid-flow.
+  > **Since §8.46** the row is really two — a `clients` row and the `client_emails` row that makes an address resolve to it — so both are checked before either is written, and the half-written middle state (a `clients` row whose mirrored email matches but which has no link) is recognised and completed rather than retried into a unique violation forever.
 - **An already-registered address gets the identical answer**, and a code all the same. "That email already has an account" would make the form a test for whether a given person banks here — the enumeration problem §8.32 is written around. Whoever owns the mailbox completes the flow and has effectively reset their own password; whoever does not owns nothing. `createUser` returning `email_exists` is therefore treated as success.
 
 #### Step 3 is mandatory, and mandatory means enforced by state
@@ -1540,7 +1545,7 @@ This is also the second half of "step 3 is mandatory". A client with no accounts
 
 ### 8.39 Client self-service settings (`app/actions/profile.ts`, `/portal/client/settings`, `/auth/confirm`, `…_client_settings.sql`)
 
-A page for the three things a client can change about their own login. It was chosen over a "profile" page on purpose: a profile page would have shown a client their name, their address and their accounts — the first two they typed themselves, the third already the Accounts page — and been a screen nobody opens twice. What was missing was not somewhere to *read* those facts but somewhere to *change* them.
+A page for the things a client can change about their own login — password, address, devices, and since §8.46 who else can sign in. It was chosen over a "profile" page on purpose: a profile page would have shown a client their name, their address and their accounts — the first two they typed themselves, the third already the Accounts page — and been a screen nobody opens twice. What was missing was not somewhere to *read* those facts but somewhere to *change* them.
 
 #### Notification preferences are absent, deliberately
 
@@ -1566,8 +1571,8 @@ The password-less path sets a first password through the emailed code (`requestP
 | --- | --- | --- |
 | Send the code, and only to the new address | `startEmailChange` → `confirmEmailChange` | `double_confirm_changes` is off, so one token reaches one mailbox. **The hosted project has its own switch** — Authentication → Sign In / Providers → Email → *Secure email change* — which must be off there too; left on, the client gets the code, the old mailbox gets one as well, and the login does not move until both are used, which looks exactly like the code not working |
 | Refuse a staff-domain target | `startEmailChange` + `block_email_change_to_staff_domain` | `stamp_role_from_email` fires on `UPDATE OF email` too, so a client renaming themselves to `anything@vitti.capital` would be stamped **admin** and land in the desk console on the next token refresh. Refused in the action for a readable sentence, and in the database because that is the boundary |
-| Refuse an address already registered | `startEmailChange`, service role | `clients.email` is UNIQUE. Checked with the service role because RLS shows the caller only their own row — they would see no conflict and hit a constraint on confirmation, days later |
-| Move `clients.email` when the address actually moves | `sync_client_email_from_auth` | See below |
+| Refuse an address already registered | `startEmailChange`, service role | `client_emails.email` is UNIQUE (§8.46; it was `clients.email` until that table existed). Checked there rather than against `clients.email`, which now mirrors only each client's *primary* address — an address that is somebody's second login would not appear in it, and the check would wave through a change the unique index then refuses. With the service role because RLS shows the caller only their own rows, so they would see no conflict and hit a constraint on confirmation, days later |
+| Move the `client_emails` row when the address actually moves | `sync_client_email_from_auth` | See below |
 
 `updateUser({ email })` changes nothing; it sends mail.
 
@@ -1581,9 +1586,9 @@ Nothing in the flow depends on `authConfirmUrl()`, the dashboard's Redirect URLs
 
 `app/auth/confirm/route.ts` is kept as a **legacy** path only, so that links issued before the switch still resolve until they expire; it and the `?email=confirmed|invalid` banner can both be deleted once none can remain.
 
-**Why the second half is a trigger and not app code.** A client login is two halves in two places, and `lib/session.ts` and `current_client_id()` both resolve the client row from the address. If `auth.users.email` moved and `clients.email` did not, the person would be authenticated and attached to **nothing** — every policy denying them, so the portal reads as empty rather than as broken. And the change lands when the last link is followed: possibly days later, possibly from a phone, with no request in flight for the app to hook. A trigger is the only thing that observes the actual change, and it runs inside the auth transaction, so the halves cannot drift.
+**Why the second half is a trigger and not app code.** A client login is two halves in two places, and `lib/session.ts` and `current_client_id()` both resolve the client row from the address. If `auth.users.email` moved and the matching `client_emails` row did not, the person would be authenticated and attached to **nothing** — every policy denying them, so the portal reads as empty rather than as broken. And the change lands when the last link is followed: possibly days later, possibly from a phone, with no request in flight for the app to hook. A trigger is the only thing that observes the actual change, and it runs inside the auth transaction, so the halves cannot drift.
 
-It matches on `OLD.email` rather than a user id, because `clients` has no FK to `auth.users` — the two are joined by address, which is the whole reason the trigger has to exist. Staff have no `clients` row, so it updates nothing for them, which is correct.
+It matches on `OLD.email` rather than a user id, because `client_emails` has no FK to `auth.users` — the two are joined by address, which is the whole reason the trigger has to exist. Matching the old address is also what keeps it honest now that a client may hold several: it moves the row for the address that actually changed, so someone editing a secondary login does not silently swap which of their addresses is primary. Staff have no row there, so it updates nothing for them, which is correct.
 
 Incidentally this closed a hazard that predates the page: editing an address by hand in the Supabase dashboard silently detached the client.
 
@@ -1596,7 +1601,7 @@ Every other credential here is a six-digit code typed into a form, and `magic-li
 - **`type=email_change` only.** A route accepting every type would be a second way to sign in — a bearer token in a URL, in browser history and referrer headers — beside the code flow chosen precisely to avoid that. `recovery` in particular is refused: password reset already has a form.
 - **`token_hash`, not the implicit fragment.** `{{ .ConfirmationURL }}` returns the session in a `#access_token=` fragment that only browser JavaScript can read; this app establishes sessions on the server, so the template is hand-built to carry `token_hash` and the route calls `verifyOtp`.
 - **One answer for every failure.** Expired, already used, or the other half of the pair not yet confirmed all redirect the same way: the person's next step is identical, and distinguishing them tells a stranger holding a stale link which kind of stale it is.
-- **It does not touch `clients.email`.** The route only sees whichever confirmation happens to be last, and with double confirmation that may be the old address, the new one, or neither if the person finishes elsewhere. The trigger observes the change; the route does not guess at it.
+- **It does not touch `client_emails`.** The route only sees whichever confirmation happens to be last, and with double confirmation that may be the old address, the new one, or neither if the person finishes elsewhere. The trigger observes the change; the route does not guess at it.
 
 #### Sign-out asks first
 
@@ -1746,3 +1751,82 @@ A **Cards / List** toggle on every news list the client sees: *Your holdings in 
 - **Each section carries its own toggle.** A control that reaches past the card it sits in is a control nobody trusts, and the shared store keeps them in step anyway. It also matters on Insights specifically: for a book of seven holdings, *Your holdings in the news* is empty most days, and a single page-level toggle would spend most of its life sitting above an empty card.
 - **What the card view clips, and what it does not.** On Market a filing is one line among fifty-nine, so the headline and the summary teaser are clamped — in a grid an unclamped headline stretches its whole row, and a row of cards that is tall because one card is tall reads as broken. On Insights the client's *own* filings keep every summary bullet, which is the existing rule on that page: there are a handful and they are the client's own.
 - **Sector headings survive the switch.** *Elsewhere in your sectors* groups by sector and caps at two apiece. In cards the grouping stays and the items lay out within it; losing the headings would turn a grouped read into an undifferentiated wall of companies the client does not own, which is the one thing that section must not become.
+
+### 8.46 Several logins, one client (`…_client_emails.sql`, `app/actions/emails.ts`, `lib/supabase/detached.ts`, `/portal/client/settings`)
+
+Until this, a client **was** an email address. `clients.email` was UNIQUE, and both `current_client_id()` and `lib/session.ts` resolved the signed-in person by matching the JWT claim against that one column. One column, one address, one login — which is wrong for the three cases the desk actually has: a couple who both want the family portfolio, an SMSF with two trustees, and a family office where the principal and the accountant both sign in. Every one of them was previously answered with *share the password*, which is the same account with the audit trail removed, and with no way to take one person's access away without changing the other's.
+
+#### A table, not a second column
+
+`clients.email_2` would need two entries in every uniqueness check, two branches in `current_client_id()`, and a third column the first time somebody wants three addresses. The relationship is one-to-many; it gets a table. `client_emails` holds `(client_id, email UNIQUE, is_primary)`, with a partial unique index — `UNIQUE (client_id) WHERE is_primary` — giving exactly one primary per client. It is a partial index rather than a CHECK because the rule is about the *set* of rows for a client, which a row constraint cannot see.
+
+`email` is UNIQUE across the whole table rather than per client: this is the column a JWT claim is matched against, so an address resolving to two clients would be a person seeing two portfolios depending on which row came back first.
+
+#### `clients.email` survives as a mirror
+
+It is no longer what anything resolves a login against, but it is kept and maintained by trigger, because a dozen readers want *the address for this client* as a plain column and would otherwise all grow a join: the staff register, `getClients`, the claim queue's `clientEmail`, and the rail in `approve_account_claim`.
+
+That rail is why the mirror has to be exactly right. It reads `prev_client.email IS NOT NULL` to mean *somebody can log in as this client*, and refuses to re-parent an account away from such an owner (§8.34). That reading stays true only because a client with any login has a primary one, which is what `block_primary_client_email_delete` guarantees — so the column is NULL **exactly** when `client_emails` is empty for that row.
+
+| Guard | What it refuses | Why |
+| --- | --- | --- |
+| `block_staff_domain_client_email` | a `@vitti.capital` address as a client login | `stamp_role_from_email` stamps `app_metadata.role = 'admin'` on it, so the JWT would be a staff member who *also* satisfies `current_client_id()` — staff powers plus a client's own rows. Third door onto the same refusal as `…_password_signup.sql` and `block_email_change_to_staff_domain` |
+| `block_primary_client_email_delete` | deleting a primary **while the client has others** | A client with logins and no primary reads as `clients.email IS NULL`, which the claim rail believes. Deleting the *last* login is allowed — that is what `client:login -- <id> --unlink` does, and it leaves a state the rail is right about |
+| `mirror_primary_client_email` | — | Recomputes `clients.email` from the table on every write, both sides of an UPDATE that re-parents an address. Recomputed rather than copied from the changed row, so the demote-then-promote pair a primary change is made of cannot leave the mirror holding the losing address |
+| `set_primary_client_email` | promoting an address that is not the caller's | The unique index forces demote-before-promote, and doing that as two round trips leaves a window with no primary and `clients.email` momentarily NULL. One `SECURITY DEFINER` function, one transaction, and the app cannot get the order wrong |
+
+`set_primary_client_email` gives one message for *no such address* and *somebody else's address*: the caller may only ever name their own, so distinguishing them would answer "is this address registered here" for anything they care to type.
+
+#### The verification cannot run on the ordinary server client
+
+Adding an address has to prove the person can read mail at it, and the only proof this system has is `verifyOtp`. But `verifyOtp` succeeds by **returning a session**, and `lib/supabase/server.ts` writes whatever session it is handed into the request's cookies. Called from a server action, where cookies are writable, verifying the code for the new address would sign the caller *out* of the account they are editing and *in* as the address they were only trying to add — they would be sitting on somebody else's Settings page by the time the action returned.
+
+`lib/supabase/detached.ts` is the answer: the same anon key and endpoint, with `persistSession`, `autoRefreshToken` and `detectSessionInUrl` all off, so there is no cookie adapter at all. The session it returns is read for its *yes* and dropped when the request ends. The service-role client would not do — it could confirm an address with no code at all, which is exactly the thing that must not happen.
+
+#### The flow, and where the line is
+
+`startAddLoginEmail` registers the address in `auth.users` **without a password**, exactly as `startSignUp` does and for the same reason: abandoning the flow at that point creates nothing usable. `confirmAddLoginEmail` verifies the code and only then writes the `client_emails` row — the row that grants access to a portfolio — with `is_primary: false`, because adding a way in must never quietly change which address the firm regards as the client's own.
+
+`removeLoginEmail` deletes the `auth.users` row too. Deleting only the link would leave a credential that still authenticates and resolves to no client: someone who can sign in and reach an empty portal, whose access the client believes they revoked. That is safe here precisely because of what was checked on the way in — the address is one of this client's own, and it can only have become one by passing `confirmAddLoginEmail`, which refuses any address already spoken for.
+
+The action is deliberately **stricter than the database** about the primary: the trigger allows deleting a last login, but offered on a Settings page that is a client emptying their own account of every way back into it. Here it is always a promotion first.
+
+#### `getActiveClientId()` is not usable in these actions
+
+This is the part worth remembering, because it is a real hole that was closed rather than a design note.
+
+`getActiveClientId()` falls back to `firstClientId()` for any signed-in address it cannot resolve — a deliberate convenience from Stage 7, when an unresolved session meant a demo that still rendered. RLS keeps such a person from *reading* anything: `current_client_id()` returns NULL and every policy denies them, so they reach an empty portal and leave.
+
+These actions are where that stops being harmless, because they write with the service role and RLS is not in the way. An unresolved session is reachable: `startSignUp` registers an `auth.users` row before the flow completes, so anyone who abandons sign-up at the code step can still get in later with a one-time code at `/login`. Handed `firstClientId()`, they could add their own address as a login for whichever client sorts first — and on the next sign-in `current_client_id()` would resolve, RLS would open, and the empty portal would be somebody's actual portfolio.
+
+So `callingClient()` resolves the client the way the database does and no other way: the caller's own address, in `client_emails`, or nothing. Only somebody who already holds a login for a client may add another to it.
+
+#### What it looks like
+
+- **Client** — a *Who can sign in* card on Settings, listing every address with **Primary** and **This device** tags, *Make primary* and *Remove* per row, and a two-step add. It sits in the left column, deliberately far from *Login email* in the right: the two read as the same thing and are opposites — this one adds a way in and leaves the others working, that one moves the address you are signed in as and the old one stops working.
+- **Staff** — the client detail header prints every login, primary marked, and says **none** plainly for the broker-imported rows that have no login at all (an empty space reads as *not loaded*). The register's search key includes *every* address, not just the primary: the desk's commonest reason to search by address is that somebody rang, and that is as likely to be the accountant on the second address as the principal on the first.
+
+#### Everything that had to move with it
+
+| Place | Change |
+| --- | --- |
+| `current_client_id()` | resolves through `client_emails`. The one line the whole migration exists to change |
+| `clients_select` policy | `id = current_client_id()` instead of comparing the claim, since several claims may reach one row. No recursion: `current_client_id()` reads `client_emails`, not `clients` |
+| `lib/session.ts` | `clientIdByEmail` reads `client_emails`; `getActor` looks the display name up by **id**, because two trustees acting on one SMSF are one actor in the ledger |
+| `signup.ts` | `ensureClientRow` is idempotent in *two* places now, and recognises the half-written middle state — a `clients` row whose mirrored email matches but which has no link — instead of retrying into a unique violation forever |
+| `sync_client_email_from_auth` | updates `client_emails`, not the mirror |
+| `getClients` | embeds `client_emails`, so `ClientRow.logins` reaches the register and the detail page without a per-client round trip for 54 clients |
+| `link-client-login.mjs` | a second run **adds** an address rather than replacing the first; `--unlink` removes them all, additional rows before the primary, because that is the trigger's rule and not a preference |
+| `supabase/seed.sql` | deleted — see §8.47 |
+
+#### Not done
+
+`auth_user_id_for_email(text)` exists because the admin API has no *get user by email* and `listUsers` is paginated. It is `SECURITY DEFINER` and granted to `service_role` **alone** — revoked from `public`, `authenticated` and `anon` — because it would otherwise be a fine enumeration oracle. The only caller is a server action already holding the service key, which could read `auth.users` regardless; this narrows what that key is used for, it does not widen who may ask.
+
+### 8.47 The seed file, removed
+
+`supabase/seed.sql` held the four demo clients from the prototype and their holdings. It is gone, and `db.seed` is off in `config.toml`.
+
+It was a second copy of the schema's shape that nothing kept in step with the migrations — `db/schema.sql` had already drifted the same way (it still lists `clients.account_type`, moved to `accounts` in §8.12). The real data arrives through the broker import, so the seed's only job was to make `supabase db reset` produce something renderable, and its cost was a file that had to be corrected every time the schema moved. §8.46 was the second time: it wrote `clients.email` directly, and that column had just become a trigger-maintained mirror, so a reset would have produced four clients who looked like they had logins and could not sign in.
+
+A reset now leaves an empty database. `npm run import:holdings` fills it; `npm run client:login -- <client-id> <email>` gives a row an address to sign in with.

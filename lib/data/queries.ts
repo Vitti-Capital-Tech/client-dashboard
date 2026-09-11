@@ -49,12 +49,28 @@ export type Security = {
   securityClass: string | null; // 'Ordinary' | 'Options' | 'Allocation Interest'
 };
 
+/** One address that can sign in as a client (20260911090000_client_emails.sql). */
+export type ClientLogin = {
+  email: string;
+  isPrimary: boolean;
+};
+
 // A client is now just the person/login. Account attributes (type, s708, cash)
 // live on AccountRow — a client can own several accounts.
 export type ClientRow = {
   id: string;
   ref: string | null;
+  /**
+   * The PRIMARY login address, or null if the client has none.
+   *
+   * A mirror of `logins.find(l => l.isPrimary)`, kept because it is what most
+   * callers mean by "the client's email" and what every one of them read
+   * before there could be more than one. Anything that needs to know whether a
+   * particular address reaches this client wants `logins`.
+   */
   email: string | null;
+  /** Every address that can sign in as this client, primary first. */
+  logins: ClientLogin[];
   name: string;
   initials: string | null;
 };
@@ -371,9 +387,14 @@ export const getMarketIndices = cache(async (): Promise<IndexRow[]> => {
  */
 export const getClients = cache(async (): Promise<ClientRow[]> => {
   const supabase = await createClient();
+  // The logins come along as an embed rather than a second query: the registry
+  // renders all 54 clients at once, and a per-client round trip for two rows of
+  // email would be 54 of them. RLS applies to the embedded table too — staff
+  // see every client's addresses, a client only their own, which is the same
+  // answer `client_emails_select` gives directly.
   const { data, error } = await supabase
     .from("clients")
-    .select("*")
+    .select("*, client_emails(email, is_primary)")
     .is("merged_into", null)
     .order("ref");
   if (error) throw error;
@@ -381,6 +402,17 @@ export const getClients = cache(async (): Promise<ClientRow[]> => {
     id: c.id,
     ref: c.ref,
     email: c.email,
+    // Primary first, then alphabetical — the order the desk reads them in, and
+    // stable across renders, which an embed's own order is not guaranteed to be.
+    logins: (c.client_emails ?? [])
+      .map((e) => ({ email: e.email, isPrimary: e.is_primary }))
+      .sort((a, b) =>
+        a.isPrimary === b.isPrimary
+          ? a.email.localeCompare(b.email)
+          : a.isPrimary
+            ? -1
+            : 1,
+      ),
     name: c.display_name,
     initials: c.initials,
   }));

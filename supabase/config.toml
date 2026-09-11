@@ -64,11 +64,21 @@ enabled = true
 schema_paths = []
 
 [db.seed]
-# If enabled, seeds the database after migrations during a db reset.
-enabled = true
+# Off, and there is no seed file any more.
+#
+# `seed.sql` held the four demo clients and their holdings from the prototype.
+# The real data arrives through the broker import (`npm run import:holdings`)
+# and the 54 client rows it creates, so the seed was a second, diverging copy
+# of the schema's shape that nothing checked — and after
+# 20260911090000_client_emails.sql it was actively wrong until corrected,
+# because it wrote `clients.email` directly and that column is now a mirror.
+#
+# A reset therefore leaves an empty database. Run the import against it, or
+# `npm run client:login` to give a client row an address to sign in with.
+enabled = false
 # Specifies an ordered list of seed files to load during db reset.
 # Supports glob patterns relative to supabase directory: "./seeds/*.sql"
-sql_paths = ["./seed.sql"]
+sql_paths = []
 
 [db.network_restrictions]
 # Enable management of network restrictions.
