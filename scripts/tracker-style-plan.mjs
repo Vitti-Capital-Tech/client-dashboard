@@ -18,6 +18,10 @@
 //   + borders  :  24,800 ms   1,691 format reads   <- borders read per cell
 //   WRITES     :       113    16 widths, 16 fills, 39 fonts, 42 border edges
 //
+// Alignment was added on 15 Sep 2026 and costs ~430 more reads: it is the one
+// visible property nothing carried, so a tab took Template's text, fill and font
+// and then rendered all of it left-aligned. See `bannerRange`.
+//
 // The read COUNT is not the cost — the workbook is, reloaded on every request
 // unless a session holds it open. This script opens one (below); the first
 // version of it did not, and took 438s for the identical plan.
@@ -50,6 +54,7 @@
 
 import { adminClient, die } from "./_import-common.mjs";
 import {
+  bannerRange,
   clearTemplatePlanCache,
   readTemplatePlan,
 } from "../lib/placements/tracker-style.ts";
@@ -162,13 +167,16 @@ if (sessionId) await graph(`${item}/closeSession`, { method: "POST", body: {} })
 if (!plan) die("The scan returned no plan at all — check the Graph permissions on the workbook.");
 
 const borderWrites = plan.borders.reduce((n, b) => n + Object.keys(b.value).length, 0);
-const writes = plan.widths.length + plan.fills.length + plan.fonts.length + borderWrites;
+const alignWrites = (plan.alignments ?? []).length;
+const writes =
+  plan.widths.length + plan.fills.length + plan.fonts.length + borderWrites + alignWrites;
 
 console.log(`\nScanned in ${(scanMs / 1000).toFixed(1)}s, ${reads} format reads.`);
 console.log(`  widths  ${String(plan.widths.length).padStart(4)}`);
 console.log(`  fills   ${String(plan.fills.length).padStart(4)}`);
 console.log(`  fonts   ${String(plan.fonts.length).padStart(4)}`);
 console.log(`  borders ${String(borderWrites).padStart(4)}  (${plan.borders.length} regions)`);
+console.log(`  aligns  ${String(alignWrites).padStart(4)}  (${bannerRange(plan) ?? "no banner"} is merged and centred)`);
 console.log(`  ---`);
 console.log(`  writes  ${String(writes).padStart(4)}  -> ${Math.ceil(writes / 20)} batches per tab`);
 

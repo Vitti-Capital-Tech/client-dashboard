@@ -325,7 +325,49 @@ test("add-ons: an expiry never rolls into the next month", () => {
   const half = `- 1 free attaching option for every 2 shares (exercise price $0.10, 0.5-year term).`;
   assert.equal(
     attachingOptionsFromSummary(half, "2026-08-31"),
-    `1:2 @ $ 0.1 ${ADD_ON_LISTING_UNKNOWN} Exp 28/02/27`,
+    `1:2 @ $ 0.10 ${ADD_ON_LISTING_UNKNOWN} Exp 28/02/27`,
+    "`$0.10` is shown with the decimals it was written with, not as `0.1`",
+  );
+});
+
+test("add-ons: the option's own CODE between the count and the noun", () => {
+  /**
+   * CC9, verbatim, and the reason this file was reopened. The desk reported it
+   * as "CC9 ka options ye read nhi kiya" and typed the cell by hand.
+   *
+   * Two separate refusals, either of which alone was enough:
+   *
+   *   1. The ratio pattern allowed only `free` and `attaching` between the
+   *      count and `option`. CC9 names the instrument — `1 CC9O listed option`
+   *      — so the bullet never got as far as being read.
+   *   2. The expiry was stated as a DATE rather than as a term in years, and
+   *      only `N-year` was understood.
+   *
+   * The listing word is stated here (`listed`), so no placeholder is needed,
+   * and the strike keeps the two decimals the announcement wrote it with.
+   */
+  const cc9 = `- Attaching options: 1 CC9O listed option for every 2 new shares (exercise price $0.10, expiring 19 Dec 2028), subject to shareholder approval.`;
+  assert.equal(attachingOptionsFromSummary(cc9, "2026-09-15"), "1:2 @ $ 0.10 Listed Exp 19/12/28");
+
+  // A stated expiry counts from nothing, so it does not need the issue date —
+  // unlike every grant read before it.
+  assert.equal(attachingOptionsFromSummary(cc9, null), "1:2 @ $ 0.10 Listed Exp 19/12/28");
+});
+
+test("add-ons: only a date after `expiring` is taken as the expiry", () => {
+  // CC9's summary carries three other dates — `announced 18 Aug 2026`,
+  // `until 5 May 2027`, `matures 26 Mar 2027` — and each would read as a
+  // plausible option life. The grant bullet is the only one consulted, and
+  // within it only what follows the word.
+  const decoy = `- 1 attaching option for every 2 shares (exercise price $0.10), issued under a term sheet announced 18 Aug 2026.`;
+  assert.equal(attachingOptionsFromSummary(decoy, "2026-09-15"), undefined);
+
+  // And a term still answers where no date is stated — the older form is
+  // unchanged, not merely still accepted.
+  const term = `- 1 attaching option for every 2 shares (exercise price $0.10, 2-year term).`;
+  assert.equal(
+    attachingOptionsFromSummary(term, "2026-09-15"),
+    `1:2 @ $ 0.10 ${ADD_ON_LISTING_UNKNOWN} Exp 15/09/28`,
   );
 });
 

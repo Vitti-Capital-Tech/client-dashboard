@@ -5,6 +5,7 @@ import {
   CLIENT_INPUT_COLS,
   CLIENT_INPUT_LAST_ROW,
   addressOf,
+  bannerRange,
   clampClientInputYellow,
   clearTemplatePlanCache,
   columnsOf,
@@ -403,7 +404,9 @@ test("style: no yellow is painted below the cutoff on a real replay", async () =
       return { ok: true, status: 200, body: { name: "Calibri", size: 11, color: "#000000", bold: false, italic: false, underline: "None" } };
     }
     if (method === "GET" && path.includes("/format")) {
-      return { ok: true, status: 200, body: { columnWidth: 14.5 } };
+      // `General` is what an unaligned sheet reports, and one uniform answer is
+      // what stops the alignment scan halving its way down to single cells.
+      return { ok: true, status: 200, body: { columnWidth: 14.5, horizontalAlignment: "General" } };
     }
     return { ok: true, status: 200, body: {} };
   };
@@ -427,4 +430,141 @@ test("style: no yellow is painted below the cutoff on a real replay", async () =
       `yellow reaches row ${rect.r2} in F:G — the cutoff is ${CLIENT_INPUT_LAST_ROW}`,
     );
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* The banner, and the rectangles this file no longer invents          */
+/* ------------------------------------------------------------------ */
+
+test("style: the banner is read off the plan, not named in the code", () => {
+  // Template's row-1 band ran A1:N1 until the desk extended it over TRADE
+  // BOOKED. Deriving it means the merge follows Template the next time it moves.
+  const plan = {
+    shape: "A1:P30",
+    widths: [],
+    fills: [
+      { rect: { r1: 1, c1: 1, r2: 1, c2: 15 }, value: "#FFFF00" },
+      { rect: { r1: 2, c1: 1, r2: 2, c2: 15 }, value: "#000000" },
+      { rect: { r1: 1, c1: 20, r2: 1, c2: 21 }, value: "#CCCCCC" }, // narrower
+    ],
+    fonts: [],
+    borders: [],
+    incomplete: [],
+  };
+
+  assert.equal(bannerRange(plan), "A1:O1", "the widest band on row 1");
+
+  // A single cell is not a band, and a block spanning rows 1 and 2 is not one
+  // either — merging that would swallow the header row.
+  assert.equal(
+    bannerRange({ ...plan, fills: [{ rect: { r1: 1, c1: 1, r2: 1, c2: 1 }, value: "#FFFF00" }] }),
+    null,
+  );
+  assert.equal(
+    bannerRange({ ...plan, fills: [{ rect: { r1: 1, c1: 1, r2: 2, c2: 15 }, value: "#FFFF00" }] }),
+    null,
+  );
+  assert.equal(bannerRange({ ...plan, fills: [] }), null, "a Template with no banner");
+});
+
+test("style: no fill is painted where Template has none", async () => {
+  /**
+   * THE regression this file was reopened for.
+   *
+   * `ensurePlacementStyleCompleteness` used to push a hardcoded rectangle
+   * whenever a predicate said a scan had come back short. Its fee-table
+   * predicate tested `r1 === 23 && c1 >= 12` against a region that starts at
+   * column J (`c1 = 10`), concluded the fee header was missing, and painted
+   * BOTH its guesses two columns right of the real ones — `M23:N23` and
+   * `Q24:R24` — on every tab it ever produced.
+   *
+   * The desk found it, not the suite: "Q24 and R24 should not be yellow, those
+   * cells not part of template." Template's own fills, read on 15 Sep 2026, are
+   * `J23:L23` and `N24:P24` and nothing else on those rows.
+   *
+   * So this asserts the general rule rather than those two cells: every fill
+   * written to the tab is a fill the Template answered with.
+   */
+  const YELLOW: { r1: number; c1: number; r2: number; c2: number }[] = [
+    { r1: 23, c1: 10, r2: 23, c2: 12 }, // J23:L23  Lead | Payable | Fees
+    { r1: 24, c1: 14, r2: 24, c2: 16 }, // N24:P24  Final | T1 | T2
+  ];
+  const calls: { method: string; path: string; body?: unknown }[] = [];
+
+  const graph: GraphCall = async (path, init = {}) => {
+    const method = init.method ?? "GET";
+    calls.push({ method, path, body: init.body });
+
+    if (path === "/$batch") {
+      const inner = (init.body as { requests: { id: string; method: string; url: string; body?: unknown }[] })
+        .requests;
+      const responses = [];
+      for (const r of inner) {
+        const answer = await graph(r.url, { method: r.method, body: r.body });
+        responses.push({ id: r.id, status: answer.status, body: answer.body });
+      }
+      return { ok: true, status: 200, body: { responses } };
+    }
+
+    if (method === "GET" && path.includes("/format/fill")) {
+      const rect = rectOf(/range\(address='([^']+)'\)/.exec(path)?.[1] ?? "");
+      if (!rect) return { ok: true, status: 200, body: { color: null } };
+      const hit = (r: number, c: number) =>
+        YELLOW.some((y) => r >= y.r1 && r <= y.r2 && c >= y.c1 && c <= y.c2);
+      const all = hit(rect.r1, rect.c1) && hit(rect.r2, rect.c2);
+      const none = YELLOW.every(
+        (y) => rect.r2 < y.r1 || rect.r1 > y.r2 || rect.c2 < y.c1 || rect.c1 > y.c2,
+      );
+      return { ok: true, status: 200, body: { color: all ? "#FFFF00" : none ? "#FFFFFF" : null } };
+    }
+    if (method === "GET" && path.includes("/format/font")) {
+      return {
+        ok: true,
+        status: 200,
+        body: { name: "Calibri", size: 11, color: "#000000", bold: false, italic: false, underline: "None" },
+      };
+    }
+    if (method === "GET" && path.includes("/format")) {
+      return { ok: true, status: 200, body: { columnWidth: 14.5, horizontalAlignment: "General" } };
+    }
+    return { ok: true, status: 200, body: {} };
+  };
+
+  await dressSheetLikeTemplate(graph, ITEM, "Template", "ATT", "A1:R30");
+
+  const painted = calls.filter(
+    (c) =>
+      c.method === "PATCH" &&
+      c.path.includes("/format/fill") &&
+      String((c.body as { color?: string }).color).toUpperCase() === "#FFFF00",
+  );
+
+  assert.ok(painted.length > 0, "Template's own yellow is still copied across");
+
+  const covered = new Set<string>();
+  for (const w of painted) {
+    const rect = rectOf(/range\(address='([^']+)'\)/.exec(w.path)?.[1] ?? "")!;
+    for (let r = rect.r1; r <= rect.r2; r++) {
+      for (let c = rect.c1; c <= rect.c2; c++) covered.add(`${r}:${c}`);
+    }
+  }
+
+  // Named, because these two are the cells the desk reported.
+  assert.equal(covered.has("24:17"), false, "Q24 is not yellow — Template has nothing there");
+  assert.equal(covered.has("24:18"), false, "R24 is not yellow — Template has nothing there");
+  assert.equal(covered.has("23:13"), false, "nor M23");
+  assert.equal(covered.has("23:14"), false, "nor N23");
+
+  // And the general rule the two cells were only a symptom of.
+  for (const cell of covered) {
+    const [r, c] = cell.split(":").map(Number);
+    assert.ok(
+      YELLOW.some((y) => r >= y.r1 && r <= y.r2 && c >= y.c1 && c <= y.c2),
+      `row ${r} column ${c} was painted yellow and Template has no fill there`,
+    );
+  }
+
+  // The real cells did come across, so this is not passing by painting nothing.
+  assert.equal(covered.has("23:10"), true, "J23 is yellow, as Template has it");
+  assert.equal(covered.has("24:16"), true, "and P24");
 });

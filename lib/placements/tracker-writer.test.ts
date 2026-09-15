@@ -71,16 +71,28 @@ const TEMPLATE_COLUMN_WIDTH = 14.5;
  * splitting the ones that are not.
  */
 const TEMPLATE_FILL = (row: number): string =>
-  row <= 2 ? "#FFFF00" : row === 3 ? "#000000" : "#FFFFFF";
+  row === 1 ? "#FFFF00" : row === 2 ? "#000000" : row === 3 ? "#434343" : "#FFFFFF";
 
 const TEMPLATE_FONT = (row: number) => ({
   name: "Calibri",
   size: 11,
-  color: row === 3 ? "#FFFFFF" : "#000000",
-  bold: row === 3,
+  color: row === 2 || row === 3 ? "#FFFFFF" : "#000000",
+  bold: row === 2 || row === 3,
   italic: false,
   underline: "None",
 });
+
+/**
+ * Template centres its banner and its column headings and leaves the rest
+ * `General`, which is what a new sheet's cells already are.
+ *
+ * Modelled because the fake did not have it, and a bare `/format` read answering
+ * only `columnWidth` reads as "these cells disagree" to `readAlignment` — so the
+ * alignment scan halved all the way down to 480 single cells against a sheet
+ * that has two uniform bands. The test below counts round trips, and that is
+ * how it noticed.
+ */
+const TEMPLATE_ALIGN = (row: number): string => (row <= 2 ? "Center" : "General");
 
 /** Graph's answer for a range: the value where the cells agree, null where not. */
 function uniformOver<T>(address: string, at: (row: number) => T): T | null {
@@ -285,6 +297,11 @@ function fakeGraph(
         },
       };
     }
+    // Graph answers a merge with 204 and no body. Routed before the format arms
+    // because it is a POST on a range path like every other range call.
+    if (method === "POST" && path.endsWith("/merge")) {
+      return { ok: true, status: 204, body: null };
+    }
     if (method === "GET" && path.includes("/format/fill")) {
       return { ok: true, status: 200, body: { color: uniformOver(addressIn(path), TEMPLATE_FILL) } };
     }
@@ -297,7 +314,17 @@ function fakeGraph(
       return { ok: true, status: 200, body: bordersOver(addressIn(path)) };
     }
     if (method === "GET" && path.includes("/format")) {
-      return { ok: true, status: 200, body: { columnWidth: TEMPLATE_COLUMN_WIDTH } };
+      // One arm, two readers: `$select=columnWidth` always asks about a single
+      // cell, while the alignment scan asks about rectangles and needs `null`
+      // where they disagree — the same uniformity signal as `format/fill`.
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          columnWidth: TEMPLATE_COLUMN_WIDTH,
+          horizontalAlignment: uniformOver(addressIn(path), TEMPLATE_ALIGN),
+        },
+      };
     }
     if (method === "GET" && path.includes("range(address=")) {
       const sheet = sheetIn(path);
@@ -547,8 +574,14 @@ test("tracker: the replay carries Template's column widths", async () => {
   assert.equal(res.ok, true);
   assert.equal(res.notes, undefined, "nothing degraded, so nothing to report");
 
+  // Narrowed to what they carry, not to where they go: alignment is written on
+  // `/format` too, so the path alone no longer identifies a width write.
   const widths = calls.filter(
-    (c) => c.method === "PATCH" && /\/format$/.test(c.path) && c.path.includes("PGF"),
+    (c) =>
+      c.method === "PATCH" &&
+      /\/format$/.test(c.path) &&
+      c.path.includes("PGF") &&
+      Object.hasOwn(c.body as object, "columnWidth"),
   );
   // Template's used range is A1:P30 — sixteen columns, A through P.
   assert.equal(widths.length, 16);
@@ -572,14 +605,15 @@ test("tracker: the rebuilt tab is shaded like Template", async () => {
     );
 
   const fills = painted("fill");
-  assert.deepEqual(fills.get("A1:P2"), { color: "#FFFF00" }, "the yellow banner, in one write");
-  assert.deepEqual(fills.get("A3:P3"), { color: "#000000" }, "the black header band");
+  assert.deepEqual(fills.get("A1:P1"), { color: "#FFFF00" }, "the yellow banner, in one write");
+  assert.deepEqual(fills.get("A2:P2"), { color: "#000000" }, "the black header band");
+  assert.deepEqual(fills.get("A3:P3"), { color: "#434343" }, "the terms row under it");
   // White is left alone: Graph reports an unfilled cell as #FFFFFF too, and a
   // white fill would hide the gridlines a plain area is meant to show.
   assert.equal(fills.has("A4:P30"), false, "the plain cells stay unfilled");
 
   const fonts = painted("font");
-  assert.deepEqual(fonts.get("A3:P3"), {
+  assert.deepEqual(fonts.get("A2:P3"), {
     name: "Calibri",
     size: 11,
     color: "#FFFFFF",
@@ -587,6 +621,23 @@ test("tracker: the rebuilt tab is shaded like Template", async () => {
     italic: false,
     underline: "None",
   });
+
+  // Alignment travels with the rest of the look. Without it the tab took
+  // Template's text, fill and font and then rendered all of it left-aligned.
+  const aligned = new Map(
+    calls
+      .filter((c) => c.method === "PATCH" && /\/format$/.test(c.path) && c.path.includes("PGF"))
+      .map((c) => [addressIn(c.path), c.body]),
+  );
+  assert.deepEqual(aligned.get("A1:P2"), { horizontalAlignment: "Center" }, "the centred bands");
+
+  // And the banner is MERGED, because `CenterAcrossSelection` does not survive
+  // this API — see `bannerRange`. `A1:P1` is Template's row-1 band, read off the
+  // plan rather than named here.
+  const merges = calls.filter((c) => c.method === "POST" && c.path.endsWith("/merge"));
+  assert.equal(merges.length, 1, "one merge, on one row");
+  assert.equal(addressIn(merges[0].path), "A1:P1");
+  assert.ok(merges[0].path.includes("PGF"), "on the new tab, never on Template");
 
   // Read from Template, written to the new tab — never the other way round.
   const reads = calls.filter((c) => c.method === "GET" && c.path.includes("/format/"));
@@ -729,8 +780,16 @@ test("tracker: fills and fonts split; borders have to walk every cell", async ()
   const readsOf = (kind: string) =>
     calls.filter((c) => c.method === "GET" && c.path.includes(`/format/${kind}`)).length;
 
+  // `format?$select=horizontalAlignment` is a bare `/format` read, so it is
+  // counted by what it selects rather than by a path segment.
+  const alignReads = calls.filter(
+    (c) => c.method === "GET" && c.path.includes("horizontalAlignment"),
+  ).length;
+
   assert.ok(readsOf("fill") < 60, `fills should halve, not walk — got ${readsOf("fill")}`);
   assert.ok(readsOf("font") < 60, `fonts should halve, not walk — got ${readsOf("font")}`);
+  assert.ok(alignReads > 0, "alignment is scanned at all");
+  assert.ok(alignReads < 60, `alignment should halve, not walk — got ${alignReads}`);
 
   // A1:P30 is 480 cells, and the border scan asks about each of them exactly
   // once. Pinned rather than bounded: if this number ever drops, something has
@@ -739,7 +798,7 @@ test("tracker: fills and fonts split; borders have to walk every cell", async ()
 
   // And they go out batched: twenty independent reads per HTTP request.
   const batches = calls.filter((c) => c.path === "/$batch");
-  const reads = readsOf("fill") + readsOf("font") + readsOf("borders");
+  const reads = readsOf("fill") + readsOf("font") + readsOf("borders") + alignReads;
   assert.ok(batches.length > 0, "the scan is batched");
   assert.ok(
     batches.length < reads / 10,

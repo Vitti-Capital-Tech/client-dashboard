@@ -417,8 +417,24 @@ export type TemplateBorder = { style: string; color: string; weight: string };
  */
 export type TemplateBorders = Record<string, TemplateBorder>;
 
+/**
+ * `Center`, or null where the cells disagree — the same uniformity signal
+ * `readFill` uses, on `RangeFormat.horizontalAlignment`.
+ */
+function readAlignment(body: unknown): string | null {
+  const value = (body as { horizontalAlignment?: unknown } | null)?.horizontalAlignment;
+  return typeof value === "string" && value.trim() !== "" ? value : null;
+}
+
+/**
+ * `General` is what a new sheet's cells already are, so a region of it is a
+ * write that changes nothing — and on this Template it is most of the sheet.
+ * Dropped for the same reason `isDefaultFill` drops white.
+ */
+const isDefaultAlignment = (value: string) => value.trim().toLowerCase() === "general";
+
 /** The formatting properties recovered by their own scan. */
-export type ScannedProperty = "fills" | "fonts" | "borders";
+export type ScannedProperty = "fills" | "fonts" | "borders" | "alignments";
 
 export type TemplatePlan = {
   /** Template's used range, as the local address the new tab shares. */
@@ -428,6 +444,21 @@ export type TemplatePlan = {
   fonts: Region<TemplateFont>[];
   /** Merged only where that cannot lose a line — see `bordersMergeable`. */
   borders: Region<TemplateBorders>[];
+  /**
+   * Horizontal alignment, which was the one visible property nothing carried.
+   *
+   * Template centres its banner and its column headings; a new tab was getting
+   * the text, the fill and the font and then rendering all of it left-aligned,
+   * because a plan of fills/fonts/borders has nowhere to say so. The desk
+   * reported the banner: "Only Edit Field Highlighted in Yellow should come in
+   * center."
+   *
+   * Optional on the TYPE as well as at every use, because a plan stored before
+   * this existed is still a valid plan — `tracker-style-store.ts` reads JSON
+   * written by an earlier deploy, and a missing key there must mean "this plan
+   * says nothing about alignment", not a crash in the paint.
+   */
+  alignments?: Region<string>[];
   /**
    * Which scans ran out of budget — empty when the plan is complete. What is
    * present is always right; this says what is MISSING, and naming the property
@@ -843,6 +874,15 @@ export async function readTemplatePlan(
     sessionId,
   );
 
+  const align = await scanUniform(
+    graph,
+    root,
+    (address) => `${rangePath(item, templateSheet, address)}/format?$select=horizontalAlignment`,
+    readAlignment,
+    { left: perProperty },
+    sessionId,
+  );
+
   // Not `scanUniform`: borders have no uniformity signal to scan on. See
   // `readCellBorders` for the measurement that says so.
   const border = await scanBordersPerCell(
@@ -860,14 +900,16 @@ export async function readTemplatePlan(
     fonts: font.regions,
     // A region with no edges at all is most of a sheet, and carries no write.
     borders: border.regions.filter((r) => Object.keys(r.value).length > 0),
+    alignments: align.regions.filter((r) => !isDefaultAlignment(r.value)),
     incomplete: [
       ...(fill.truncated ? (["fills"] as const) : []),
       ...(font.truncated ? (["fonts"] as const) : []),
       ...(border.truncated ? (["borders"] as const) : []),
+      ...(align.truncated ? (["alignments"] as const) : []),
     ],
   };
 
-  ensurePlacementStyleCompleteness(plan);
+  applyDeskStyleRules(plan);
 
   planCache.set(key, { at: Date.now(), plan });
   return plan;
@@ -935,101 +977,84 @@ export function clampClientInputYellow(fills: Region<string>[]): Region<string>[
 }
 
 /**
- * Guarantees that essential placement template formatting (yellow edit fields,
- * black header bands with bold white text, Total rows, and fee tables) are
- * always complete and never dropped even if a scan was partially truncated.
+ * The desk's one deliberate deviation from Template, and nothing else.
+ *
+ * ── What this used to do, and why it was wrong ───────────────────────────────
+ * It also "guaranteed" five rectangles of formatting — the top banner, the two
+ * black header bands, the client input block and the fee table — by pushing a
+ * hardcoded rectangle whenever a predicate said the scan had not produced one.
+ * Every one of those rectangles was written from memory rather than from the
+ * workbook, and every one of them was wrong. Read from the live Template on
+ * 15 Sep 2026:
+ *
+ *   guessed                    Template actually has
+ *   A1:Q1  yellow banner       A1:N1
+ *   A2:Q2  black header        A2:O2
+ *   L23:N23 fee header         J23:L23
+ *   P24:R24 fee header         N24:P24
+ *
+ * Four of the five predicates happened to be satisfied by the real scan, so
+ * those guesses never fired and nobody found out. The fifth tested
+ * `r1 === 23 && c1 >= 12` against a region that starts at column J (`c1 = 10`),
+ * decided the fee header was missing, and painted BOTH its rectangles two
+ * columns to the right of the real ones — which is how `M23:N23` and `Q24:R24`
+ * came to be yellow on every tab this has ever produced. The desk reported it:
+ * "Q24 and R24 should not be yellow, those cells not part of template."
+ *
+ * This is the same fault the border fallback had and was removed for, in the
+ * same file, for the same stated reason: **the one module whose entire job is
+ * to match Template must not invent formatting Template does not have.** A
+ * truncated scan is reported through `plan.incomplete`, which says to re-seed
+ * with a bigger budget — a tab missing some shading is visibly incomplete, while
+ * a tab shaded from a guess looks finished and is wrong.
+ *
+ * ── What is left ────────────────────────────────────────────────────────────
+ * The clamp, which is not a guess and not a completion. It is a deviation the
+ * desk asked for and sized themselves: Template shades the client input columns
+ * for fifteen rows, a placement carries five to seven bids, and the rows past
+ * the block are a hunt through empty cells. See `clampClientInputYellow`.
  */
-function ensurePlacementStyleCompleteness(plan: TemplatePlan): void {
-  const yellow = "#FFFF00";
-  const black = "#000000";
-
-  // Template paints the client inputs yellow all the way down to row 21; the
-  // desk only ever fills the first few. Trim before anything else reads the
-  // list, so the checks below judge the clamped block rather than Template's.
+function applyDeskStyleRules(plan: TemplatePlan): void {
   plan.fills = clampClientInputYellow(plan.fills);
+}
 
-  // 1. Ensure Top Banner A1:Q1 is Yellow
-  if (!plan.fills.some((f) => f.rect.r1 === 1 && f.value.toUpperCase() === yellow)) {
-    plan.fills.push({ rect: { r1: 1, c1: 1, r2: 1, c2: 17 }, value: yellow });
-  }
-
-  // 2. Ensure Row 2 (Headers) A2:Q2 is Black with Bold White font
-  if (!plan.fills.some((f) => f.rect.r1 === 2 && f.value.toUpperCase() === black)) {
-    plan.fills.push({ rect: { r1: 2, c1: 1, r2: 2, c2: 17 }, value: black });
-  }
-  if (!plan.fonts.some((f) => f.rect.r1 === 2 && f.value.color.toUpperCase() === "#FFFFFF")) {
-    plan.fonts.push({
-      rect: { r1: 2, c1: 1, r2: 2, c2: 17 },
-      value: { name: "Calibri", size: 11, color: "#FFFFFF", bold: true, italic: false, underline: "None" },
-    });
-  }
-
-  // 3. Ensure Row 6 Total A6:B6 is Black with Bold White font
-  if (!plan.fills.some((f) => f.rect.r1 === 6 && f.rect.c1 === 1 && f.value.toUpperCase() === black)) {
-    plan.fills.push({ rect: { r1: 6, c1: 1, r2: 6, c2: 2 }, value: black });
-  }
-  if (!plan.fonts.some((f) => f.rect.r1 === 6 && f.rect.c1 === 1 && f.value.color.toUpperCase() === "#FFFFFF")) {
-    plan.fonts.push({
-      rect: { r1: 6, c1: 1, r2: 6, c2: 2 },
-      value: { name: "Calibri", size: 11, color: "#FFFFFF", bold: true, italic: false, underline: "None" },
-    });
-  }
-
-  // 4. Ensure the client input block (Round Shares and Actual $) is yellow for
-  //    as many rows as the desk actually uses — see CLIENT_INPUT_LAST_ROW.
-  const hasClientYellow = plan.fills.some(
-    (f) =>
-      f.value.toUpperCase() === yellow &&
-      f.rect.c1 <= CLIENT_INPUT_COLS.c1 &&
-      f.rect.c2 >= CLIENT_INPUT_COLS.c2 &&
-      f.rect.r1 <= CLIENT_INPUT_FIRST_ROW &&
-      f.rect.r2 >= CLIENT_INPUT_LAST_ROW,
+/**
+ * The banner across the top of a tab — Template's row 1 — as an address.
+ *
+ * ── Why a merge, when everything else here is a format ──────────────────────
+ * `ONLY EDIT FIELDS HIGHLIGHTED IN YELLOW` lives in `A1` and has to read as
+ * centred across the whole yellow band. Excel has two ways to do that and only
+ * one of them survives this API:
+ *
+ *   - `CenterAcrossSelection` (`centerContinuous`) is the one that needs no
+ *     merge. Graph ACCEPTS it — `PATCH .../format` answers 200 — and Excel then
+ *     normalises it straight back to `Center` on every cell but the last. Read
+ *     back immediately, `A1` through `N1` say `Center` and only `O1` holds it,
+ *     which renders as nothing at all. Measured on the live Template, both as
+ *     one range PATCH and as fifteen per-cell ones. A plain `Right` written the
+ *     same way reads back as `Right`, so this is Excel normalising a value it
+ *     will not keep, not a write failing.
+ *   - Merging works, and is what the desk's own Template now does.
+ *
+ * ── Why it is derived and not a constant ───────────────────────────────────
+ * The band is whatever Template shades on row 1 — it ran `A1:N1` until the desk
+ * extended it over `TRADE BOOKED`. Reading it off the scan means the merge
+ * follows Template the next time it moves, and means this file still contains
+ * no rectangle of its own. `applyDeskStyleRules` says why that matters.
+ *
+ * Null when row 1 carries no multi-column fill, which is a Template with no
+ * banner: nothing is merged and nothing is reported.
+ */
+export function bannerRange(plan: TemplatePlan): string | null {
+  const bands = (plan.fills ?? []).filter(
+    (f) => f.rect.r1 === 1 && f.rect.r2 === 1 && f.rect.c2 > f.rect.c1,
   );
-  if (!hasClientYellow) {
-    plan.fills.push({
-      rect: { r1: CLIENT_INPUT_FIRST_ROW, c1: CLIENT_INPUT_COLS.c1, r2: CLIENT_INPUT_LAST_ROW, c2: CLIENT_INPUT_COLS.c2 },
-      value: yellow,
-    });
-    plan.fills.push({
-      rect: { r1: 5, c1: CLIENT_INPUT_COLS.c1, r2: 6, c2: CLIENT_INPUT_COLS.c2 },
-      value: yellow,
-    });
-  }
+  if (bands.length === 0) return null;
 
-  // 5. Ensure Fee table headers (L23:N23 and P24:R24) are Yellow with Bold text
-  const hasFeeYellow = plan.fills.some(
-    (f) => f.value.toUpperCase() === yellow && f.rect.r1 === 23 && f.rect.c1 >= 12,
+  const widest = bands.reduce((a, b) =>
+    b.rect.c2 - b.rect.c1 > a.rect.c2 - a.rect.c1 ? b : a,
   );
-  if (!hasFeeYellow) {
-    plan.fills.push({ rect: { r1: 23, c1: 12, r2: 23, c2: 14 }, value: yellow });
-    plan.fills.push({ rect: { r1: 24, c1: 16, r2: 24, c2: 18 }, value: yellow });
-  }
-  if (!plan.fonts.some((f) => f.rect.r1 === 23 && f.rect.c1 >= 12)) {
-    plan.fonts.push({
-      rect: { r1: 23, c1: 12, r2: 23, c2: 14 },
-      value: { name: "Calibri", size: 11, color: "#000000", bold: true, italic: false, underline: "None" },
-    });
-    plan.fonts.push({
-      rect: { r1: 24, c1: 16, r2: 24, c2: 18 },
-      value: { name: "Calibri", size: 11, color: "#000000", bold: true, italic: false, underline: "None" },
-    });
-  }
-
-  // 7. Borders are NOT completed from a hardcoded guess any more.
-  //
-  // There used to be a fallback here that drew a full thin grid over `A5:P21`
-  // and `M25:R30` whenever the border scan came back empty or short. It never
-  // fired, because the broken scan always returned exactly one region — and that
-  // was lucky, because **Template has no borders on the client table at all**.
-  // Verified against the live sheet: `Template!A5:P22` answers with no lines on
-  // any side, and the grid the desk sees there is Excel's own gridlines showing
-  // through unfilled cells, which a new tab gets for free.
-  //
-  // So the fallback would have painted a grid Template does not have, on the one
-  // module whose entire job is to match it. With `scanBordersPerCell` the scan is
-  // exact rather than a guess, and a truncated one is reported by
-  // `plan.incomplete` — which says to re-seed with a bigger budget instead of
-  // quietly inventing lines.
+  return addressOf(widest.rect);
 }
 
 /**
@@ -1069,6 +1094,14 @@ export async function paintSheetLikeTemplate(
       url: `${rangePath(item, sheet, addressOf(f.rect))}/format/font`,
       body: f.value,
     })),
+    // Written on `format` itself rather than on a sub-resource, which is why
+    // this is one PATCH per region and not one per edge like the borders.
+    ...(plan.alignments ?? []).map((a, i) => ({
+      id: `align:${i}`,
+      method: "PATCH",
+      url: `${rangePath(item, sheet, addressOf(a.rect))}/format`,
+      body: { horizontalAlignment: a.value },
+    })),
     // The one property that costs more to write than to read: the collection
     // comes back in a single GET, but each edge is its own PATCH. Only the
     // sides that carry a line are sent — a new tab has no borders to clear.
@@ -1084,12 +1117,13 @@ export async function paintSheetLikeTemplate(
 
   const answers = await runBatch(graph, requests, sessionId);
 
-  const failed = { width: 0, fill: 0, font: 0, border: 0 };
+  const failed = { width: 0, fill: 0, font: 0, border: 0, align: 0 };
   const total = {
     width: plan.widths.length,
     fill: plan.fills.length,
     font: plan.fonts.length,
     border: plan.borders.reduce((n, b) => n + Object.keys(b.value).length, 0),
+    align: (plan.alignments ?? []).length,
   };
   for (const r of requests) {
     if (ok(answers.get(r.id))) continue;
@@ -1101,10 +1135,10 @@ export async function paintSheetLikeTemplate(
       `${failed.width} of ${total.width} column widths on "${sheet}" did not copy across; the tab computes but is narrower than Template.`,
     );
   }
-  if (failed.fill > 0 || failed.font > 0 || failed.border > 0) {
+  if (failed.fill > 0 || failed.font > 0 || failed.border > 0 || failed.align > 0) {
     notes.push(
-      `${failed.fill + failed.font + failed.border} of ` +
-        `${total.fill + total.font + total.border} formatting writes on "${sheet}" ` +
+      `${failed.fill + failed.font + failed.border + failed.align} of ` +
+        `${total.fill + total.font + total.border + total.align} formatting writes on "${sheet}" ` +
         `were refused, so parts of it are not shaded like Template.`,
     );
   }
@@ -1120,6 +1154,34 @@ export async function paintSheetLikeTemplate(
           ? ` — check the header bands, whose white type may not have been applied.`
           : `.`),
     );
+  }
+
+  // The banner is merged AFTER the batch and in this order on purpose: the
+  // fills have landed by now, so the merged cell inherits the yellow rather
+  // than racing it, and `$batch` does not promise to run its contents in the
+  // order they were listed. Two sequential calls are affordable for one row.
+  const banner = bannerRange(plan);
+  if (banner) {
+    const headers = sessionId ? { "workbook-session-id": sessionId } : undefined;
+    const merged = await graph(`${rangePath(item, sheet, banner)}/merge`, {
+      method: "POST",
+      body: { across: false },
+      ...(headers ? { headers } : {}),
+    });
+    if (merged.ok) {
+      await graph(`${rangePath(item, sheet, banner)}/format`, {
+        method: "PATCH",
+        body: { horizontalAlignment: "Center" },
+        ...(headers ? { headers } : {}),
+      });
+    } else {
+      // Cosmetic, like everything else in here: the tab is filed and the banner
+      // is still yellow, it just sits left rather than across the band.
+      notes.push(
+        `The banner on "${sheet}" (${banner}) could not be merged, so its heading reads ` +
+          `from the left rather than centred across the band: ${JSON.stringify(merged.body).slice(0, 160)}`,
+      );
+    }
   }
 
   return notes;

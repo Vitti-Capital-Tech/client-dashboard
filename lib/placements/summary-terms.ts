@@ -294,6 +294,44 @@ function expiryFromTerm(issueDate: string, years: number): string | undefined {
   return `${pad(Math.min(d, lastDay))}/${pad(endMonth + 1)}/${String(endYear).slice(-2)}`;
 }
 
+/** `Dec` → 12. Long and short, since summaries use both. */
+const MONTH_NAMES: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12,
+};
+
+/**
+ * The expiry a bullet states OUTRIGHT, as against the term it states as a span.
+ *
+ * `expiryFromTerm` handles "three-year options", which is how every summary
+ * that carried a grant wrote it until CC9 wrote the other way — "(exercise
+ * price $0.10, expiring 19 Dec 2028)". A stated date is the stronger of the
+ * two: there is nothing to add to an issue date and nothing to round, so it is
+ * preferred where both are present.
+ *
+ * Read only after `expiring` / `expiry` / `expires`, so a date sitting
+ * elsewhere in the same bullet is not mistaken for the option's life — CC9's
+ * own summary carries "announced 18 Aug 2026" and "matures 26 Mar 2027", and
+ * either would be a plausible-looking wrong answer.
+ */
+function expiryStated(raw: string): string | undefined {
+  const LEAD = String.raw`\bexpir(?:ing|es|y|ation)\b[^.]{0,20}?\b`;
+  const named = new RegExp(LEAD + String.raw`(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})`, "i").exec(raw);
+  const slashed = new RegExp(LEAD + String.raw`(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})`, "i").exec(raw);
+  const m = named ?? slashed;
+  if (!m) return undefined;
+
+  const day = Number(m[1]);
+  const month = /^\d+$/.test(m[2])
+    ? Number(m[2])
+    : (MONTH_NAMES[m[2].slice(0, 4).toLowerCase()] ?? MONTH_NAMES[m[2].slice(0, 3).toLowerCase()]);
+  const year = Number(m[3]);
+  if (!day || !month || !year || day > 31 || month > 12) return undefined;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(day)}/${pad(month)}/${String(year).slice(-2)}`;
+}
+
 /**
  * The attaching-options grant, composed from the summary's prose.
  *
@@ -331,7 +369,10 @@ export function attachingOptionsFromSummary(
   summary: string,
   issueDate: string | null | undefined,
 ): string | undefined {
-  if (!issueDate) return undefined;
+  // No early return on a missing issue date: a bullet that states its expiry
+  // outright does not need one. Where the expiry has to be computed from a
+  // term, `expiryFromTerm` is simply not reached and the bullet is refused for
+  // want of an expiry, which is the same answer arrived at honestly.
 
   for (const line of (summary ?? "").split("\n")) {
     const raw = line.trim();
@@ -353,8 +394,15 @@ export function attachingOptionsFromSummary(
     const NUM = String.raw`\d+|one|two|three|four|five`;
     let ratio: string | undefined;
 
+    // Up to three short words may sit between the count and the noun, and they
+    // are not decoration: CC9 names the instrument — "1 CC9O listed option for
+    // every 2 new shares" — where the earlier summaries wrote at most "1 free
+    // attaching option for every 2 shares", which is all the old pattern
+    // allowed. Bounded at three tokens and non-greedy so it cannot reach across
+    // a clause. What keeps this honest is not the tightness of this one pattern
+    // but the ratio AND strike AND expiry conjunction every bullet must satisfy.
     const forEvery = new RegExp(
-      String.raw`(${NUM})\s+(?:free[\s-]*)?(?:attaching\s+)?options?\s+for\s+every\s+(${NUM})\b`,
+      String.raw`(${NUM})\s+(?:[A-Za-z0-9$.]+\s+){0,3}?options?\s+for\s+every\s+(${NUM})\b`,
       "i",
     ).exec(raw);
     const dashed = /(\d+)\s*-?\s*(?:for|:)\s*-?\s*(\d+)\s*(?:basis|free|attaching|option)/i.exec(raw);
@@ -388,15 +436,26 @@ export function attachingOptionsFromSummary(
     ).exec(raw);
     const cents = new RegExp(STRIKE_LEAD + String.raw`([\d,]+(?:\.\d+)?)\s*c\b`, "i").exec(raw);
 
-    if (dollars) strike = Number(dollars[1].replace(/,/g, ""));
-    else if (cents) strike = Number(cents[1].replace(/,/g, "")) / 100;
-    if (strike === undefined || !Number.isFinite(strike) || strike <= 0) continue;
+    // Kept as WRITTEN as well as parsed. The desk types a strike as `0.10`;
+    // `Number("0.10")` prints `0.1`, and the cell is read by people. The number
+    // is what validates, the text is what is shown.
+    let strikeText: string | undefined;
+    if (dollars) {
+      strikeText = dollars[1].replace(/,/g, "");
+      strike = Number(strikeText);
+    } else if (cents) {
+      strike = Number(cents[1].replace(/,/g, "")) / 100;
+      strikeText = String(strike);
+    }
+    if (strike === undefined || !strikeText || !Number.isFinite(strike) || strike <= 0) continue;
 
-    // ── Term → expiry ──────────────────────────────────────────────────────
+    // ── Expiry: stated outright, or computed from the term ─────────────────
+    // A stated date wins — see `expiryStated`. One of the two must be found, so
+    // this stays the third leg of the conjunction the guard rests on.
     const term = /(\d+(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten)\s*-?\s*year/i.exec(raw);
     const years = asNumber(term?.[1]);
-    if (!years) continue;
-    const expiry = expiryFromTerm(issueDate, years);
+    const expiry =
+      expiryStated(raw) ?? (years && issueDate ? expiryFromTerm(issueDate, years) : undefined);
     if (!expiry) continue;
 
     // ── Listing status, only when the bullet states it ─────────────────────
@@ -409,7 +468,7 @@ export function attachingOptionsFromSummary(
     // Spaced exactly as the desk's own cells are — `1:2 @ $ 0.075 Listed Exp
     // 08/09/28` — because `parseAddOnSpec` reads these back, and the shape it
     // has always been handed is the shape it is tested against.
-    return `${ratio} @ $ ${strike} ${listing} Exp ${expiry}`;
+    return `${ratio} @ $ ${strikeText} ${listing} Exp ${expiry}`;
   }
 
   return undefined;
