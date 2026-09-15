@@ -334,6 +334,10 @@ See LLD §8.51.
 
 An **intraday tick** (`/api/alerts/live`, every 10 minutes) now fetches quotes, writes them to `securities.last_price`, and only then runs the scans. Both the alert and the client's Options tab apply that column over the stored spot through one shared function, so there is a single number and nothing for them to disagree about. The tick asks `asxSession()` before doing anything, which is why its cron schedule can be blunt: the trading calendar stays in the tested module rather than being reimplemented in a SQL guard.
 
+The first live alert exposed two things worth recording. A grant **one cent above its strike** produced a technically correct alert that would have repeated every time the price crossed back and forth, so the in-the-money rule became a **hysteresis band** — report at +5% of strike, re-arm only below the strike, silence in between. And the realtime subscription that was meant to move the badge **connected, raised no error and delivered nothing**: it subscribed before the session hydrated from cookies, so the socket authorised as anon and RLS filtered the entire stream. Both failures presented as silence, which is this codebase's recurring shape (see also §8.42, §8.52).
+
+Alerts are now noticeable without the bell being on screen: the unread count rides in the browser tab title, and a synthesised two-note chime plays on arrival — best-effort, since browsers block audio until the visitor has interacted with the page, which is why the count rather than the sound is the channel anything important travels on.
+
 The same tick raises **move alerts on held positions**, gated on magnitude band, materiality and a per-client daily budget — the budget because a market-wide selloff would otherwise bury the exercise-window alert under thirty notices. See LLD §8.52.
 
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)

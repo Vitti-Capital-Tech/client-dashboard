@@ -2189,3 +2189,64 @@ All three are constants at the top of `lib/alerts/moves.ts`, so they are reviewe
 `scan.ts`, `moves.ts` and `lib/glossary.ts` each carry a test asserting their text does not read as advice. A move alert is the easiest place in the entire product to drift into a tip — it is literally *"this thing you own is moving"* — so the regex for it is the strictest of the three, and rejects "opportunity", "worth a look", "running" and "surging" alongside the obvious imperatives.
 
 `SGQ +12.4% today · you hold 40,000 · $18,000 at 0.412 · 10% band` is a fact. Everything a client might do about it is theirs and their adviser's.
+
+### 8.53 What the first real alert taught us (`in_spell`, `AlertsLive` auth, `TabUnreadCount`, `alertSound`)
+
+The scanner's first live alert arrived, correct by its own rules, and was almost useless:
+
+> **OD6-UO is in the money** · underlying $0.11 vs strike $0.10 · exercise value $384.61 · 345 days to expiry
+
+One cent above the strike, on a stock whose ordinary day is one cent, with nearly a year still to run. Nothing here is wrong. The problem is what happens next: that grant will cross out and back in within the week, **and each crossing is a genuinely new spell**, so the client collects the same alert five times a fortnight about a position that has not really done anything — and the red exercise-window alerts end up buried underneath it.
+
+#### A single threshold cannot fix an oscillating price
+
+Whatever line is drawn, a price sitting on it crosses it repeatedly. Raising the bar to 10% moves the problem to stocks trading at 10% over their strike; it does not remove it.
+
+Two thresholds can. **Report at +5% of strike; do not report again until the grant has fallen back below the strike.** The gap between the two is silent by construction — that is the whole mechanism, and it is why the entry and exit levels are deliberately different numbers rather than one constant used twice.
+
+| Price path | Alerts |
+| --- | --- |
+| +6% → +1% → +7% → +2% → +8% | **one** — never fell below the strike |
+| +6% → −2% → +12% | **two** — a real fall and a real recovery |
+| +1% → +3% → +4% | **none** — never cleared the band |
+
+Exit is the strike itself rather than a negative number, because "fell out of the money" is a fact a holder would recognise, and requiring a deeper fall would leave a grant that genuinely recovered unable to alert at all.
+
+#### Why this needed another column
+
+`moneyness` alone cannot express it. A grant sitting at +2% is either a spell already reported that has drifted down, or one not yet reported that is drifting up — the same observation, two opposite meanings. `alert_scan_state.in_spell` is the difference between them.
+
+It defaults to `false`, which re-arms every existing row. That is the correct migration rather than a lazy one: rows written under the old rule may have reported a crossing the new rule would not have, and anything genuinely 5% in the money will simply be reported once more.
+
+#### The realtime subscription that connected and delivered nothing
+
+Meanwhile, the badge was not moving without a reload. §8.51 claimed it would.
+
+`AlertsLive` subscribed on mount, synchronously. It connected, raised no error, and carried no events.
+
+**The session is hydrated from cookies asynchronously.** Subscribing before that lands authorises the websocket with the anon key — and `alerts_select` is `is_staff() OR client_id = current_client_id()`, which for anon is false for every row in the table. So RLS did exactly its job and filtered the whole stream.
+
+The reason this survived a review and a production test is the shape of the failure: **an empty stream is indistinguishable from a quiet database.** Nothing threw, no status was an error, and the only symptom was an absence. The same class of bug as §8.42's successful POST that imported nothing, and as the scanner's own `scanned: 0` in §8.52 — three times now, this codebase's characteristic failure has been a silence that looks like calm.
+
+The fix awaits the session and hands its token to the realtime client explicitly before creating the channel. `onAuthStateChange` re-arms it, because an access token expires roughly hourly and a portal left open all day would otherwise go quiet again at the first refresh — a bug that would have been far worse to find, since it would only appear after an hour. `setAuth` updates the socket's credentials in place, so a refresh does not resubscribe and no events fall into a teardown gap.
+
+`subscribe()` now logs `CHANNEL_ERROR` / `TIMED_OUT` / `CLOSED`. One `console.warn` is not observability, but it turns the next occurrence of this into something a developer can see rather than deduce.
+
+#### Two ways to notice an alert without looking at the bell
+
+The bell is only visible on the tab the client is looking at, and a portfolio left open in a background tab all day is how this product is actually used.
+
+**`TabUnreadCount`** puts `(2) Vitti Capital` in the tab title. Next owns the title — it is rewritten from route metadata on every navigation — so the effect reruns on `pathname` as well as the count, and strips any existing `(n) ` before writing a fresh one. Reading `document.title` rather than holding a remembered copy means a route that sets its own title keeps it, and the strip-then-prefix order makes the effect idempotent: it cannot produce `(2) (2) Vitti Capital`.
+
+**`alertSound`** plays a two-note chime, synthesised in Web Audio rather than loaded as a file — a short chime is twenty lines of code or twenty kilobytes of mp3, plus a request that can fail and an asset somebody has to maintain. Peak gain is 0.12 deliberately: this fires on a screen someone may have open all day beside other work, and a sound they reach to mute is a sound that gets muted permanently.
+
+#### The browser rule that makes sound best-effort, and what to do about it
+
+Browsers refuse to let a page make noise before the visitor has interacted with it. An `AudioContext` created on load starts **suspended**, and `resume()` only succeeds after a real click, key press or tap.
+
+So a client who loads the portal and leaves it untouched gets no chime for the first alert. There is no way around this and no way to detect it in advance. The code is deliberately silent about the failure — a portfolio screen logging errors about a chime is worse than a chime that occasionally does not play.
+
+Two consequences shaped the design:
+
+- **The speaker toggle plays the chime when switched on.** It confirms what was enabled, and — more importantly — that click *is* the interaction, so the switch doubles as the thing that unlocks audio on a tab nobody has touched.
+- **The tab count is the reliable channel and the sound is the courtesy.** The count is always correct; the chime is best-effort. Anything that must not be missed belongs in the count, the badge and the alert row — never in the sound alone.
