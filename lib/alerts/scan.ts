@@ -61,8 +61,16 @@ export type ScannableOption = {
 /** What the last scan saw, so this one can tell a crossing from a continuation. */
 export type OptionScanState = {
   moneyness: Moneyness;
-  /** Increments each time the grant crosses INTO the money. */
+  /** Increments each time the grant crosses INTO the money past the band. */
   spell: number;
+  /**
+   * Inside a reported in-the-money spell.
+   *
+   * Set when an ITM alert fires and cleared only when the grant falls back
+   * BELOW its strike. While it is set no further ITM alert can fire, which is
+   * what stops a grant sitting near its strike from chattering.
+   */
+  inSpell: boolean;
 };
 
 export type ScannedAlert = {
@@ -88,6 +96,49 @@ const EXPIRY_LADDER = [30, 14, 7, 3, 1] as const;
 
 /** Inside this many days, an exercisable unlisted grant is the red case. */
 const URGENT_DAYS = 14;
+
+/**
+ * The in-the-money band, as a percentage of the strike.
+ *
+ * ── Why a band and not a line ───────────────────────────────────────────────
+ * The first production run raised this, correctly by its own rules and useless
+ * in practice:
+ *
+ *   OD6-UO is in the money · underlying $0.11 vs strike $0.10
+ *
+ * One cent above the strike, on a stock whose ordinary day is one cent. It
+ * would have crossed out and back in within the week, and each crossing is a
+ * genuinely new spell, so the client would have collected the same alert five
+ * times a fortnight about a grant that had not really done anything.
+ *
+ * A single threshold cannot fix that — whatever line you draw, a price sitting
+ * on it oscillates across it. Two thresholds can: report at ENTER, and do not
+ * report again until the grant has fallen past EXIT. Between them nothing
+ * happens, so the noise band around the strike is silent by construction.
+ *
+ * EXIT is the strike itself rather than a negative number, because "fell out of
+ * the money" is a fact a holder would recognise, and requiring it to fall
+ * further would leave a grant that genuinely recovered unable to alert.
+ */
+const ITM_ENTER_PCT = 5;
+const ITM_EXIT_PCT = 0;
+
+/**
+ * How far in the money, as a percentage of the strike. Negative when out.
+ *
+ * Null when it cannot be answered — no strike, no quote, or a zero strike,
+ * which would make the percentage meaningless rather than infinite.
+ */
+export function edgePct(
+  spot: number | null,
+  strike: number | null,
+  kind: "Call" | "Put" | null,
+): number | null {
+  if (spot === null || strike === null || !(strike > 0)) return null;
+  if (!Number.isFinite(spot) || !Number.isFinite(strike)) return null;
+  const edge = kind === "Put" ? strike - spot : spot - strike;
+  return (edge / strike) * 100;
+}
 
 const DAY_MS = 86_400_000;
 
@@ -137,20 +188,26 @@ export function scanOption(
   if (dte < 0) return { alerts: [], state: null };
 
   /**
-   * A crossing INTO the money, counted.
+   * A crossing INTO the money, past the band, counted.
    *
-   * `unknown` — no strike, or no quote for the underlying — is deliberately not
-   * a crossing in either direction. Treating missing data as "went out of the
-   * money" would end the spell, and the next quote that arrived would read as a
-   * fresh crossing and fire a second alert about a grant that never moved.
+   * `edge === null` — no strike, or no quote for the underlying — changes
+   * nothing in either direction. Treating missing data as "fell out of the
+   * money" would re-arm the alert, and the next quote to arrive would read as a
+   * fresh crossing and fire a second time about a grant that never moved.
    */
-  const wasItm = prev?.moneyness === "ITM";
-  const unknown = m.moneyness === "unknown";
-  const crossedIn = m.isItm && !wasItm;
+  const edge = edgePct(o.under, o.strike, o.type);
+  const wasInSpell = prev?.inSpell ?? false;
+
+  const crossedIn = !wasInSpell && edge !== null && edge >= ITM_ENTER_PCT;
+  // Re-armed only by falling back below the strike, not by dipping under the
+  // entry band — that gap IS the hysteresis.
+  const fellOut = wasInSpell && edge !== null && edge < ITM_EXIT_PCT;
+
   const spell = (prev?.spell ?? 0) + (crossedIn ? 1 : 0);
   const state: OptionScanState = {
-    moneyness: unknown ? (prev?.moneyness ?? "unknown") : m.moneyness,
+    moneyness: m.moneyness === "unknown" ? (prev?.moneyness ?? "unknown") : m.moneyness,
     spell,
+    inSpell: crossedIn ? true : fellOut ? false : wasInSpell,
   };
 
   const alerts: ScannedAlert[] = [];
@@ -214,6 +271,7 @@ export function scanOption(
    * grant on one morning is how a bell starts getting ignored.
    */
   if (crossedIn && !(!o.listed && dte <= URGENT_DAYS)) {
+    const edgeStr = edge === null ? "" : `${edge >= 0 ? "+" : ""}${edge.toFixed(1)}% vs strike`;
     alerts.push({
       ...base,
       kind: "itm",
@@ -221,9 +279,12 @@ export function scanOption(
       title: `${o.code} is in the money`,
       subtitle: [
         `underlying ${underStr} vs strike ${strikeStr}`,
+        edgeStr,
         `exercise value ${money(m.intrinsicValue)}`,
         `${days} to expiry`,
-      ].join(" · "),
+      ]
+        .filter(Boolean)
+        .join(" · "),
       key: `itm:${o.id}:${spell}`,
     });
   }

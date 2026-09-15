@@ -33,6 +33,8 @@ import {
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
 import { AlertsLive } from "@/app/components/AlertsLive";
+import { TabUnreadCount } from "@/app/components/TabUnreadCount";
+import { AlertSoundToggle } from "@/app/components/AlertSoundToggle";
 import { signOut, setActiveAccount } from "@/app/actions/session";
 import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 import { Wordmark } from "@/app/components/Wordmark";
@@ -742,12 +744,15 @@ export function PortalShell({
       <div className={`fixed top-0 right-0 w-98 max-w-[94vw] h-full bg-paper border-l border-line z-50 shadow-shadow-lg transition-all duration-300 transform flex flex-col ${isAlertsOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="flex justify-between items-center px-4.5 py-3 border-b border-line bg-paper sticky top-0 z-10">
           <h3 className="font-disp text-xl font-medium text-ink">Alerts</h3>
-          <button
-            onClick={() => setIsAlertsOpen(false)}
-            className="p-1.5 rounded-[9px] hover:bg-white text-ink cursor-pointer"
-          >
-            <X className="w-4.75 h-4.75 stroke-[1.7]" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <AlertSoundToggle />
+            <button
+              onClick={() => setIsAlertsOpen(false)}
+              className="p-1.5 rounded-[9px] hover:bg-white text-ink cursor-pointer"
+            >
+              <X className="w-4.75 h-4.75 stroke-[1.7]" />
+            </button>
+          </div>
         </div>
         <div className="p-4.5 overflow-y-auto flex-1 space-y-2.5">
           {alerts.length === 0 ? (
@@ -967,6 +972,10 @@ export function PortalShell({
       {/* Nudges the server to re-fetch when a scan writes an alert. Renders
           nothing; see app/components/AlertsLive.tsx. */}
       <AlertsLive />
+
+      {/* `(2) Vitti Capital` in the tab, so a portal left in a background tab
+          still shows what the bell would. */}
+      <TabUnreadCount count={alertsCount} />
 
       {alertsDrawer}
       {moreMenuModal}

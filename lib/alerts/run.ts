@@ -84,7 +84,7 @@ type OptionHoldingRow = {
   status: "open" | "pending" | "expired";
 };
 
-type StateRow = { option_key: string; moneyness: string; spell: number };
+type StateRow = { option_key: string; moneyness: string; spell: number; in_spell: boolean };
 
 /**
  * The register row, as the scan rules want it.
@@ -123,7 +123,7 @@ export async function runAlertScan(db: AdminDb = createAdminClient()): Promise<A
   const [pnlRows, holdingRows, states, securities] = await Promise.all([
     selectAll<PnlSummaryDbRow>(db, "pnl_summary", "*"),
     selectAll<OptionHoldingRow>(db, "option_holdings", "*"),
-    selectAll<StateRow>(db, "alert_scan_state", "option_key, moneyness, spell"),
+    selectAll<StateRow>(db, "alert_scan_state", "option_key, moneyness, spell, in_spell"),
     selectAll<{ code: string; last_price: number | null }>(db, "securities", "code, last_price"),
   ]);
 
@@ -173,7 +173,10 @@ export async function runAlertScan(db: AdminDb = createAdminClient()): Promise<A
     .filter((o): o is ScannableOption => o !== null && o.status === "open");
 
   const prior = new Map<string, OptionScanState>(
-    states.map((s) => [s.option_key, { moneyness: s.moneyness as Moneyness, spell: s.spell }]),
+    states.map((s) => [
+      s.option_key,
+      { moneyness: s.moneyness as Moneyness, spell: s.spell, inSpell: s.in_spell },
+    ]),
   );
 
   const { alerts, states: next } = scanBook(book, date, prior);
@@ -222,6 +225,7 @@ export async function runAlertScan(db: AdminDb = createAdminClient()): Promise<A
         option_key,
         moneyness: s.moneyness,
         spell: s.spell,
+        in_spell: s.inSpell,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: "option_key" },

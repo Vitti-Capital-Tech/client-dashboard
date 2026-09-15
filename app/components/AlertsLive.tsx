@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { playAlertChime } from "./alertSound";
 
 /**
  * Makes the alerts bell arrive rather than wait to be found.
@@ -48,7 +49,12 @@ export function AlertsLive() {
         // one, and refreshing in response to your own click would fight the
         // optimistic update already on screen.
         { event: "INSERT", schema: "public", table: "alerts" },
-        () => router.refresh(),
+        () => {
+          // Before the refresh, not after: the chime should land with the badge
+          // rather than after a server round trip.
+          playAlertChime();
+          router.refresh();
+        },
       )
       .subscribe();
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   daysBetween,
+  edgePct,
   ladderRung,
   scanBook,
   scanOption,
@@ -130,7 +131,7 @@ test("the same day scanned twice produces identical keys", () => {
 
 test("sitting in the same rung for a second day repeats the key", () => {
   // 6 days and 5 days are both the 7-day rung, so it is one event, not two.
-  const state = { moneyness: "OTM" as const, spell: 0 };
+  const state = { moneyness: "OTM" as const, spell: 0, inSpell: false };
   assert.deepEqual(
     keys(opt({ expiryDate: inDays(6), under: 0.2 }), state),
     keys(opt({ expiryDate: inDays(5), under: 0.2 }), state),
@@ -138,7 +139,7 @@ test("sitting in the same rung for a second day repeats the key", () => {
 });
 
 test("dropping to the next rung is a new event", () => {
-  const state = { moneyness: "OTM" as const, spell: 0 };
+  const state = { moneyness: "OTM" as const, spell: 0, inSpell: false };
   assert.notDeepEqual(
     keys(opt({ expiryDate: inDays(8), under: 0.2 }), state),
     keys(opt({ expiryDate: inDays(3), under: 0.2 }), state),
@@ -148,7 +149,7 @@ test("dropping to the next rung is a new event", () => {
 test("the window alert escalates down the ladder on purpose", () => {
   // A client who ignored 14 days is told again at 7, 3 and 1. This is the one
   // place repetition is the point rather than noise.
-  const state = { moneyness: "ITM" as const, spell: 1 };
+  const state = { moneyness: "ITM" as const, spell: 1, inSpell: true };
   const at = (d: number) =>
     scanOption(opt({ expiryDate: inDays(d), under: 0.8 }), TODAY, state).alerts.find(
       (a) => a.kind === "window",
@@ -257,4 +258,85 @@ test("an alert states a fact and never recommends an action", () => {
     const text = `${a.title} ${a.subtitle}`;
     assert.equal(ADVICE.test(text), false, `reads as advice: ${text}`);
   }
+});
+
+/* ────────────────────── the in-the-money band (hysteresis) ───────────────── */
+
+test("edgePct answers in percent of strike, and refuses what it cannot", () => {
+  assert.equal(edgePct(0.11, 0.1, "Call")?.toFixed(1), "10.0");
+  assert.equal(edgePct(0.09, 0.1, "Call")?.toFixed(1), "-10.0");
+  // A put is in the money on the other side.
+  assert.equal(edgePct(0.09, 0.1, "Put")?.toFixed(1), "10.0");
+  assert.equal(edgePct(null, 0.1, "Call"), null);
+  assert.equal(edgePct(0.1, null, "Call"), null);
+  // A zero strike makes the percentage meaningless rather than infinite.
+  assert.equal(edgePct(0.1, 0, "Call"), null);
+});
+
+test("barely in the money does not alert", () => {
+  // The case production raised: $0.101 against a $0.10 strike is 1%, which is
+  // one tick on a stock whose ordinary day is one tick.
+  const o = opt({ expiryDate: inDays(200), strike: 0.1, under: 0.101 });
+  assert.equal(scanOption(o, TODAY, null).alerts.some((a) => a.kind === "itm"), false);
+});
+
+test("clearing the band alerts", () => {
+  const o = opt({ expiryDate: inDays(200), strike: 0.1, under: 0.106 });
+  const { alerts, state } = scanOption(o, TODAY, null);
+  const itm = alerts.find((a) => a.kind === "itm");
+  assert.ok(itm);
+  assert.match(itm.subtitle, /\+6\.0% vs strike/);
+  assert.equal(state?.inSpell, true);
+});
+
+test("oscillating around the strike is silent — this is the whole point", () => {
+  /**
+   * The failure the band exists to prevent. A grant that clears 5%, drifts back
+   * to 1%, climbs to 6% and drifts again has done nothing a client needs
+   * telling about four times. Only the first crossing reports.
+   */
+  const at = (under: number) => opt({ expiryDate: inDays(200), strike: 0.1, under });
+  let state = scanOption(at(0.106), TODAY, null).state; // +6% — reports
+  const fired: boolean[] = [];
+  for (const price of [0.101, 0.107, 0.102, 0.108, 0.1005]) {
+    const r = scanOption(at(price), TODAY, state);
+    fired.push(r.alerts.some((a) => a.kind === "itm"));
+    state = r.state;
+  }
+  assert.deepEqual(fired, [false, false, false, false, false]);
+  assert.equal(state?.spell, 1, "one spell, not five");
+});
+
+test("falling below the strike re-arms it, and a real recovery reports again", () => {
+  const at = (under: number) => opt({ expiryDate: inDays(200), strike: 0.1, under });
+  const a = scanOption(at(0.106), TODAY, null); // +6% — reports
+  assert.equal(a.state?.inSpell, true);
+
+  const b = scanOption(at(0.098), TODAY, a.state); // below the strike — re-armed
+  assert.equal(b.state?.inSpell, false);
+  assert.equal(b.alerts.some((x) => x.kind === "itm"), false);
+
+  const c = scanOption(at(0.12), TODAY, b.state); // +20% — a genuine new spell
+  assert.equal(c.alerts.some((x) => x.kind === "itm"), true);
+  assert.equal(c.state?.spell, 2);
+});
+
+test("dipping under the band but staying above the strike does NOT re-arm", () => {
+  // The gap between +5% and 0% is the hysteresis. Without it, a grant at +4%
+  // would re-arm and the next tick at +6% would fire again.
+  const at = (under: number) => opt({ expiryDate: inDays(200), strike: 0.1, under });
+  const a = scanOption(at(0.106), TODAY, null);
+  const b = scanOption(at(0.104), TODAY, a.state); // +4% — inside the gap
+  assert.equal(b.state?.inSpell, true, "still inside the reported spell");
+  const c = scanOption(at(0.109), TODAY, b.state);
+  assert.equal(c.alerts.some((x) => x.kind === "itm"), false);
+});
+
+test("a missing price neither arms nor re-arms", () => {
+  const at = (under: number | null) => opt({ expiryDate: inDays(200), strike: 0.1, under });
+  const a = scanOption(at(0.106), TODAY, null);
+  const b = scanOption(at(null), TODAY, a.state);
+  assert.equal(b.state?.inSpell, true, "a day without a quote is not a fall");
+  const c = scanOption(at(0.107), TODAY, b.state);
+  assert.equal(c.alerts.some((x) => x.kind === "itm"), false);
 });
