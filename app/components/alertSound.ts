@@ -102,6 +102,37 @@ function context(): AudioContext | null {
 }
 
 /**
+ * Unlock the audio context on the first interaction anywhere on the page.
+ *
+ * ── Why this is not optional ────────────────────────────────────────────────
+ * Without it, the only thing that could unlock audio was the speaker toggle in
+ * the alerts drawer — so a client had to find and press a button they had no
+ * reason to press in order to hear the alerts it was meant to be a switch for.
+ * Every alert before that click was silent, which is exactly backwards: the
+ * client who has not been poking at the UI is the one who most needs telling.
+ *
+ * A context CREATED during a user gesture starts running; one created outside a
+ * gesture starts suspended and needs a later gesture to resume. This listener
+ * covers both by doing the work on the first click or key press of the session,
+ * whatever it was for, and then removing itself.
+ *
+ * `once` and `capture` together mean it runs before anything can stop the event
+ * propagating, and exactly once per page.
+ */
+function armOnFirstGesture(): void {
+  if (typeof window === "undefined") return;
+  const unlock = () => {
+    const ac = context();
+    if (ac && ac.state === "suspended") void ac.resume().catch(() => {});
+  };
+  for (const evt of ["pointerdown", "keydown", "touchstart"] as const) {
+    window.addEventListener(evt, unlock, { once: true, capture: true });
+  }
+}
+
+armOnFirstGesture();
+
+/**
  * Two rising notes, ~0.3s, quiet.
  *
  * A6 then D7 — a small interval up, which reads as a notification rather than
@@ -113,15 +144,34 @@ function context(): AudioContext | null {
  * all day beside other work; a sound they reach to mute is a sound that gets
  * muted permanently.
  */
-export function playAlertChime(): void {
+export async function playAlertChime(): Promise<void> {
   if (!getSnapshot()) return;
 
   const ac = context();
   if (!ac) return;
 
-  // Suspended until the visitor has interacted with the page. Ask, ignore the
-  // rejection, and give up quietly if it is still not running.
-  void ac.resume?.().catch(() => {});
+  /**
+   * `resume()` is ASYNCHRONOUS, and this is where the first version was wrong.
+   *
+   * It called `resume()` and then checked `ac.state` on the very next line —
+   * which is still "suspended" at that instant, because the promise has not
+   * settled. So the check failed every time and the chime never played on an
+   * arriving alert. Pressing the speaker button appeared to work only because a
+   * context CREATED inside a user gesture starts running, so that one path
+   * skipped the broken check entirely.
+   *
+   * Awaiting it is the fix. When the page has had any interaction this resolves
+   * and the chime plays; when it has not, it rejects or stays suspended and we
+   * give up quietly — a portfolio screen logging errors about a chime is worse
+   * than a chime that occasionally does not play.
+   */
+  if (ac.state === "suspended") {
+    try {
+      await ac.resume();
+    } catch {
+      return;
+    }
+  }
   if (ac.state !== "running") return;
 
   const now = ac.currentTime;

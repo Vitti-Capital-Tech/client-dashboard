@@ -27,7 +27,7 @@ export function AlertSoundToggle() {
         setOn(!on);
         // Only on the way on. Confirming a mute with a noise is a joke the
         // client is not in on.
-        if (!on) playAlertChime();
+        if (!on) void playAlertChime();
       }}
       aria-pressed={on}
       title={on ? "Alert sound on" : "Alert sound off"}

@@ -85,7 +85,7 @@ export function AlertsLive() {
           () => {
             // Before the refresh, not after: the chime should land with the
             // badge rather than a server round trip later.
-            playAlertChime();
+            void playAlertChime();
             router.refresh();
           },
         )

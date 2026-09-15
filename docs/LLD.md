@@ -2246,7 +2246,30 @@ Browsers refuse to let a page make noise before the visitor has interacted with 
 
 So a client who loads the portal and leaves it untouched gets no chime for the first alert. There is no way around this and no way to detect it in advance. The code is deliberately silent about the failure — a portfolio screen logging errors about a chime is worse than a chime that occasionally does not play.
 
-Two consequences shaped the design:
+#### The chime that only played when you pressed the speaker
 
-- **The speaker toggle plays the chime when switched on.** It confirms what was enabled, and — more importantly — that click *is* the interaction, so the switch doubles as the thing that unlocks audio on a tab nobody has touched.
-- **The tab count is the reliable channel and the sound is the courtesy.** The count is always correct; the chime is best-effort. Anything that must not be missed belongs in the count, the badge and the alert row — never in the sound alone.
+It shipped like that, and the symptom was precise: pressing the toggle produced a sound, an arriving alert did not — even though the badge moved, which proved the same callback was running.
+
+`resume()` is **asynchronous**. The first version called it and checked `ac.state` on the very next line:
+
+```ts
+void ac.resume?.().catch(() => {});
+if (ac.state !== "running") return;   // still "suspended" — always bails
+```
+
+The promise has not settled at that point, so the state is still `suspended` and the function returned before making a sound. Every time.
+
+Pressing the speaker appeared to work for a reason that hid the bug rather than contradicting it: **a context created inside a user gesture starts running**, so the first press constructed the context in the `running` state and skipped the broken check entirely. A working path and a broken path, distinguishable only by whether the `AudioContext` already existed.
+
+Awaiting `resume()` is the fix.
+
+#### Unlocking on any gesture, not on the speaker button
+
+The second problem was design rather than a defect. With the toggle as the only thing that touched the audio context, a client had to find and press a button they had no reason to press in order to hear the alerts it was a switch for — and **the client who has not been poking at the UI is exactly the one who most needs telling.**
+
+A one-time capture listener on `pointerdown` / `keydown` / `touchstart` now resumes the context on the first interaction anywhere on the page, whatever it was for, and removes itself. Opening the nav, switching a tab, scrolling with the keyboard — any of them arms the chime for the rest of the session.
+
+Two things still hold:
+
+- **The speaker toggle plays the chime when switched on.** It confirms what was enabled, and that click is also a gesture, so it remains a reliable manual unlock.
+- **The tab count is the reliable channel and the sound is the courtesy.** The count is always correct; the chime is best-effort, because a client who loads the portal and touches nothing at all still gets no sound and no browser permits otherwise. Anything that must not be missed belongs in the count, the badge and the alert row — never in the sound alone.
