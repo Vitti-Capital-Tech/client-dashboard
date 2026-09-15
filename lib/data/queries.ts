@@ -388,6 +388,22 @@ export const getSecurities = cache(async (): Promise<Security[]> => {
   }));
 });
 
+/**
+ * `code` → last price, for repricing an options register against a live quote.
+ *
+ * A narrower read than `getSecurityMap`, because the caller — `withLiveSpots`
+ * — wants one column and the register can run to hundreds of securities.
+ */
+export const getSecurityPrices = cache(async (): Promise<Map<string, number | null>> => {
+  const supabase = await createClient();
+  const rows = await pagedSelect<{ code: string; last_price: number | null }>(
+    supabase,
+    "securities",
+    "code, last_price",
+  );
+  return new Map(rows.map((r) => [r.code, r.last_price]));
+});
+
 export const getSecurityMap = cache(async (): Promise<Map<string, Security>> => {
   const securities = await getSecurities();
   return new Map(securities.map((s) => [s.code, s]));

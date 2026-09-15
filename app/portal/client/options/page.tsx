@@ -1,7 +1,7 @@
 import { getActiveClientId } from "@/lib/session";
-import { getClientOptions } from "@/lib/data/queries";
+import { getClientOptions, getSecurityPrices } from "@/lib/data/queries";
 import { getClientStoredPnl } from "@/lib/data/pnl";
-import { optionsFromSources } from "@/lib/options/from-stored-pnl";
+import { optionsFromSources, withLiveSpots } from "@/lib/options/from-stored-pnl";
 import { OptionsClient } from "./OptionsClient";
 
 /**
@@ -38,10 +38,21 @@ export default async function ClientOptionsPage() {
   const clientId = await getActiveClientId();
   if (!clientId) return <OptionsClient options={[]} />;
 
-  const [storedPnl, holdings] = await Promise.all([
+  const [storedPnl, holdings, prices] = await Promise.all([
     getClientStoredPnl(clientId),
     getClientOptions(clientId),
+    getSecurityPrices(),
   ]);
 
-  return <OptionsClient options={optionsFromSources(storedPnl, holdings)} />;
+  /**
+   * `withLiveSpots` reprices the underlying from `securities.last_price`, which
+   * the intraday tick refreshes during market hours.
+   *
+   * It is here so this page and the alert scanner compute moneyness from the
+   * SAME number. Before it, the tab read the spot frozen into `pnl_summary` at
+   * the morning recompute, so a grant that crossed into the money at 11am still
+   * read OTM here at 3pm — and an alert saying otherwise would have looked like
+   * the alert was wrong.
+   */
+  return <OptionsClient options={withLiveSpots(optionsFromSources(storedPnl, holdings), prices)} />;
 }

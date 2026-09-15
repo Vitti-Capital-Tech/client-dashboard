@@ -2130,3 +2130,62 @@ An alert states a fact and its consequence, never a recommendation.
 > `100,000 at $0.50 · underlying $0.80 · exercise value $30000.00 · unlisted options are not exercised automatically`
 
 That last clause is the whole reason the alert is red, and it is a fact about how unlisted options work — not an instruction to exercise. The line is the same one `lib/commentary/prompt.ts` gates generated text on and `lib/glossary.ts` is written to, and it is enforced by a test here for the same reason it is there: an alert is the most action-shaped surface in the product, and so the easiest place to drift across it.
+
+### 8.52 The scanner that found nothing, and the frozen price behind it (`lib/alerts/live.ts`, `lib/alerts/moves.ts`, `withLiveSpots`)
+
+§8.51 shipped an alert scanner. Its first production run returned `ok: true` and wrote nothing, against a book of 33 option series with one of them in the money.
+
+#### It was reading the wrong table
+
+`run.ts` read `option_holdings` — the table whose name says it holds options. That table has never held a row. It was demo-seed data, nothing in the broker import or the Placement Tracker pipeline writes it, and **§8.33 records this exact discovery being made once already**, when the client Options tab was empty for every client in the database. Both screens were moved onto `pnl_summary` then, through `lib/options/from-stored-pnl.ts`. The scanner, written months later against the schema rather than against the screens, walked into the same hole.
+
+The report was complicit. It said `scanned: 0`, which is indistinguishable from a quiet day to anyone not looking for it. It now reports `register` and `live` separately, so an empty source cannot present itself as an uneventful morning.
+
+The scanner reads what the screens read, through the same function. Not for tidiness: an alert quoting a strike the client's own Options tab does not show is worse than no alert, and deriving both from one place is the only thing that guarantees they agree.
+
+#### The deeper problem: more frequent scanning changed nothing
+
+The ask was for alerts to arrive as things move. The instinct is to run the scan more often. That would have accomplished nothing, and the reason is worth stating plainly:
+
+**`underlyingPrice` came out of `pnl_summary`.** It is written at the P&L recompute, once a morning, and frozen until the next one. Scanning every five minutes re-reads the same number and reaches the same verdict, forever. The bottleneck was never the scan rate — it was the input.
+
+`lib/alerts/live.ts` fetches quotes instead. But fetching them and alerting on them straight away creates a second problem in place of the first: the alert says the underlying is $0.82, the client opens their Options tab ten seconds later and reads $0.78, because the screen is still on the morning's figure. **An alert whose number cannot be checked on the screen beside it is worse than no alert.**
+
+So the tick writes what it fetched into `securities.last_price` *before* anything reads it, and `withLiveSpots` applies that column over the stored spot — **in both the scanner and the Options page**. There is one number, so there is nothing to disagree about.
+
+`withLiveSpots` deliberately touches only the underlying price and the moneyness derived from it. `marketValue`, `pnl` and `costBasis` stay as the desk computed them: those are the stored P&L, reproducible and reconciled, and silently repricing them would put a second unaudited valuation on a screen that says it shows the desk's. Moneyness is a comparison, not a valuation, which is why it is allowed to move faster than the recompute.
+
+#### Two jobs, two clocks, and keeping them straight
+
+| | `/api/alerts/scan` | `/api/alerts/live` |
+| --- | --- | --- |
+| Runs | 10:30 Sydney, **every calendar day** | Every 10 min, **only while trading** |
+| Because | An expiry ladder crossing is a **calendar** event — a grant entering its 7-day window on a Saturday should be waiting on Monday, not reported two days closer to lapsing | A price crossing is a **market** event and cannot happen when the market is shut |
+
+The daily scan is kept even though the tick re-runs it: if Yahoo is down for a whole session, or the market is closed for a public holiday, the expiry ladder still has to be walked.
+
+#### Why the tick's schedule is blunt on purpose
+
+`*/10 * * * *` — every ten minutes, always, with no SQL guard. The other two cron jobs guard on the Sydney hour inside the command, because they fire once a day at a local time.
+
+This one wants "whenever the ASX is trading", and that is not a set of hours. It is 10:00 to ~16:11 Sydney, weekdays, less eight exchange holidays, ending at 14:10 on the two half days, in an offset that moves twice a year. Written as a cron expression plus a SQL `WHERE`, that would be **a second implementation of the trading calendar, in a language with no tests, drifting away from `lib/asx/session.ts`**.
+
+So the guard lives in the application, where the calendar already lives and is tested. `runLiveTick` asks `asxSession()` first and returns without touching Yahoo or the database when the answer is no. The cost is ~100 no-op HTTP requests a day; the benefit is one trading calendar in the codebase instead of two, already correct on Good Friday and on Christmas Eve's early close.
+
+#### Move alerts, and the thing they are designed not to do
+
+Every price moves every day. An alert per move is a feed, not an alert — and the cost of getting it wrong is not a noisy page, it is that **the client stops opening the bell and the exercise-window alert goes unread behind forty notices about a 0.4% drift.**
+
+Three gates, all of which must pass:
+
+- **Magnitude** — bands at 5 / 10 / 20%. The *band* is the alert key, not the percentage, so a position drifting from 12.1% to 12.4% is one event and reaching 21% is a new one. Same event-not-condition discipline as the option ladder.
+- **Materiality** — the holding must be worth at least $2,000. A 30% move on $400 is not worth interrupting anyone. In dollars rather than as a share of the portfolio, because a client with a small book should still hear about their largest position.
+- **Budget** — at most four move alerts per client per day, biggest movers first. A market-wide selloff moves every holding at once, and thirty alerts saying the same thing thirty times is the exact failure the other two gates were written to avoid.
+
+All three are constants at the top of `lib/alerts/moves.ts`, so they are reviewed and tested beside the rules they belong to rather than buried in a schedule.
+
+#### The wording rule now has three enforcers
+
+`scan.ts`, `moves.ts` and `lib/glossary.ts` each carry a test asserting their text does not read as advice. A move alert is the easiest place in the entire product to drift into a tip — it is literally *"this thing you own is moving"* — so the regex for it is the strictest of the three, and rejects "opportunity", "worth a look", "running" and "surging" alongside the obvious imperatives.
+
+`SGQ +12.4% today · you hold 40,000 · $18,000 at 0.412 · 10% band` is a fact. Everything a client might do about it is theirs and their adviser's.

@@ -120,7 +120,7 @@ export type PnlRunRow = {
 
 const num = (v: unknown): number => Number(v ?? 0) || 0;
 
-interface PnlSummaryDbRow {
+export interface PnlSummaryDbRow {
   account_id: string;
   client_id: string;
   ticker: string;
@@ -197,7 +197,13 @@ function toUnlistedOption(v: unknown): StoredUnlistedOption | null {
  * what had happened to `unlisted_option`: stored on write, absent on read, so
  * every strike and spot on the Options register was blank.
  */
-function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
+/**
+ * Exported for the alert scanner, which reads `pnl_summary` with the admin
+ * client (no session, every client's rows) and must map it the SAME way the
+ * screens do. A second mapping would be a second answer to "is this row an
+ * option, and what is its strike".
+ */
+export function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
   return {
     accountId: r.account_id,
     clientId: r.client_id,

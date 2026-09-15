@@ -275,3 +275,52 @@ export function optionsFromSources(
   const { items, seen } = fromStoredPnl(storedPnl);
   return [...items, ...fromOptionHoldings(optionHoldings, seen)];
 }
+
+/**
+ * The same register, with the underlying repriced from a live quote.
+ *
+ * ── Why this exists ─────────────────────────────────────────────────────────
+ * `underlyingPrice` above comes from `unlistedOption.spot` — the figure written
+ * into `pnl_summary` at the last P&L recompute, which happens once a morning.
+ * That is the number the Options tab has always shown, and it is why an option
+ * could sit in the money for hours before anything noticed: the input was not
+ * changing, so no amount of re-reading it produced a different answer.
+ *
+ * The intraday tick (`lib/alerts/live.ts`) fetches quotes and writes them to
+ * `securities.last_price`. This applies that column over the stored spot, so
+ * the alert and the screen are computed from ONE number rather than two that
+ * drift apart across a trading day.
+ *
+ * Both callers use it, which is the point: the scanner would otherwise quote a
+ * strike-against-spot the client's own tab does not show, and an alert whose
+ * figure cannot be checked on the screen beside it is worse than no alert.
+ *
+ * ── What it does not touch ──────────────────────────────────────────────────
+ * Only the underlying price and the moneyness derived from it. `marketValue`,
+ * `pnl` and `costBasis` stay as the desk computed them — those are the stored
+ * P&L, reproducible and reconciled, and silently repricing them here would put
+ * a second, unaudited valuation on a screen that says it shows the desk's.
+ * Moneyness is a comparison, not a valuation, which is why it can move faster.
+ *
+ * A listed series is left alone: it is quoted on its own market, so a strike
+ * against the underlying says nothing about it (see `UNKNOWN_MONEYNESS` above).
+ */
+export function withLiveSpots(
+  items: OptionTableItem[],
+  priceByCode: Map<string, number | null>,
+): OptionTableItem[] {
+  return items.map((o) => {
+    if (!o.isUnlisted) return o;
+
+    // The grant's underlying is its parent — `ABC-UO` is an option over `ABC`.
+    const code = o.parentTicker;
+    const live = code ? priceByCode.get(code) : null;
+    if (live == null || !(live > 0) || live === o.underlyingPrice) return o;
+
+    return {
+      ...o,
+      underlyingPrice: live,
+      money: moneynessOf({ spot: live, strike: o.strike, qty: o.quantity, kind: "Call" }),
+    };
+  });
+}

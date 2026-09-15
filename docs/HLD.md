@@ -330,6 +330,12 @@ Prices come from `securities.last_price`, the column the client's own Options ta
 
 See LLD §8.51.
 
+**The first production run found nothing**, and the two reasons are the interesting part. It read `option_holdings`, a table that has never held a row (§8.33 records the same discovery being made once already); and the underlying price it would have used comes from `pnl_summary`, frozen at the morning recompute — so scanning more often would have re-read the same number and reached the same verdict forever. The bottleneck was the input, not the scan rate.
+
+An **intraday tick** (`/api/alerts/live`, every 10 minutes) now fetches quotes, writes them to `securities.last_price`, and only then runs the scans. Both the alert and the client's Options tab apply that column over the stored spot through one shared function, so there is a single number and nothing for them to disagree about. The tick asks `asxSession()` before doing anything, which is why its cron schedule can be blunt: the trading calendar stays in the tested module rather than being reimplemented in a SQL guard.
+
+The same tick raises **move alerts on held positions**, gated on magnitude band, materiality and a per-client daily budget — the budget because a market-wide selloff would otherwise bury the exercise-window alert under thirty notices. See LLD §8.52.
+
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
 - **Global Header (Topbar):** Live broker-feed status pill, illustrative search bar, active-user avatar, and the alerts toggle (with unread badge).
