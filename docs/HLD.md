@@ -315,6 +315,21 @@ Renaming one column does not fix the category — strike, spot, moneyness, scale
 
 See LLD §8.50.
 
+### 3.1p Alerts, generated rather than promised (`lib/alerts/`, `/api/alerts/scan`)
+
+The alerts page claimed escalating expiry alerts fired at 30/14/7/3/1 days and that they arrived by email. Neither happened: the only INSERT into `alerts` in the codebase was a confirmation written when a client saved a custom threshold, the expiry engine sat in the legacy in-memory `lib/db.ts` that no route imports, and there is no mailer anywhere in the product. Days-to-expiry was also counted from a hardcoded 12 June 2026, so lapsed grants still showed positive countdowns on four screens.
+
+A scanner now exists, split in two:
+
+- **`scan.ts` is pure** — options in, alerts out, no database. Every rule is testable against a fixture, which matters because the rules are the whole feature.
+- **`run.ts` talks to Supabase** as service_role, on its own cron endpoint rather than inside the morning ingest, which is already at the 60s host ceiling.
+
+**The design decision is that alerts are events, not conditions.** "In the money" is true for months; a scan that inserted a row whenever the condition held would bury the one alert that mattered under a hundred that did not. Each alert therefore carries an `alert_key` naming the crossing, a unique index enforces one row per event, and the scan is idempotent — which is what allows the same DST-net cron scheduling the ingest uses. Moneyness crossings need memory that the schema did not have (the holdings import replaces `option_holdings` daily), so `alert_scan_state` carries the last verdict per option.
+
+Prices come from `securities.last_price`, the column the client's own Options tab reads, because an alert must quote a figure the client can check. Delivery is in-app: `alerts` joins the realtime publication and the bell refreshes through the existing Server Component path. Email remains unbuilt, and the page no longer says otherwise.
+
+See LLD §8.51.
+
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
 - **Global Header (Topbar):** Live broker-feed status pill, illustrative search bar, active-user avatar, and the alerts toggle (with unread badge).

@@ -3,6 +3,7 @@ import { pagedSelect } from "./paged";
 import { cache } from "react";
 import { createClient } from "../supabase/server";
 import { canonicalSector } from "../pnl/sector-labels";
+import { deskDate } from "../asx/session";
 import type { Database } from "../supabase/database.types";
 
 /**
@@ -24,14 +25,38 @@ type Enums<T extends keyof Database["public"]["Enums"]> =
 type Tables<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Row"];
 
-// Demo "now" — the seed anchors option expiries to this date (lib/db.ts TODAY).
-// In production, swap this for `new Date()` so `dte` counts down live.
-const DEMO_TODAY = new Date("2026-06-12T00:00:00Z");
 const DAY_MS = 86_400_000;
 
+/**
+ * Days until an expiry date, counted from today on the desk's clock.
+ *
+ * ── What this used to be ────────────────────────────────────────────────────
+ * `const DEMO_TODAY = new Date("2026-06-12T00:00:00Z")`, with a comment saying
+ * to swap it for the real clock in production. It was never swapped, and it was
+ * not confined to a demo: `getOptions` and `getClientOptions` feed the client
+ * dashboard's expiring-options rail, the Options tab, Ask Vitti and the staff
+ * client profile. Every "expires in N days" on every one of those screens was
+ * counted from 12 June 2026 — so as real time moved past that date, a grant
+ * that had ALREADY EXPIRED still reported a positive `dte`, still passed the
+ * `dte >= 0` filters, and still sat in the rail headed "expiring soon".
+ *
+ * That is the failure mode that matters on this particular number. Unlisted
+ * options are not auto-exercised; a client who reads "33 days left" about a
+ * window that shut two months ago has been told the opposite of the truth by
+ * the screen whose job was to warn them.
+ *
+ * ── Why the desk's date ─────────────────────────────────────────────────────
+ * `expiry_date` is a DATE — a calendar day with no time and no zone — and the
+ * day it belongs to is the market's. Counting from the server's UTC date would
+ * report one day fewer for the ten hours each evening that Sydney is already on
+ * tomorrow, which on the last day of an exercise window is the difference
+ * between a warning and a lapse. Both sides are taken at UTC midnight so the
+ * subtraction is whole days with no clock left in it.
+ */
 function daysUntil(dateStr: string): number {
-  const target = new Date(`${dateStr}T00:00:00Z`).getTime();
-  return Math.round((target - DEMO_TODAY.getTime()) / DAY_MS);
+  const target = Date.parse(`${dateStr}T00:00:00Z`);
+  const today = Date.parse(`${deskDate()}T00:00:00Z`);
+  return Math.round((target - today) / DAY_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +187,7 @@ export type OptionRow = {
   qty: number;
   strike: number;
   under: number; // underlying price (from securities)
-  dte: number; // days to expiry (from expiry_date, relative to DEMO_TODAY)
+  dte: number; // days to expiry, counted from today on the desk's clock
   expiryDate: string;
   source: string | null;
   status: Enums<"option_status">;

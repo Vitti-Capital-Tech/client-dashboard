@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert } from "@/app/actions/alerts";
+import { AlertsLive } from "@/app/components/AlertsLive";
 import { signOut, setActiveAccount } from "@/app/actions/session";
 import { usePnlCalculatorStore } from "@/store/usePnlCalculatorStore";
 import { Wordmark } from "@/app/components/Wordmark";
@@ -962,6 +963,10 @@ export function PortalShell({
         </main>
         {bottomnav}
       </div>
+
+      {/* Nudges the server to re-fetch when a scan writes an alert. Renders
+          nothing; see app/components/AlertsLive.tsx. */}
+      <AlertsLive />
 
       {alertsDrawer}
       {moreMenuModal}

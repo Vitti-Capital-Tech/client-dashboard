@@ -105,10 +105,20 @@ export function AlertsClient({
       {/* Page Header */}
       <div className="flex justify-between items-end gap-3 flex-wrap">
         <div>
-          <div className="font-mono text-xs tracking-wider uppercase text-mut">In-platform &amp; email &middot; manual acknowledgement</div>
+          {/*
+            This copy used to promise two things the product did not do. Email
+            was one — there is no mailer in the codebase, on this path or any
+            other — and it is gone rather than hedged. The expiry escalation was
+            the other, and that one is now true: `lib/alerts/scan.ts` runs it,
+            so the sentence stays. Do not put "email" back until something sends
+            one.
+          */}
+          <div className="font-mono text-xs tracking-wider uppercase text-mut">In-platform &middot; manual acknowledgement</div>
           <h1 className="font-disp font-medium text-[26px] mt-0.5">Alerts</h1>
           <p className="text-xs text-mut mt-1 leading-normal max-w-[50em]">
-            Escalating expiry alerts fire at 30, 14, 7, 3 and 1 days. Unlisted in-the-money options inside their window are flagged red.
+            Expiry alerts escalate at 30, 14, 7, 3 and 1 days. Unlisted options that are
+            in the money inside their exercise window are flagged red — those are not
+            exercised automatically. Checked each morning after the market opens.
           </p>
         </div>
         <button

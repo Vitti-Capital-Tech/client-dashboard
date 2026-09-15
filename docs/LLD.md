@@ -2046,3 +2046,87 @@ Resolution is **longest-prefix**, and both halves of that are load-bearing. Pref
 #### Open/closed is a module store
 
 `useSyncExternalStore`, for `NewsViewToggle`'s two reasons (§8.45). A client who opens the definitions on Portfolio has said they want them, and finding them shut again on Options is the product forgetting something it was just told. And `localStorage` does not exist on the server, so the saved value cannot be read during the render that produces the HTML — reading it in a mount effect and calling `setState` renders once and throws that render away, which is what the repo's lint rule about setState in effects is for (§8.27). The server snapshot is `false`, and closed is the right constant precisely because the collapsed strip is already doing the job.
+
+### 8.51 Alerts that nothing ever fired (`lib/alerts/`, `…_alert_dedupe.sql`, `…_alert_scan_state.sql`, `/api/alerts/scan`)
+
+The alerts page told every client this:
+
+> In-platform & email · manual acknowledgement
+> **Escalating expiry alerts fire at 30, 14, 7, 3 and 1 days.** Unlisted in-the-money options inside their window are flagged red.
+
+None of it happened. Reading the write path end to end:
+
+- **One INSERT into `alerts` existed in the entire codebase** — `addCustomAlert`. The row it writes says *"MRD custom alert created"*, a confirmation that a threshold was saved. Nothing ever compared that threshold to a price.
+- **The expiry engine was real and unreachable.** `scanAlerts()` in `lib/db.ts` implements the 30/14/7/3/1 ladder, ITM detection and the unlisted-window warning, correctly. `lib/db.ts` is the legacy in-memory database, imported only by `store/useDatabaseStore.ts`, which no route imports. The code had been sitting there, right, and dead.
+- **There is no mailer.** Not on this path, not anywhere — the three cron jobs are commentary, ingest and P&L, and the Graph integration only *reads* the broker's mailbox.
+
+#### The bug underneath the bug
+
+Expiry alerts need days-to-expiry, and `dte` was being counted from a frozen date:
+
+```ts
+// Demo "now" — the seed anchors option expiries to this date (lib/db.ts TODAY).
+// In production, swap this for `new Date()` so `dte` counts down live.
+const DEMO_TODAY = new Date("2026-06-12T00:00:00Z");
+```
+
+It was never swapped, and it was not confined to a demo. `getOptions` and `getClientOptions` feed the client dashboard's expiring-options rail, the Options tab, Ask Vitti and the staff client profile. **Every "expires in N days" on all four was counted from 12 June 2026** — so once real time moved past that date, a grant that had already lapsed still reported a positive `dte`, still passed the `dte >= 0` filters, and still sat in the rail headed *expiring soon*.
+
+That is the worst possible direction for this particular error. Unlisted options are not auto-exercised; a client reading "33 days left" about a window that shut two months ago was told the opposite of the truth by the screen whose only job was to warn them. `daysUntil` now counts from `deskDate()` — the market's calendar day, not the server's UTC one, because on the last day of an exercise window those differ for ten hours each evening and the difference is a warning versus a lapse.
+
+#### Alerts are events, not conditions
+
+This is the design decision the whole feature turns on.
+
+"MRD is in the money" stays true for months. A scan that inserted a row whenever the condition held would produce a hundred identical alerts, and **a bell carrying a hundred alerts is a bell nobody opens** — which loses the one alert that mattered. The legacy engine had no answer to this, and it is the reason a naïve port of it would have been worse than nothing.
+
+So every alert carries an `alert_key` naming the **event**, and `alerts_client_key_uniq` makes the key a guarantee:
+
+| Key | Fires |
+| --- | --- |
+| `expiry:<option_id>:14` | Once, on crossing into the 14-day rung |
+| `window:<option_id>:<rung>` | Once per rung — the one place repetition IS the point |
+| `itm:<option_id>:<spell>` | Once per crossing from not-in-the-money to in |
+
+With `ignoreDuplicates`, the scan becomes idempotent: run it twenty times an hour and after the first it inserts nothing. That is what lets the cron be scheduled as a DST *net* rather than a time, the same property the morning ingest gets from its attachment dedupe.
+
+#### Two kinds of crossing, and why one needed a table
+
+Expiry crossings are implicit in the date — the ladder rung a grant sits in is a function of today, so 6 days is the 7-day rung today and tomorrow and drops to the 3-day rung by itself. No memory required.
+
+Moneyness is not like that. Whether today's "in the money" is *news* depends entirely on yesterday, and nothing in the schema records yesterday: the broker's holdings import replaces `option_holdings` wholesale every morning, so no row survives to carry the answer. Without state the scan can only choose between alerting every day a grant is in the money, or alerting once ever and staying silent the second time it crosses. `alert_scan_state` holds the last verdict and a `spell` counter, so a grant that goes in, falls out and goes in again produces two alerts — correctly, because those are two events.
+
+The subtle case is `unknown`. A day with no quote is **not** treated as having fallen out of the money: doing so would end the spell, and the next quote to arrive would read as a fresh crossing and fire a second alert about a grant that never moved. The last known verdict is kept instead. It has a test.
+
+#### Why the scan is its own endpoint, on its own schedule
+
+The morning ingest is already a tight fit inside the 60s Hobby ceiling — a cold run pays ~17s for the Placement Tracker workbooks before importing anything, then recomputes every account the snapshot touched, which is all of them. A second full-book pass in that request would push it over, and the symptom of going over is silence: a successful POST with no work done (§8.42).
+
+`alert-scan` runs at **10:30am Sydney**, which clears two preconditions: the ingest (9:15, retry 10:15) has refreshed `securities.last_price`, and the ASX has opened at 10:00 so that price is struck today. It runs **every day including weekends**, unlike the ingest's Mon–Fri guard, because an expiry ladder crossing is a calendar event — a grant entering its 7-day window on a Saturday should be waiting for the client on Monday, not reported two days closer to lapsing. A weekend run finds no price movement and inserts nothing.
+
+#### Prices come from the column the screen reads
+
+`securities.last_price`, deliberately, and not a live quote feed. An alert that disagrees with the Options tab the client opens ten seconds later is worse than an alert an hour behind: the figure in the alert has to be the figure they can check.
+
+#### A partial index that would have broken the upsert on its first collision
+
+`…_alert_dedupe.sql` first shipped the unique index as `WHERE alert_key IS NOT NULL`, to let hand-written alerts (which carry no key) coexist. The predicate was right about the requirement and wrong about the mechanism: **Postgres can only infer a partial index for `ON CONFLICT` if the statement repeats its predicate**, and PostgREST's `on_conflict` takes column names only. The scan would have worked on an empty table and failed the first time it met an alert it had already written — the exact case the index exists for.
+
+The predicate turned out to be unnecessary. Unique indexes treat NULLs as distinct by default, so a plain `UNIQUE (client_id, alert_key)` already permits any number of keyless rows per client. `…_alert_key_index_not_partial.sql` is the correction.
+
+#### The bell had to start arriving
+
+Every alert until now was caused by the client's own click, so the page that caused it was already re-rendering. A scan writes rows into a page that has been open for an hour. `alerts` joins the `supabase_realtime` publication and `AlertsLive` calls `router.refresh()` on INSERT — **never reading the payload**, so the row reaches the screen through the same Server Component path as a reload and there is no second mapping to keep in step. No `filter:` clause either: Supabase authorises `postgres_changes` against the same RLS policies as a query, so putting the scoping rule in the subscription would be stating it in a second, worse place.
+
+#### The copy is now true, and only as true as the product
+
+Email is gone from the page header rather than hedged — nothing sends one. The expiry escalation sentence stays, because it is now a description of `lib/alerts/scan.ts`. There is a comment above it saying not to put "email" back until something sends one.
+
+#### What an alert may say
+
+An alert states a fact and its consequence, never a recommendation.
+
+> `MRD — exercise window closes in 12 days`
+> `100,000 at $0.50 · underlying $0.80 · exercise value $30000.00 · unlisted options are not exercised automatically`
+
+That last clause is the whole reason the alert is red, and it is a fact about how unlisted options work — not an instruction to exercise. The line is the same one `lib/commentary/prompt.ts` gates generated text on and `lib/glossary.ts` is written to, and it is enforced by a test here for the same reason it is there: an alert is the most action-shaped surface in the product, and so the easiest place to drift across it.
