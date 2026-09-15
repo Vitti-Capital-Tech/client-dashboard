@@ -1912,3 +1912,137 @@ Both functions branch on `client_has_login()`, extracted for exactly that reason
 §8.46 first shipped with `getActor()` returning the client's `display_name` alone, and the README claimed each login was "recorded separately in the audit log". **That was false** — both logins audited as the same name.
 
 The client is the right *subject* of an audit row: the rows being changed are the client's. It is the wrong *actor* once two people can sign in as them. For a firm whose audit trail exists to answer "who did this", a name shared by two people is not an answer. `getActor()` now appends the signed-in address — but only when the client actually has more than one login, so the fifty-odd single-login clients keep the format they have always had, where the address *is* the client and printing both is noise.
+
+
+### 8.49 A header that said the market was open, and a clock that was never Sydney's (`lib/asx/session.ts`)
+
+The client dashboard's header stamp was this:
+
+```tsx
+const todayStr = new Date(2026, 5, 12).toLocaleDateString("en-AU", { ... }) + " · ASX open";
+```
+
+Every client, on every visit, was told it was **12 June 2026** and that the exchange was **open**. The date was mockup scaffolding that shipped — it had been in the file since the component was first committed. The session label was never scaffolding at all: it was a string, so it said `ASX open` at 2am, on Boxing Day, and all weekend.
+
+Sitting under it was the same mistake wearing a different coat. The book-close countdown, in this file and again in `PlacementsClient.tsx`:
+
+```tsx
+const close = new Date();
+close.setHours(16, 0, 0, 0);   // 4pm — in the BROWSER's timezone
+```
+
+`setHours` is local time, and the local time in question is the *viewer's*. A client in Perth was counted down to a close two hours after the book had shut; one in London was counted down to a close that had already happened before they woke up; anyone travelling got a different answer in every airport. The one place the number was reliably right was a desk in Sydney, which is the one place nobody needed it.
+
+#### Why a module, for what looks like a label
+
+Three surfaces were each answering "is the market open" for themselves and none of them was asking the exchange. `lib/asx/session.ts` answers it once: `asxSession(at)` returns the phase, the Sydney date, the holiday if there is one, and the distance to the open and the close. The header stamp and both countdowns render from it.
+
+It carries **no `server-only`**, unlike everything else in `lib/asx/` — the stamp and the timer are client islands, and the whole point is that they and the server agree on the same instant.
+
+#### The calendar is rules, not a pasted list
+
+ASX publishes its trading calendar a year at a time, which invites pasting eight dates into a constant. That constant is correct until the January nobody updates it, and then it is *silently* wrong — the portal shows the market open on Good Friday and nothing fails loudly enough to be noticed. So the eight closures are encoded as the rules that generate them, with Easter computed by the anonymous Gregorian computus and `ONE_OFF_CLOSURES` holding the days no rule predicts (the 2022 National Day of Mourning is the one entry).
+
+The rules are not the NSW public-holiday rules, and the differences are exactly where a reasonable implementation goes wrong:
+
+| | Rule | The case that catches it |
+| --- | --- | --- |
+| New Year's Day, Australia Day | weekend → the next Monday | — |
+| Good Friday, Easter Monday | Easter Sunday − 2 and + 1 | — |
+| **Anzac Day** | **never moved off a weekend** | NSW takes the Monday after a Sunday Anzac Day off. **The ASX trades it** — the published 2027 calendar has no April closure at all |
+| King's Birthday | second Monday in June | — |
+| **Christmas, Boxing Day** | **weekend → plus two days**, not "the next Monday" | A Sunday Christmas is observed on the **Tuesday**, because Boxing Day already owns the Monday. A next-Monday rule collides them and loses a closure |
+
+The tests pin 2026 and 2027 against the exchange's own published calendar, date for date. 2027 is there deliberately: it is the year both of the bolded rows disagree with the NSW calendar.
+
+#### Two half days, defined by the calendar rather than by date
+
+The last trading day before Christmas and the last of the year stop normal trading at **14:10** instead of 16:00. They are resolved as *the last trading day on or before 24 and 31 December* rather than written down as those dates — when 24 December falls on a Saturday the early close is the Friday before it, and a countdown that did not know would have run 1h50m long on the one afternoon of the year when a client is most likely to be watching it.
+
+#### Why the arithmetic is on the wall clock
+
+`asxSession` subtracts wall-clock times rather than instants: `closeAt - msOfDay`, both in milliseconds since Sydney midnight. That is exact for what it is used for, and the reason is worth writing down — Sydney changes its offset at 2am/3am, so **no daylight-saving boundary can fall between "now" and a 10:00 or 16:00 on the same day**. Everything that crosses a day boundary (the observance shifts, the half-day search) is done on `YYYY-MM-DD` strings with UTC-only `Date` arithmetic, which is `week.ts`'s discipline and for the same reason: a string that has already been resolved to a Sydney date must not be converted a second time.
+
+The stamp is formatted with `timeZone: "UTC"` for that exact reason. It looks wrong; formatting an already-Sydney date in the viewer's zone is what would actually be wrong, and would put Los Angeles a day behind.
+
+#### Named phases, because "closed" over a price still being struck is a lie
+
+Between 16:00 and about 16:11 the market is in pre-CSPA and then the closing auction: the last price of the day is not set yet. That window is its own phase (`closing-auction`) rather than being folded into either neighbour, and the countdown says `closing auction` rather than `closed`.
+
+#### It ticks
+
+The dashboard's session lives in state and is re-read every second, alongside the countdown it already drove. A phase computed once at render is a phase that goes stale — a tab left open through 4pm used to keep claiming the market was trading, which is the original bug reintroduced at a smaller scale.
+
+Server and client both render the stamp and agree, because both resolve the same instant on the same clock; `suppressHydrationWarning` covers the one second in which a phase can legitimately flip between render and hydration.
+
+#### `DESK_TZ` and `deskDate` moved
+
+Both were in `lib/commentary/week.ts`, written for the Friday-anchoring job. They are facts about the desk rather than about commentary, and a second spelling of `"Australia/Sydney"` in a second file is how two answers to "what day is it in Sydney" get born. They now live in `lib/asx/session.ts` and `week.ts` re-exports them, so its own importers are untouched.
+
+#### The same literal was in two more places, against real data
+
+`new Date(2026, 5, 12)` had been copied out of the dashboard, and grepping for it found two live instances that were worse than the header:
+
+- **`PlacementsClient.tsx`, the bid-tracking timeline.** Its first row — **Bid placed** — printed *12 Jun* against a real bid of a real amount. `bids.created_at` existed the whole time and the query already selected it; `BidRow` simply dropped it on the way through. It now carries `placedAt`, and the row renders it on the desk's clock, because a bid placed at 8am Sydney is a Sydney date and the server runs in UTC.
+- **`InvestClient.tsx`, the plan builder.** Allocation dates were computed as `baseDate + TFMETA[tf].days` from the same literal, so every Tactical / Core / Strategic date in a freshly built plan was already in the past. Anchored to `deskDate()` instead.
+
+`lib/db.ts`'s `TODAY` is the same literal and is deliberately left: that module is the legacy in-memory database, imported by no route and pending removal.
+
+#### The greeting, and the one place the desk's clock is the wrong clock
+
+`Good morning` was also a literal, at every hour of the day. It now picks between morning, afternoon and evening — on the **reader's** clock, which is the one deliberate exception on that header row.
+
+Everything else in the line belongs to Sydney because it is a fact about the market. A greeting is addressed to the person holding the screen, and telling a client in Perth "good evening" at half past four because it is past six in Sydney would be the countdown bug in reverse: the market's clock applied to something that is not the market's business.
+
+That leaves the usual server/client split, since only the browser knows the reader's zone. Sydney is the SSR default — server and client agree on it for the same instant, so the first paint is right for the Australian clients who are almost all of the book — and the tick that already drives the session corrects it on mount for anyone reading from elsewhere.
+
+
+### 8.50 A column clients read as an instruction (`lib/glossary.ts`, `app/components/GlossaryStrip.tsx`)
+
+Clients were reading **Unrealised P&L** as a pending action and asking the desk to realise it for them.
+
+That is not a silly misreading. "Unrealised" is a past participle: it describes something that *has not been done yet*, which in every other context implies somebody could do it. The column was describing a state and being read as a queue.
+
+#### The rename
+
+**Open P&L**, in all seven client-facing places — four column headers, the options tile, the Top movers subtitle and the holding drawer. Three reasons it is the right word rather than merely a different one:
+
+- **It describes the position, not an action.** Nobody asks the desk to "open" a P&L.
+- **The product already said it.** The headline P&L on Home and Portfolio has always carried the subtitle `realised + open`. The vocabulary was there; the columns just did not match it. Read as a pair — **Realised / Open** — the two now describe one complete picture: money taken, money still in the market.
+- **`Unreal. P&L` was the worst of the seven.** Truncated to fit a 10.5px uppercase header, it reads as *unreal*. Some of the confusion probably started there.
+
+Staff screens keep `Unreal. P&L`. The desk are professionals for whom it is the standard term, and §8.41's "one implementation so the two screens cannot drift" is about the *rows*, not about the chrome.
+
+**Against the change**, and recorded because it may yet matter: these are s708 clients, certified sophisticated investors, and "unrealised P&L" is what CommSec, Stake and their tax statements call it. `also: ["Unrealised P&L", "Unreal. P&L"]` on the glossary entry is the hedge — the old name is still printed beside the new one, so nobody has to wonder whether they are the same figure.
+
+#### Renaming one column does not fix the category
+
+Strike, spot, moneyness, scaleback, s708, contract note, T+2. A portal for wholesale investors is made of those words, and each one is a support email waiting to happen. So the definitions became a module.
+
+**`lib/glossary.ts` is the single source, and it did not start empty** — the definitions were already in the product, scattered as `title=` strings on individual `<th>` elements. `"Qty × (Spot − Strike), floored at zero"` lived inside `OptionsClient.tsx` and nowhere else. That is survivable until the same column appears on a second screen, at which point there are two definitions of one term and nothing keeps them in step. For a financial product a wrong definition is a compliance problem, so there has to be exactly one place to correct it.
+
+Two rules are **enforced by tests rather than trusted to the author**, which is the part worth keeping:
+
+| Rule | Why it is a test |
+| --- | --- |
+| A definition says what a figure **is**, never what to do about it | The line between explaining a number and advising on it is the whole regulatory point on a client-facing screen. `lib/commentary/prompt.ts` already gates *generated* text this way; this is the same gate over text a human wrote |
+| A definition quotes **no figures** | A definition carrying a number goes stale, and the client's own number is on the screen beside it. Session times and `section 708` are the allowed exceptions, because there the number *is* the meaning |
+
+#### Why a strip on every page, and not the two obvious alternatives
+
+Both obvious answers fail, in opposite directions:
+
+- **Tooltips** answer at the exact moment of confusion, which is the right instinct — but they are invisible until hovered, and **hover does not exist on a phone**. The client who most needs the definition never learns it is there.
+- **A `/glossary` route** is perfectly discoverable and nobody goes to it. A word you must navigate away from your portfolio to look up is a word you email the desk about instead.
+
+`GlossaryStrip` takes the useful half of each: it sits at the top of the page, and **collapsed it still names every term it covers** as a row of chips. A client scanning the Options tab reads `Strike · Spot · Moneyness` before they read the table, so they learn both that those words have meanings and that the meanings are one click away — without the definitions pushing their own figures below the fold on every visit.
+
+#### The page passes nothing
+
+`PAGE_TERMS` maps route → terms and the component reads `usePathname()` itself. `lib/nav/coming-soon.ts`'s reasoning applied to words: one list, because the alternative is eight arrays in eight components and no way to notice that the Options tab explains `strike` while the Portfolio tab, which shows the same column, does not. Reading down the map is how that gap becomes visible.
+
+Resolution is **longest-prefix**, and both halves of that are load-bearing. Prefix, so `/portal/client/placements/<id>` inherits its section's terms rather than rendering nothing; longest, because `/portal/client` prefixes every other client route and would otherwise serve Home's terms to every page. Both are tested, because the failure mode is invisible in a way most are not — **an empty strip looks exactly like a page with no jargon on it**.
+
+#### Open/closed is a module store
+
+`useSyncExternalStore`, for `NewsViewToggle`'s two reasons (§8.45). A client who opens the definitions on Portfolio has said they want them, and finding them shut again on Options is the product forgetting something it was just told. And `localStorage` does not exist on the server, so the saved value cannot be read during the render that produces the HTML — reading it in a mount effect and calling `setState` renders once and throws that render away, which is what the repo's lint rule about setState in effects is for (§8.27). The server snapshot is `false`, and closed is the right constant precisely because the collapsed strip is already doing the job.

@@ -6,6 +6,7 @@ import { getClientPnlOverrides } from "@/lib/data/holdings";
 import { clientSummary } from "@/lib/pnl/client-portfolio";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
 import { HoldingsNews, SectorNews } from "./InsightsNews";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 export const metadata = {
   title: "Insights — Vitti Capital",
@@ -110,6 +111,8 @@ export default async function ClientInsightsPage() {
           market is under Market.
         </p>
       </div>
+
+      <GlossaryStrip />
 
       {/* ── Your holdings, in today's filings ───────────────────── */}
       <HoldingsNews

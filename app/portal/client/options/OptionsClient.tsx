@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { OptionTableItem } from "@/lib/options/from-stored-pnl";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import { TablePagination } from "@/app/components/TablePagination";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 /**
  * The client's options register — the same table the desk reads.
@@ -120,6 +121,8 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
         </p>
       </div>
 
+      <GlossaryStrip />
+
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
@@ -133,14 +136,19 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
-            Unrealised P&amp;L
+            Open P&amp;L
           </div>
           <div
             className={`font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 ${totalPnl >= 0 ? "text-gain" : "text-loss-d"}`}
           >
             {totalPnl < 0 ? "-" : "+"}${money2(Math.abs(totalPnl))}
           </div>
-          <div className="text-xs text-mut mt-1">across all series</div>
+          {/*
+            The tile is where the question actually gets asked, because it is
+            the big number — so it says in words what "Open" means. `Unrealised`
+            read as a pending action clients could ask the desk to complete.
+          */}
+          <div className="text-xs text-mut mt-1">while still held &middot; all series</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] font-medium text-mut uppercase tracking-wider">
@@ -221,7 +229,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                   Exercise Value
                 </th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
-                <th className="px-4 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L</th>
+                <th className="px-4 py-2.5 text-right whitespace-nowrap">Open P&amp;L</th>
                 <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
               </tr>
             </thead>
@@ -317,7 +325,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                           ${money2(o.marketValue)}
                         </td>
 
-                        {/* Unrealised P&L */}
+                        {/* Open (unrealised) P&L */}
                         <td
                           className={`px-4 py-3 text-right font-mono font-semibold whitespace-nowrap ${
                             isUp ? "text-gain" : "text-loss-d"

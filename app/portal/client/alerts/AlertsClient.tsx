@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import { Clock, TrendingUp, AlertTriangle } from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert, addCustomAlert } from "@/app/actions/alerts";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 export function AlertsClient({
   alerts,
@@ -117,6 +118,8 @@ export function AlertsClient({
           + Custom price alert
         </button>
       </div>
+
+      <GlossaryStrip />
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

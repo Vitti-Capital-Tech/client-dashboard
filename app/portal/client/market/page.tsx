@@ -8,6 +8,7 @@ import {
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
 import { AsxNewsClient } from "./AsxNewsClient";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 function newsTime(iso: string): string {
   return new Date(iso).toLocaleString("en-AU", {
@@ -106,6 +107,8 @@ export default async function ClientMarketPage() {
           Where the money is moving, what’s driving it, and how it reads across your book.
         </p>
       </div>
+
+      <GlossaryStrip />
 
       {/* Today, in four numbers. Everything here is counted off the live ASX
           feed further down the page, so the summary can never disagree with

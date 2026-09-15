@@ -10,6 +10,7 @@ import type {
 import { addCustomAlert } from "@/app/actions/alerts";
 import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
 import { useToast } from "@/app/components/Toast";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 // Local view shape for a watchlist row.
 type WatchItem = {
@@ -218,6 +219,8 @@ export function WatchlistClient({
           + Add security
         </button>
       </div>
+
+      <GlossaryStrip />
 
       {/* Live Placement Banner */}
       {matchedPlacement && (

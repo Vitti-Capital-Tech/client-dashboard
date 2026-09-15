@@ -3,6 +3,8 @@
 import React, { useState, useEffect } from "react";
 import type { PlacementRow, BidRow } from "@/lib/data/queries";
 import { placeBid, withdrawBid, notifyBpayPayment } from "@/app/actions/placements";
+import { asxSession, closeCountdown, DESK_TZ } from "@/lib/asx/session";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 export function PlacementsClient({
   placements,
@@ -19,29 +21,24 @@ export function PlacementsClient({
   const [bidAmount, setBidAmount] = useState("25,000");
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [countdown, setCountdown] = useState("closes 4:00:00");
+  const [countdown, setCountdown] = useState(() => closeCountdown(asxSession()));
 
   const openPlacements = placements.filter(p => p.stage === "open" || p.stage === "upcoming");
   const myPlacements = placements.filter(p => p.bids.some(b => b.clientId === clientId));
 
-  // Live countdown timer for the book close (closes 4:00pm)
+  /**
+   * Live countdown to the book close.
+   *
+   * A book shuts when the desk shuts it, and the desk works the ASX session, so
+   * the countdown runs on Sydney's clock via `lib/asx/session`. It used to run
+   * to `setHours(16, 0, 0, 0)` — 4pm wherever the *browser* was, which told a
+   * client in Perth the book was open two hours after it had closed and told
+   * one in London it had closed before it opened.
+   */
   useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      const close = new Date();
-      close.setHours(16, 0, 0, 0);
-      const diff = Math.max(0, close.getTime() - now.getTime());
-
-      if (diff === 0) {
-        setCountdown("closed");
-      } else {
-        const h = Math.floor(diff / 3600000);
-        const m = Math.floor((diff % 3600000) / 60000);
-        const s = Math.floor((diff % 60000) / 1000);
-        setCountdown(`closes ${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
-      }
-    }, 1000);
-
+    const tick = () => setCountdown(closeCountdown(asxSession()));
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -379,7 +376,14 @@ export function PlacementsClient({
             {/* Timeline wrapper card */}
             <div className="card bg-white border border-line rounded-[14px] p-5 shadow-shadow">
               <div className="space-y-0.5">
-                {timelineRow("done", "Bid placed", `${new Date(2026, 5, 12).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; $${bid.amount.toLocaleString("en-AU")}`)}
+                {/*
+                  The date this bid was actually placed. It used to be
+                  `new Date(2026, 5, 12)` — a literal 12 June 2026 printed
+                  against a real bid, on the client's own tracking timeline.
+                  Read on the desk's clock, because a bid placed at 8am Sydney
+                  is a Sydney date and the server runs in UTC.
+                */}
+                {timelineRow("done", "Bid placed", `${new Date(bid.placedAt).toLocaleDateString("en-AU", { timeZone: DESK_TZ, day: "numeric", month: "short" })} &middot; $${bid.amount.toLocaleString("en-AU")}`)}
 
                 {timelineRow(
                   p.stage === "open" ? "now" : "done",
@@ -540,6 +544,8 @@ export function PlacementsClient({
         <div className="font-mono text-xs tracking-wider uppercase text-mut">Capital raises</div>
         <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink">Placement Bidder</h1>
       </div>
+
+      <GlossaryStrip />
 
       {/* Open & Upcoming raises */}
       <div className="space-y-3">

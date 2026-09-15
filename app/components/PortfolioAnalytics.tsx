@@ -430,7 +430,7 @@ export function PortfolioAnalytics({
           <div className="card bg-white border border-line rounded-[14px] shadow-shadow overflow-hidden">
             <div className="flex justify-between items-center px-4.5 py-3 border-b border-line">
               <b className="text-sm font-semibold text-ink">Top movers</b>
-              <span className="text-mut text-xs font-semibold">unrealised, this account</span>
+              <span className="text-mut text-xs font-semibold">open P&amp;L, this account</span>
             </div>
             <table className="w-full border-collapse text-left text-xs font-medium">
               <tbody className="divide-y divide-[#f0ede5]">

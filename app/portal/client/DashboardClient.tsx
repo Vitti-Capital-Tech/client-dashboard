@@ -31,6 +31,29 @@ import {
 import { ackAlert } from "@/app/actions/alerts";
 import { isComingSoon } from "@/lib/nav/coming-soon";
 import { PortfolioAnalytics } from "@/app/components/PortfolioAnalytics";
+import { asxSession, closeCountdown, deskHour, sessionStamp } from "@/lib/asx/session";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
+
+/**
+ * Good morning / afternoon / evening, on the READER's clock.
+ *
+ * Deliberately not the desk's, unlike everything else on this header row. The
+ * session stamp beside it is a fact about the market and belongs to Sydney; a
+ * greeting is addressed to the person holding the screen, and telling a client
+ * in Perth "good evening" at half past four because it is past six in Sydney
+ * would be the countdown bug in reverse — the market's clock applied to
+ * something that is not the market's business.
+ *
+ * Sydney is the sensible SSR default: server and client agree on it for the
+ * same instant, so the first paint is right for the Australian clients who are
+ * almost all of the book, and the effect below corrects it on mount for anyone
+ * reading from another timezone.
+ */
+function greetingFor(hour: number): string {
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
+}
 
 export function DashboardClient({
   clientId,
@@ -66,7 +89,8 @@ export function DashboardClient({
   unlisted: number;
 }) {
   const router = useRouter();
-  const [countdown, setCountdown] = useState("closes 4:00:00");
+  const [session, setSession] = useState(asxSession);
+  const [greeting, setGreeting] = useState(() => greetingFor(deskHour()));
 
   const pv = portfolioValue(positions, cash);
 
@@ -106,33 +130,27 @@ export function DashboardClient({
     .sort((a, b) => a.dte - b.dte)
     .slice(0, 4);
 
-  // Live countdown timer for the book close (closes 4:00pm)
+  // Re-read the market's own clock every second. The header stamp and the book
+  // countdown come off the same session so they cannot contradict each other,
+  // and it ticks rather than being frozen at render: a tab left open across 4pm
+  // used to go on claiming the market was trading.
   useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      const close = new Date();
-      close.setHours(16, 0, 0, 0);
-      const diff = Math.max(0, close.getTime() - now.getTime());
-
-      if (diff === 0) {
-        setCountdown("closed");
-      } else {
-        const h = Math.floor(diff / 3600000);
-        const m = Math.floor((diff % 3600000) / 60000);
-        const s = Math.floor((diff % 60000) / 1000);
-        setCountdown(`closes ${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
-      }
-    }, 1000);
-
+    const tick = () => {
+      setSession(asxSession());
+      // The reader's own hour, which only the browser knows — see greetingFor.
+      setGreeting(greetingFor(new Date().getHours()));
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Formatted date
-  const todayStr = new Date(2026, 5, 12).toLocaleDateString("en-AU", {
-    day: "numeric",
-    month: "short",
-    year: "2-digit"
-  }) + " · ASX open";
+  const countdown = closeCountdown(session);
+  // `12 Jun 26 · ASX open` — Sydney's date and the real session, not a literal.
+  // The server renders this too, and agrees because both sides resolve the same
+  // instant on the same clock; `suppressHydrationWarning` on the stamp covers
+  // the one second in which a phase can flip between render and hydration.
+  const todayStr = sessionStamp(session);
 
   // Build marquee ticker content
   const renderTicker = () => {
@@ -263,12 +281,14 @@ export function DashboardClient({
       {/* Page Header */}
       <div className="flex justify-between items-end gap-3 flex-wrap">
         <div>
-          <div className="font-mono text-xs tracking-wider uppercase text-mut">{todayStr}</div>
-          <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink">
-            Good morning, {clientName.split(" ")[0]}
+          <div className="font-mono text-xs tracking-wider uppercase text-mut" suppressHydrationWarning>{todayStr}</div>
+          <h1 className="font-disp font-medium text-[26px] mt-0.5 text-ink" suppressHydrationWarning>
+            {greeting}, {clientName.split(" ")[0]}
           </h1>
         </div>
       </div>
+
+      <GlossaryStrip />
 
       {/* Marquee Ticker */}
       {renderTicker()}
@@ -371,7 +391,7 @@ export function DashboardClient({
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5">Code</th>
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 hidden sm:table-cell">Holding</th>
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right">Value</th>
-                    <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right">Unreal. P&amp;L</th>
+                    <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right">Open P&amp;L</th>
                     <th className="font-semibold text-mut text-[10.5px] uppercase tracking-wider px-4 py-2.5 text-right hidden sm:table-cell">Cost</th>
                   </tr>
                 </thead>

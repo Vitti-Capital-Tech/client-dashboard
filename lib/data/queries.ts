@@ -175,6 +175,8 @@ export type BidRow = {
   amount: number;
   alloc: number | null;
   paid: boolean;
+  /** When the bid was placed, ISO. The tracking timeline's first row. */
+  placedAt: string;
 };
 
 export type PlacementRow = {
@@ -928,6 +930,7 @@ export const getPlacements = cache(async (): Promise<PlacementRow[]> => {
       amount: b.amount,
       alloc: b.alloc,
       paid: b.paid,
+      placedAt: b.created_at,
     });
     bidsByPlacement.set(b.placement_id, list);
   }

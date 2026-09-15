@@ -55,6 +55,7 @@ import { TablePagination } from "@/app/components/TablePagination";
 import { RealisedRangePicker } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { TransactionsTable } from "./TransactionsTable";
+import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 const qty0 = (n: number) => (n ? Math.round(n).toLocaleString("en-AU") : "—");
@@ -1345,7 +1346,7 @@ export function PositionsClient({
                   Current Value ($)
                 </th>
                 <th className="px-4.5 py-2.5 text-right whitespace-nowrap">
-                  Unreal. P&amp;L ($)
+                  Open P&amp;L ($)
                 </th>
                 <th className="px-4.5 py-2.5 whitespace-nowrap">
                   Terms / Valuation Notes
@@ -1546,6 +1547,8 @@ export function PositionsClient({
         </div>
       </div>
 
+      <GlossaryStrip />
+
       {/* Account filter — only where there is more than one account to choose
           between, exactly as on the staff console. Every tab left here follows
           it; Analytics, which deliberately sat outside it, has moved to Home. */}
@@ -1657,7 +1660,7 @@ export function PositionsClient({
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Qty</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Last</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Value</th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Unreal. P&amp;L</th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Open P&amp;L</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
@@ -1834,7 +1837,7 @@ export function PositionsClient({
                 </b>
               </div>
               <div className="flex justify-between py-2 text-xs">
-                <span className="text-mut font-semibold">Unrealised P&amp;L</span>
+                <span className="text-mut font-semibold">Open P&amp;L</span>
                 <b className={`font-mono font-semibold ${posPL(selectedStock) >= 0 ? "text-gain" : "text-loss-d"}`}>
                   {posPL(selectedStock) >= 0 ? "+" : ""}${Math.round(posPL(selectedStock)).toLocaleString("en-AU")}
                   {/* The same zero-cost trap this file's own header describes,

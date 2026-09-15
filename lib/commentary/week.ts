@@ -21,15 +21,16 @@
  * `Intl.DateTimeFormat` already knows, from the platform's own tz database.
  */
 
-/** The desk's timezone. Everything the market does happens on this clock. */
-export const DESK_TZ = "Australia/Sydney";
-
-const YMD = new Intl.DateTimeFormat("en-CA", {
-  timeZone: DESK_TZ,
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-});
+/**
+ * The desk's timezone, and Sydney's calendar date for an instant.
+ *
+ * Both moved to `lib/asx/session.ts`, which is where the trading calendar and
+ * the session clock now live, and are re-exported here so there is one spelling
+ * of "Australia/Sydney" and one answer to "what day is it on the desk". The
+ * commentary job's own importers are unaffected.
+ */
+export { DESK_TZ, deskDate } from "../asx/session.ts";
+import { DESK_TZ, deskDate } from "../asx/session.ts";
 
 /**
  * Day-of-week name, needed because the numeric weekday of an instant in Sydney
@@ -50,12 +51,6 @@ const DAY_INDEX: Record<string, number> = {
   Fri: 5,
   Sat: 6,
 };
-
-/** `YYYY-MM-DD` for this instant, on the desk's clock. */
-export function deskDate(at: Date = new Date()): string {
-  // en-CA formats as YYYY-MM-DD, which is also what Postgres wants for a DATE.
-  return YMD.format(at);
-}
 
 /** Numeric weekday (0 = Sunday) for this instant, on the desk's clock. */
 export function deskWeekday(at: Date = new Date()): number {

@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { IdeaRow, PlacementRow, Position } from "@/lib/data/queries";
 import { posValue } from "@/lib/data/compute";
 import { GOALS } from "@/lib/data/discovery";
+import { deskDate } from "@/lib/asx/session";
 
 interface PlanItem {
   code: string;
@@ -110,9 +111,13 @@ export function InvestClient({
       const tf = deriveTF(i) as "Tactical" | "Core" | "Strategic";
       const pctw = TFMETA[tf].w / wsum;
 
-      // Calculate allocation dates from TODAY (Friday 12 Jun 2026)
-      const baseDate = new Date(2026, 5, 12);
-      baseDate.setDate(baseDate.getDate() + TFMETA[tf].days);
+      // Allocation dates run forward from today — the plan is a schedule the
+      // client is about to act on, so it has to start from the day they are
+      // reading it. This was anchored to a literal `new Date(2026, 5, 12)`,
+      // which put every "Tactical / Core / Strategic" date in the past.
+      // Counted off Sydney's calendar day, since these are ASX trading dates.
+      const [y, m, d] = deskDate().split("-").map(Number);
+      const baseDate = new Date(y, m - 1, d + TFMETA[tf].days);
 
       return {
         code: i.code,

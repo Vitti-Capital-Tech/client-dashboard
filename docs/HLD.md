@@ -290,6 +290,31 @@ To support institutional trading desks operating in varied lighting environments
   - `--theme-row-open` (amber tint `rgba(245, 158, 11, 0.12)` + 3.5px gold accent bar) and `--theme-row-closed` (emerald tint `rgba(16, 185, 129, 0.08)` + 3.5px emerald accent bar) guaranteeing visual separation in Historical P&L across both modes.
 - **Tailwind v4 Integration & Elimination of Contrast Traps:** Configured via `@custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));` in `app/globals.css`. Eradicates legacy CSS anti-patterns where hardcoded hover colors (`hover:bg-[#faf9f5]`) flashed white in dark mode, or where legacy `text-navy` classes caused dark charcoal text to render illegibly on pitch-black backgrounds. All components standardize on dynamic semantic tokens (`text-ink`, `bg-card`, `border-line`, `bg-paper-2`).
 
+### 3.1n The market's own clock (`lib/asx/session.ts`)
+
+A portal for ASX clients states, on several screens, whether the exchange is open and how long a book has left. Those were being answered locally and wrongly: the dashboard header carried the literal string `· ASX open` beside a date hardcoded to 12 June 2026, and both countdowns ran to `setHours(16, 0, 0, 0)` — 4pm in the **viewer's** timezone, so the answer depended on where the client happened to be standing.
+
+There is now one module that answers it, and it answers on Sydney's clock:
+
+- **The trading calendar is computed, not pasted.** ASX publishes it a year at a time; a hardcoded list is silently wrong from the January nobody updates it. The eight annual closures are encoded as their observance rules (Easter by computus), with an explicit table for the days no rule predicts. The rules are the *exchange's*, not NSW's — Anzac Day is not moved off a weekend, and a Sunday Christmas is observed on the Tuesday because Boxing Day owns the Monday. Both are pinned to the published 2026 and 2027 calendars in tests.
+- **Phases, not a boolean.** Pre-open, open, closing auction, closed — the auction window matters because between 16:00 and ≈16:11 the day's last price is still being struck, and reporting "closed" over it would be wrong in the way the old string was.
+- **Half days are real.** The last trading day before Christmas and the last of the year stop at 14:10, resolved off the calendar rather than off the date, so a Saturday 24 December moves the early close to the Friday.
+- **Client-safe by design.** Unlike the rest of `lib/asx/`, it carries no `server-only`: the header stamp and the book timers are client islands, and the whole point is that they and the server resolve the same instant on the same clock.
+
+`DESK_TZ` and `deskDate` moved here out of `lib/commentary/week.ts` — they are facts about the desk rather than about the weekly note, and one spelling of `"Australia/Sydney"` is the point. See LLD §8.49.
+
+### 3.1o The portal's own vocabulary (`lib/glossary.ts`, `app/components/GlossaryStrip.tsx`)
+
+Clients were reading the **Unrealised P&L** column as a pending action and asking the desk to realise it. The column is now **Open P&L**, which pairs with the `realised + open` wording the headline figure already used; staff screens keep the industry term.
+
+Renaming one column does not fix the category — strike, spot, moneyness, scaleback, s708 and T+2 are all on client screens — so the definitions became a module:
+
+- **One source.** Definitions had been living as `title=` strings on individual `<th>` elements. In a financial product a wrong definition is a compliance problem, so there is exactly one place to correct one.
+- **Two rules, enforced by tests.** A definition says what a figure *is* and never what to do about it, and it quotes no figures. The first is the same advice gate `lib/commentary/prompt.ts` puts in front of generated text, applied to text a human wrote.
+- **Explained where the confusion happens.** A strip at the top of each page covers the terms on *that* page; the route→terms map lives beside the definitions, so no page can drift out of step by editing a prop. Collapsed, it still names every term, which is the half a tooltip cannot do on a phone and the half a `/glossary` route cannot do at all.
+
+See LLD §8.50.
+
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
 - **Global Header (Topbar):** Live broker-feed status pill, illustrative search bar, active-user avatar, and the alerts toggle (with unread badge).
