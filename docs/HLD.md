@@ -290,6 +290,30 @@ To support institutional trading desks operating in varied lighting environments
   - `--theme-row-open` (amber tint `rgba(245, 158, 11, 0.12)` + 3.5px gold accent bar) and `--theme-row-closed` (emerald tint `rgba(16, 185, 129, 0.08)` + 3.5px emerald accent bar) guaranteeing visual separation in Historical P&L across both modes.
 - **Tailwind v4 Integration & Elimination of Contrast Traps:** Configured via `@custom-variant dark (&:where([data-theme-mode="dark"], [data-theme-mode="dark"] *));` in `app/globals.css`. Eradicates legacy CSS anti-patterns where hardcoded hover colors (`hover:bg-[#faf9f5]`) flashed white in dark mode, or where legacy `text-navy` classes caused dark charcoal text to render illegibly on pitch-black backgrounds. All components standardize on dynamic semantic tokens (`text-ink`, `bg-card`, `border-line`, `bg-paper-2`).
 
+### 3.1n-b Held tickers, read by the ASX dashboard (`/api/holdings/codes`)
+
+The ASX Intelligence dashboard already supplies this app with market-sensitive
+news (`lib/asx/news.ts`). This is the return leg: it reads the set of ASX codes
+this book holds, and filters each trading day's announcements down to them for
+its **Clients Ticker** tab.
+
+* **Codes only.** No client identity, no quantities. The consumer's question is
+  answered completely by a set of tickers, and an endpoint that never needed to
+  say who holds what should not be able to. Adding `client_id` here means
+  putting a session in front of it first.
+* **`service_role`, guarded by a shared secret.** There is no user — the caller
+  is another server — and the question spans every client's rows, so the secret
+  is the entire boundary: constant-time comparison, unset denies. Its own key
+  (`HOLDINGS_API_KEY`), not `CRON_SECRET`, which can trigger the ingest and the
+  recompute.
+* **Resolved, not raw.** Listed options are cut to their three-character
+  underlying (`HYDOC` → `HYD`) because that is who files; foreign listings
+  (`RKLB:NAS`) are dropped because they do not file with the ASX at all. 146
+  register rows → 118 codes.
+* **Paged.** `pagedSelect`, not a bare select — PostgREST stops at 1,000 rows
+  and says nothing, and a ticker list that silently loses its tail as the book
+  grows is the same class of bug §4.9 already fixed elsewhere.
+
 ### 3.1n The market's own clock (`lib/asx/session.ts`)
 
 A portal for ASX clients states, on several screens, whether the exchange is open and how long a book has left. Those were being answered locally and wrongly: the dashboard header carried the literal string `· ASX open` beside a date hardcoded to 12 June 2026, and both countdowns ran to `setHours(16, 0, 0, 0)` — 4pm in the **viewer's** timezone, so the answer depended on where the client happened to be standing.

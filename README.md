@@ -549,6 +549,7 @@ INGEST_BUDGET_MS=40000                                   # optional; default 40s
 PLACEMENT_API_URL=http://3.25.70.124:8000                # optional; the deal-mail feed (see below)
 ASX_API_URL=https://asx.vitticapital.ai                  # optional; market-sensitive news on Insights (see below)
 ASX_API_KEY=                                             # only if that deployment sets one
+HOLDINGS_API_KEY=<a long random string>                  # guards /api/holdings/codes (see below)
 ```
 
 **Regenerating types: `npm run types`.** Not `supabase gen types … > file` typed into a PowerShell prompt — PowerShell 5.1's `>` writes **UTF-16LE**, which doubles the file, makes Git treat it as binary, and leaves `grep`/`awk` finding nothing in a file that looks perfectly fine in an editor. It has caught us twice. The npm script runs through cmd, whose redirect does not transcode.
@@ -572,6 +573,46 @@ rather than throwing if that deployment is down or slow (8s timeout) — Insight
 carries sector momentum and the research library too, and a sibling being
 unreachable should cost one section, not the route. Cached for 5 minutes, which
 matches how often the upstream fetcher runs.
+
+**Held tickers, outbound (`HOLDINGS_API_KEY`).** The same sibling reads back the
+other way. `GET /api/holdings/codes` returns the set of ASX codes this book
+holds, and the ASX Intelligence dashboard's **Clients Ticker** tab filters each
+trading day's ~300-800 announcements down to them — 14-31 on a typical day.
+
+**Codes, and nothing else.** No client ids, no names, no quantities, no costs.
+That is the design, not a payload trimmed for convenience: the consumer's
+question is "is there news on anything we hold today", which a set of tickers
+answers completely, and a dashboard with a different auth model should not be
+able to learn who holds what from an endpoint that never needed to say. Anyone
+adding `client_id` here must put a session in front of it first.
+
+Two adjustments on the way out, because the register is not a list of ASX
+tickers:
+
+* **Options fold into their underlying.** `HYDOC` ("HYDRIX LIMITED - OPTION
+  30-JUN-29") counts as `HYD`, which is who files the announcements — and what
+  the holder of that option actually cares about. An ASX ticker is three
+  characters, so anything longer is cut to its first three. All 43 long codes in
+  the register are options; none is a four-character ETF code, which is the only
+  case the rule would mis-cut.
+* **Foreign listings are dropped.** `RKLB:NAS`, `KRI:TSXV` and the like carry an
+  exchange suffix and do not file with the ASX, so cutting one to `RKL` could
+  only ever produce a false match against an unrelated ASX company.
+
+146 register rows resolve to **118 codes**. The read runs as `service_role` —
+there is no user, and the question spans every client's rows by design — so the
+shared secret **is** the whole boundary: it is compared in constant time
+(`authorisedSharedSecret`), and an unset key denies rather than defaults open.
+Deliberately **not** `CRON_SECRET`: that one triggers the morning ingest and the
+P&L recompute, and a sibling that only needs a list of tickers has no business
+holding it.
+
+```bash
+curl -H "Authorization: Bearer $HOLDINGS_API_KEY" https://client.vitticapital.ai/api/holdings/codes
+```
+
+The consumer sets the same value as `CLIENT_DASHBOARD_API_KEY`, alongside
+`CLIENT_DASHBOARD_URL` pointing at this deployment.
 
 **The deal-mail feed (`PLACEMENT_API_URL`).** Placement and IPO announcements are summarised by a separate system (`Placement_Email` → `placement_api.py` on EC2) and pulled into `placement_candidates` by `/api/ingest/placements`, guarded by the same `CRON_SECRET`. Schedule it like the morning ingest but **separately** — that job is already tight against its ceiling, and a deal summary an hour late costs nothing while a P&L that does not rebuild costs the morning:
 
