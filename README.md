@@ -178,7 +178,9 @@ client-dashboard/
 │   │   │                       #   purpose — the header stamp and the book timer are islands.
 │   │   │                       #   Also the home of DESK_TZ / deskDate (+ 15 tests)
 │   │   ├── news.ts             #   Today's price-sensitive filings, read live from the ASX service
-│   │   ├── quotes.ts           #   Last price + day move for codes nobody holds (watchlist)
+│   │   ├── quotes.ts           #   Last price + day move from the live feed. Batched 40 symbols
+│   │   │                       #   per request — one call with the whole book is refused, and the
+│   │   │                       #   refusal used to come back as an empty map
 │   │   └── directory.ts        #   Code → company name
 │   ├── import/                 # Broker CSV pipeline — pure, dependency-free, shared by Next + CLI
 │   │   ├── csv.ts              #   RFC 4180 reader (broker files quote their commas properly)

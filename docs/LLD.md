@@ -2331,3 +2331,39 @@ What the price cells lacked was `whitespace-nowrap`. Without it a narrow column 
 `PnlRow`'s `buyPrice` and `sellOrCurrent` are left at two decimals, and the reason is in `StoredPnlRow`'s own comment: *"Value sums, not per-unit prices — the calculator's naming, kept."* They are totals wearing the word `price`, and a third decimal on them would be the mirror of the bug this section is about — precision claimed where there is none, rather than dropped where there was some.
 
 The options tables keep `money4` (up to four places) for strike → spot, which already exceeds three. Narrowing them would have *lost* precision on strikes quoted in fractions of a cent.
+
+### 8.55 One request, three hundred symbols (`lib/asx/quotes.ts`)
+
+Three days of live ticks, every one of them reporting:
+
+```json
+{"ok":true,"phase":"open","skipped":false,"quoted":0,"pricesWritten":0,"movesProduced":0}
+```
+
+No move alert had ever fired. `securities.last_price_at` had never been written. The book was not short of candidates — eighteen positions over $2,000, the largest at $77,000 — so the gates in `moves.ts` were not the reason.
+
+`getQuotes` was sending every code in one call:
+
+```ts
+// One batched request. An unknown symbol is omitted from the response
+// rather than failing it, so a delisted name costs nothing.
+const quotes = await yf.quote(wanted.map((t) => `${t}.AX`));
+```
+
+That comment is true of a handful of symbols and false of three hundred. Yahoo refuses a list that long, the single `try/catch` around the whole function swallowed the refusal, and every caller got an empty map.
+
+#### Why it worked everywhere else
+
+The watchlist asks about the securities on one client's watchlist — a dozen at most, comfortably inside the limit. `getQuotes` had been correct for its only caller since it was written. The alert tick is the first thing to ask about **every security every client holds**, and the function had no batching because nothing had ever needed it.
+
+#### Two changes, and the second is the one that matters
+
+**Batching.** Forty symbols per request, sequential. Sequential because Yahoo is an unofficial endpoint and eight simultaneous requests is the traffic shape that gets rate-limited; eight in a row costs a couple of seconds inside a 60-second budget. Each batch has its own `try/catch`, so one bad symbol cannot discard the prices already fetched — the old single catch meant exactly that.
+
+**Reporting `requested` beside `quoted`.** `quoted: 0` is the same number whether the feed refused the request or the book is empty, and that ambiguity is what let this run for three days looking like a market in which nothing happened. `requested: 312, quoted: 0` is a feed outage; `requested: 0, quoted: 0` is an empty book. The failed batches are also logged by name, so the console says *which* codes went missing rather than only that something did.
+
+#### The fourth time
+
+This is the same failure shape as §8.42's successful POST that imported nothing, §8.51's realtime stream that connected and delivered nothing, and §8.52's scanner that read an empty table and reported `scanned: 0`. In every case the code did not throw, no status was an error, and the only symptom was an absence that looked exactly like quiet.
+
+The lesson each time has been the same and is worth stating as a rule: **a count of things done is not an observation unless the count of things attempted is beside it.**

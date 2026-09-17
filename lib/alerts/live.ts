@@ -49,7 +49,19 @@ export type LiveTickReport = {
   phase: string;
   /** Set, with everything else zero, when the market was shut. */
   skipped: boolean;
-  /** Distinct codes quoted. */
+  /** Distinct codes we asked the feed about. */
+  requested: number;
+  /**
+   * Distinct codes it answered for.
+   *
+   * Reported next to `requested` on purpose. `quoted: 0` alone is the same
+   * number whether the feed refused the request or the book is empty, and the
+   * first version reported exactly that for three days while the quote call was
+   * failing — a silence indistinguishable from calm, which is the failure shape
+   * this codebase keeps producing (§8.42, §8.51, §8.52). A `requested` well
+   * above `quoted` is the feed being down; both zero is a book with nothing in
+   * it.
+   */
   quoted: number;
   /** `securities.last_price` rows updated. */
   pricesWritten: number;
@@ -94,6 +106,7 @@ export async function runLiveTick(db: AdminDb = createAdminClient()): Promise<Li
     date,
     phase: session.phase,
     skipped: true,
+    requested: 0,
     quoted: 0,
     pricesWritten: 0,
     movesProduced: 0,
@@ -110,10 +123,12 @@ export async function runLiveTick(db: AdminDb = createAdminClient()): Promise<Li
 
   const quotes = await getQuotes(codes);
   if (quotes.size === 0) {
-    // Yahoo is rate-limited or down. `getQuotes` already logged it and returns
-    // empty rather than throwing; carrying on would mean scanning against
-    // prices we did not refresh and calling it a live tick.
-    return { ...idle, skipped: false };
+    // The feed is rate-limited or down. `getQuotes` logs which batches failed
+    // and returns what it has rather than throwing; carrying on with nothing
+    // would mean scanning against prices we did not refresh and calling that a
+    // live tick. `requested` is carried out so the response says which of the
+    // two zeroes this is.
+    return { ...idle, skipped: false, requested: codes.length };
   }
 
   /**
@@ -198,6 +213,7 @@ export async function runLiveTick(db: AdminDb = createAdminClient()): Promise<Li
     date,
     phase: session.phase,
     skipped: false,
+    requested: codes.length,
     quoted: quotes.size,
     pricesWritten: changed.length,
     movesProduced: moves.length,
