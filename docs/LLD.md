@@ -2273,3 +2273,61 @@ Two things still hold:
 
 - **The speaker toggle plays the chime when switched on.** It confirms what was enabled, and that click is also a gesture, so it remains a reliable manual unlock.
 - **The tab count is the reliable channel and the sound is the courtesy.** The count is always correct; the chime is best-effort, because a client who loads the portal and touches nothing at all still gets no sound and no browser permits otherwise. Anything that must not be missed belongs in the count, the badge and the alert row — never in the sound alone.
+
+### 8.54 Two decimals do not describe a ten-cent stock (`lib/ui/price.ts`)
+
+The first live alert read:
+
+> underlying **$0.11** vs strike **$0.10**
+
+The underlying was $0.105. `toFixed(2)` rounded it **up past the strike**, so a 5% edge was printed as a 10% one — in an alert whose entire subject is the distance between those two numbers.
+
+That is not a display nit on this book. Most of the register is small-cap ASX names trading in fractions of a cent, and at those prices the third decimal is not a refinement, it is the position: $0.105 and $0.11 differ by 5% of the strike.
+
+#### One formatter, for one kind of number
+
+Last prices were being formatted at ten call sites with `toFixed(2)`, plus one site that had already noticed the problem and worked around it locally (`toFixed(w.last < 10 ? 3 : 2)` in the watchlist). `priceText` replaces all of them.
+
+**Up to three places, not exactly three.** `minimumFractionDigits: 2` keeps a $40 stock reading `$40.25` rather than `$40.250` — a trailing zero claims a precision the quote does not have. The third place appears only when the price uses it. Same shape as the options tables' `money4`, which keeps up to four for strikes quoted in fractions of a cent.
+
+**No quote renders as an em dash, never `$0.00`.** A security we have no price for is not a security worth nothing, and zero is the wrong answer to "what is this trading at".
+
+#### What it is deliberately not for
+
+A price is the cost of one unit of something. An **amount** is a quantity of dollars. They are different kinds of number and are formatted by different rules:
+
+| | Example | Rule |
+| --- | --- | --- |
+| Price | last, spot, strike | up to 3 decimals — `priceText` |
+| Amount | portfolio value, cost base, P&L, exercise value | 2 decimals — `money2` |
+
+`lib/alerts/scan.ts` makes the split explicit by naming its two helpers `priceText` and `amount`. Three decimals on `$424,220.15` is noise; two on a ten-cent price is a false statement. The alert's exercise value also picked up thousand separators on the way past — `$30000.00` is not how anyone writes thirty thousand dollars, least of all to a client.
+
+**Index levels are not prices.** The ticker quotes XJO in points with its own `dp` and is untouched.
+
+#### Every per-unit price, not only the last one
+
+The first pass changed last prices alone, which is what was asked. It left research targets, entry ranges, placement offer prices, option strikes and custom alert thresholds at two decimals — and every one of those is a per-unit price on the same small-cap securities. A placement offered at $0.025 printed as `$0.03` on the screen clients bid against; an option struck at $0.105 printed as `$0.11`, the same rounding that produced the alert this section opens with.
+
+They now all go through `priceText`. The full set:
+
+| Screen | What |
+| --- | --- |
+| Portfolio, Watchlist, staff client profile | Holdings **Last** column |
+| Portfolio | Order drawer — last close, shares at |
+| Placements, Dashboard, Watchlist, staff placements | Offer price, discount-to-last-close |
+| Dashboard, Ask Vitti | Option **strike** on the expiry rail |
+| Invest, Markets, Portfolio | Research target, entry range |
+| Alerts, Watchlist | Custom alert threshold |
+
+#### Longer numbers, and what actually had to change for them
+
+`$0.105` is two characters wider than `$0.11`, which raised the obvious worry about table layout. The fix was not wider columns — an HTML table already sizes itself to its content, and a hardcoded width would have been a number to maintain that fights the browser.
+
+What the price cells lacked was `whitespace-nowrap`. Without it a narrow column is free to break `$0.105` across two lines as `$0.1` / `05`, which is not a cramped price, it is **a different price**. The nowrap is on both the cell and its header, and every one of these tables already sits in an `overflow-x-auto` wrapper — so a table that genuinely needs more room scrolls sideways rather than mangling a figure.
+
+#### The one place that looks like a price and is not
+
+`PnlRow`'s `buyPrice` and `sellOrCurrent` are left at two decimals, and the reason is in `StoredPnlRow`'s own comment: *"Value sums, not per-unit prices — the calculator's naming, kept."* They are totals wearing the word `price`, and a third decimal on them would be the mirror of the bug this section is about — precision claimed where there is none, rather than dropped where there was some.
+
+The options tables keep `money4` (up to four places) for strike → spot, which already exceeds three. Narrowing them would have *lost* precision on strikes quoted in fractions of a cent.

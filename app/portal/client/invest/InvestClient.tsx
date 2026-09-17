@@ -5,6 +5,7 @@ import type { IdeaRow, PlacementRow, Position } from "@/lib/data/queries";
 import { posValue } from "@/lib/data/compute";
 import { GOALS } from "@/lib/data/discovery";
 import { deskDate } from "@/lib/asx/session";
+import { priceText } from "@/lib/ui/price";
 
 interface PlanItem {
   code: string;
@@ -264,7 +265,7 @@ export function InvestClient({
                     <div>
                       <div className="text-[10px] uppercase font-mono text-mut">Target</div>
                       <div className="font-mono font-bold text-xs text-ink">
-                        {it.target ? `$${it.target.toFixed(2)}` : "deal"}
+                        {it.target ? priceText(it.target) : "deal"}
                       </div>
                     </div>
                     <div>
@@ -371,7 +372,7 @@ export function InvestClient({
               <div className="bg-paper-2 rounded-[10px] p-3 space-y-1.5 text-xs text-mut font-semibold leading-normal">
                 <div className="flex justify-between">
                   <span>Target</span>
-                  <b className="font-mono text-ink">{ideaOfWeek.target ? `$${ideaOfWeek.target.toFixed(2)}` : "—"}</b>
+                  <b className="font-mono text-ink">{ideaOfWeek.target ? priceText(ideaOfWeek.target) : "—"}</b>
                 </div>
                 <div className="flex justify-between">
                   <span>Upside</span>
@@ -442,7 +443,7 @@ export function InvestClient({
                   <div>
                     <div className="text-[9.5px] uppercase font-mono text-mut">Target</div>
                     <div className="font-mono font-bold text-xs text-ink">
-                      {i.target ? `$${i.target.toFixed(2)}` : "Deal"}
+                      {i.target ? priceText(i.target) : "Deal"}
                     </div>
                   </div>
                   <div>
@@ -587,12 +588,12 @@ export function InvestClient({
                   <div className="flex justify-between py-2">
                     <span className="text-mut">Entry range</span>
                     <b className="font-mono text-ink">
-                      {i.entryLo ? `$${i.entryLo.toFixed(2)}–$${i.entryHi!.toFixed(2)}` : `Deal Price $${(placements.find(p => p.id === i.placementId)?.price || 0).toFixed(2)}`}
+                      {i.entryLo ? `${priceText(i.entryLo)}–${priceText(i.entryHi!)}` : `Deal Price ${priceText(placements.find(p => p.id === i.placementId)?.price ?? null)}`}
                     </b>
                   </div>
                   <div className="flex justify-between py-2">
                     <span className="text-mut">Price target</span>
-                    <b className="font-mono text-ink">{i.target ? `$${i.target.toFixed(2)}` : "—"}</b>
+                    <b className="font-mono text-ink">{i.target ? priceText(i.target) : "—"}</b>
                   </div>
                   <div className="flex justify-between py-2">
                     <span className="text-mut">Implied upside</span>

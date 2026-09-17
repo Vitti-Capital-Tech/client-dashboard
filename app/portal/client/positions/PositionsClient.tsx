@@ -55,6 +55,7 @@ import { TablePagination } from "@/app/components/TablePagination";
 import { RealisedRangePicker } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { TransactionsTable } from "./TransactionsTable";
+import { priceText } from "@/lib/ui/price";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
@@ -1658,7 +1659,7 @@ export function PositionsClient({
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3">Code</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 hidden sm:table-cell">Holding</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Qty</th>
-                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right hidden sm:table-cell">Last</th>
+                  <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right whitespace-nowrap hidden sm:table-cell">Last</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Value</th>
                   <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Open P&amp;L</th>
                 </tr>
@@ -1761,7 +1762,7 @@ export function PositionsClient({
                         <div className="text-[10.5px] mt-0.5">{p.sector ?? "—"}</div>
                       </td>
                       <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
-                      <td className="px-4.5 py-3 text-right font-mono hidden sm:table-cell">${(p.last ?? 0).toFixed(2)}</td>
+                      <td className="px-4.5 py-3 text-right font-mono whitespace-nowrap hidden sm:table-cell">{priceText(p.last)}</td>
                       <td className="px-4.5 py-3 text-right font-mono font-semibold">${Math.round(val).toLocaleString("en-AU")}</td>
                       <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
                         ${Math.round(pl).toLocaleString("en-AU")}
@@ -1854,7 +1855,7 @@ export function PositionsClient({
                   <span className="text-mut font-semibold">Vitti target</span>
                   <b className="font-mono text-ink font-semibold">
                     {advice.target && selectedStock.last
-                      ? `$${advice.target.toFixed(2)} · +${Math.round((advice.target / selectedStock.last - 1) * 100)}%`
+                      ? `${priceText(advice.target)} · +${Math.round((advice.target / selectedStock.last - 1) * 100)}%`
                       : "—"}
                   </b>
                 </div>
@@ -1914,7 +1915,7 @@ export function PositionsClient({
               Route {tradeAction === "Buy" ? "Buy" : "Sell"} Order to Desk
             </h3>
             <p className="text-xs text-mut">
-              {selectedStock.name} &middot; last close ${(selectedStock.last ?? 0).toFixed(2)}
+              {selectedStock.name} &middot; last close {priceText(selectedStock.last)}
             </p>
 
             <div className="space-y-1">
@@ -1926,7 +1927,7 @@ export function PositionsClient({
                 className="w-full border border-line-2 bg-white rounded-[9px] px-3.5 py-2.5 font-mono text-sm focus:border-green focus:outline-none"
               />
               <div className="text-[11px] text-mut mt-1">
-                &asymp; {tradeCalculatedShares().toLocaleString("en-AU")} shares at ${(selectedStock.last ?? 0).toFixed(2)}
+                &asymp; {tradeCalculatedShares().toLocaleString("en-AU")} shares at {priceText(selectedStock.last)}
               </div>
             </div>
 

@@ -5,6 +5,7 @@ import {
   getResearchReports,
 } from "@/lib/data/queries";
 import { AlertButton } from "./AlertButton";
+import { priceText } from "@/lib/ui/price";
 
 // Server Component: data comes from the DAL (Supabase) at request time.
 export default async function ClientMarketsPage() {
@@ -118,7 +119,7 @@ export default async function ClientMarketsPage() {
                         </span>
                       </td>
                       <td className="px-4.5 py-2.5 text-right font-mono text-[12.5px]">
-                        {r.target ? `$${r.target.toFixed(2)}` : "—"}
+                        {r.target ? priceText(r.target) : "—"}
                       </td>
                       <td className="px-4.5 py-2.5 text-right font-mono text-mut hidden sm:table-cell">
                         {r.move}

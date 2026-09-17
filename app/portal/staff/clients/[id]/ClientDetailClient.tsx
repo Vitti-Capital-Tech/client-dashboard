@@ -56,6 +56,7 @@ import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { RealisedRangePicker, type DateRange } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { posValue, posCost, posPL, unlistedValue } from "@/lib/data/compute";
+import { priceText } from "@/lib/ui/price";
 
 /**
  * Money to the cent, thousands-separated. These are settled cash amounts from
@@ -1008,7 +1009,7 @@ export function ClientDetailClient({
                         </td>
                         <td className="px-4.5 py-3 text-right font-mono">{p.qty.toLocaleString("en-AU")}</td>
                         <td className="px-4.5 py-3 text-right font-mono">${p.cost.toFixed(2)}</td>
-                        <td className="px-4.5 py-3 text-right font-mono">${(p.last ?? 0).toFixed(2)}</td>
+                        <td className="px-4.5 py-3 text-right font-mono whitespace-nowrap">{priceText(p.last)}</td>
                         <td className="px-4.5 py-3 text-right font-mono font-semibold">${money2(posValue(p))}</td>
                         <td className={`px-4.5 py-3 text-right font-mono ${isUp ? "text-gain" : "text-loss-d"}`}>
                           ${money2(pl)}

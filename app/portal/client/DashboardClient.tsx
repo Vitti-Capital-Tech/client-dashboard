@@ -33,6 +33,7 @@ import { isComingSoon } from "@/lib/nav/coming-soon";
 import { PortfolioAnalytics } from "@/app/components/PortfolioAnalytics";
 import { asxSession, closeCountdown, deskHour, sessionStamp } from "@/lib/asx/session";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
+import { priceText } from "@/lib/ui/price";
 
 /**
  * Good morning / afternoon / evening, on the READER's clock.
@@ -452,7 +453,7 @@ export function DashboardClient({
               <div>
                 <h3 className="font-disp font-medium text-lg leading-tight text-ink">{liveDeal.name}</h3>
                 <div className="font-mono text-xs text-mut mt-1">
-                  ASX: {liveDeal.code} &middot; ${liveDeal.price.toFixed(2)} &middot; {liveDeal.disc}% disc
+                  ASX: {liveDeal.code} &middot; {priceText(liveDeal.price)} &middot; {liveDeal.disc}% disc
                 </div>
                 <div className="text-xs text-mut mt-1">
                   Raise ${liveDeal.raise}m &middot; min ${liveDeal.min.toLocaleString("en-AU")} &middot; {liveDeal.opts}
@@ -629,7 +630,7 @@ export function DashboardClient({
                           )}
                         </div>
                         <div className="text-[11px] text-mut mt-1 truncate">
-                          {o.qty.toLocaleString("en-AU")} @ ${o.strike.toFixed(2)}
+                          {o.qty.toLocaleString("en-AU")} @ {priceText(o.strike)}
                           {o.listed ? "" : " · unlisted"}
                         </div>
                       </div>

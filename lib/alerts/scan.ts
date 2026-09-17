@@ -41,6 +41,7 @@
  */
 
 import { moneynessOf, type Moneyness } from "../options/moneyness.ts";
+import { priceText } from "../ui/price.ts";
 
 /** What the scan needs to know about one option. A subset of `OptionRow`. */
 export type ScannableOption = {
@@ -162,7 +163,15 @@ export function ladderRung(dte: number): number | null {
   return EXPIRY_LADDER.filter((t) => dte <= t).at(-1) ?? null;
 }
 
-const money = (n: number) => `$${n.toFixed(2)}`;
+/**
+ * A dollar AMOUNT — an exercise value, not a price.
+ *
+ * Kept separate from `priceText` deliberately. Three decimals on a $30,000
+ * figure is noise; two decimals on a ten-cent price is a lie. The two are
+ * different kinds of number and are formatted by different rules.
+ */
+const amount = (n: number) =>
+  `$${n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const qtyOf = (n: number) => n.toLocaleString("en-AU");
 
 export type OptionScanResult = {
@@ -213,8 +222,11 @@ export function scanOption(
   const alerts: ScannedAlert[] = [];
   const base = { clientId: o.clientId, optionId: o.id };
   const days = `${dte} day${dte === 1 ? "" : "s"}`;
-  const strikeStr = o.strike === null ? "—" : money(o.strike);
-  const underStr = o.under === null ? "no price" : money(o.under);
+  // Prices to three places. `toFixed(2)` printed a $0.105 underlying as $0.11
+  // — rounding it UP past a $0.10 strike, so a 5% edge read as a 10% one in an
+  // alert whose entire subject is the distance between those two numbers.
+  const strikeStr = priceText(o.strike);
+  const underStr = o.under === null ? "no price" : priceText(o.under);
 
   const rung = ladderRung(dte);
   if (rung !== null) {
@@ -256,7 +268,7 @@ export function scanOption(
       subtitle: [
         `${qtyOf(o.qty)} at ${strikeStr}`,
         `underlying ${underStr}`,
-        `exercise value ${money(m.intrinsicValue)}`,
+        `exercise value ${amount(m.intrinsicValue)}`,
         "unlisted options are not exercised automatically",
       ].join(" · "),
       key: `window:${o.id}:${rung}`,
@@ -280,7 +292,7 @@ export function scanOption(
       subtitle: [
         `underlying ${underStr} vs strike ${strikeStr}`,
         edgeStr,
-        `exercise value ${money(m.intrinsicValue)}`,
+        `exercise value ${amount(m.intrinsicValue)}`,
         `${days} to expiry`,
       ]
         .filter(Boolean)

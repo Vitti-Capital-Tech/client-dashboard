@@ -83,8 +83,9 @@ test("unlisted, in the money, window closing — red, and says nothing will do i
   assert.ok(window_, "no window alert");
   assert.equal(window_.severity, "red");
   assert.match(window_.subtitle, /not exercised automatically/);
-  // 100,000 × (0.80 − 0.50)
-  assert.match(window_.subtitle, /exercise value \$30000\.00/);
+  // 100,000 × (0.80 − 0.50). Separated, because a client reads this figure and
+  // `$30000.00` is not how anyone writes thirty thousand dollars.
+  assert.match(window_.subtitle, /exercise value \$30,000\.00/);
 });
 
 test("a LISTED series in the same position is not the red case", () => {

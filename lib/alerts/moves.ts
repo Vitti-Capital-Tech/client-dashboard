@@ -27,6 +27,8 @@
  * point. Enforced by a test, as in `scan.ts` and `lib/glossary.ts`.
  */
 
+import { priceText } from "../ui/price.ts";
+
 /**
  * Bands, widest last. A move reports the LARGEST band it clears, so 22% is a
  * 20% event and not also a 5% and a 10% one.
@@ -82,8 +84,8 @@ export function moveBucket(changePct: number | null): number | null {
   return MOVE_BUCKETS.filter((b) => size >= b).at(-1) ?? null;
 }
 
-const money = (n: number) =>
-  `$${Math.round(n).toLocaleString("en-AU")}`;
+/** A holding's VALUE — dollars, rounded. Not a price; see lib/ui/price.ts. */
+const money = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 
 /**
  * Today's move alerts for one book.
@@ -112,7 +114,7 @@ export function movesForBook(positions: HeldPosition[], today: string): MoveAler
       title: `${p.code} ${up ? "+" : ""}${p.changePct.toFixed(1)}% today`,
       subtitle: [
         `you hold ${p.qty.toLocaleString("en-AU")}`,
-        `${money(value)} at ${p.last.toFixed(3)}`,
+        `${money(value)} at ${priceText(p.last)}`,
         `${bucket}% band`,
       ].join(" · "),
       // The band, not the exact percentage: a position drifting from 12.1% to

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import type { OptionTableItem } from "@/lib/options/from-stored-pnl";
 import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+import { priceText } from "@/lib/ui/price";
 
 const money0 = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
 
@@ -108,7 +109,7 @@ export function AskVittiClient({
         const details = urgentOptions
           .map(
             (o) =>
-              `${o.ticker} (${o.dte}d left${o.strike !== null ? `, strike $${o.strike.toFixed(2)}` : ""})`,
+              `${o.ticker} (${o.dte}d left${o.strike !== null ? `, strike ${priceText(o.strike)}` : ""})`,
           )
           .join(", ");
         ans = `You have ${urgentOptions.length} option${urgentOptions.length > 1 ? "s" : ""} in the money and close to expiry: ${details}. Unlisted options are not auto-exercised, so these are the ones to act on — the Options tab has the full register.`;

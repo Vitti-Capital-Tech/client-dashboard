@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { scaleBids, settlePlacement, bookBidForAccount } from "@/app/actions/placements";
 import type { AccountRow, ClientRow, PlacementRow } from "@/lib/data/queries";
+import { priceText } from "@/lib/ui/price";
 
 export function StaffPlacementsClient({
   placements,
@@ -152,7 +153,7 @@ export function StaffPlacementsClient({
                 {p.name} <span className="font-mono text-sm font-normal text-mut uppercase ml-1">{p.code}</span>
               </h1>
               <div className="text-xs text-mut mt-1">
-                Adviser book manager &middot; {p.type} at ${p.price.toFixed(2)}
+                Adviser book manager &middot; {p.type} at {priceText(p.price)}
               </div>
             </div>
             {getStageBadge(p.stage)}
@@ -382,7 +383,7 @@ export function StaffPlacementsClient({
               <tr className="border-b border-line text-mut select-none">
                 <th className="px-4.5 py-3">Placement</th>
                 <th className="px-4.5 py-3">Type</th>
-                <th className="px-4.5 py-3 text-right">Offer Price</th>
+                <th className="px-4.5 py-3 text-right whitespace-nowrap">Offer Price</th>
                 <th className="px-4.5 py-3 text-center">Bids count</th>
                 <th className="px-4.5 py-3 text-right">Total raised value</th>
                 <th className="px-4.5 py-3">Timeline Close</th>
@@ -400,7 +401,7 @@ export function StaffPlacementsClient({
                       <span className="ml-2 font-disp">{p.name}</span>
                     </td>
                     <td className="px-4.5 py-3.5 text-mut">{p.type}</td>
-                    <td className="px-4.5 py-3.5 text-right font-mono">${p.price.toFixed(2)}</td>
+                    <td className="px-4.5 py-3.5 text-right font-mono whitespace-nowrap">{priceText(p.price)}</td>
                     <td className="px-4.5 py-3.5 text-center">{p.bids.length}</td>
                     <td className="px-4.5 py-3.5 text-right font-mono">${bidsValSum.toLocaleString("en-AU")}</td>
                     <td className="px-4.5 py-3.5 text-mut font-mono text-[11px]">

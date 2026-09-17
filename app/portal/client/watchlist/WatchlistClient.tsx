@@ -10,6 +10,7 @@ import type {
 import { addCustomAlert } from "@/app/actions/alerts";
 import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
 import { useToast } from "@/app/components/Toast";
+import { priceText } from "@/lib/ui/price";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 // Local view shape for a watchlist row.
@@ -176,7 +177,7 @@ export function WatchlistClient({
 
   const handleOpenAlertSetup = (idx: number) => {
     const item = watchlist[idx];
-    setAlertTargetPrice(item.last ? (item.last * 1.05).toFixed(2) : "1.00");
+    setAlertTargetPrice(item.last ? (item.last * 1.05).toFixed(3) : "1.00");
     setAlertDirection("above");
     setShowAlertModal(idx);
   };
@@ -201,7 +202,7 @@ export function WatchlistClient({
     await addCustomAlert(clientId, item.code, targetVal, alertDirection);
 
     setShowAlertModal(null);
-    alert(`Alert armed for ${item.code} at $${targetVal.toFixed(2)}.`);
+    alert(`Alert armed for ${item.code} at ${priceText(targetVal)}.`);
   };
 
   return (
@@ -234,7 +235,7 @@ export function WatchlistClient({
                 {matchedPlacement.name} has a live placement at a {matchedPlacement.disc}% discount.
               </div>
               <div className="text-[11px] text-mut">
-                Closes today &middot; ASX: {matchedPlacement.code} &middot; Offer ${matchedPlacement.price.toFixed(2)}
+                Closes today &middot; ASX: {matchedPlacement.code} &middot; Offer {priceText(matchedPlacement.price)}
               </div>
             </div>
             <button
@@ -255,7 +256,7 @@ export function WatchlistClient({
               <tr className="border-b border-line text-mut select-none">
                 <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3">Code</th>
                 <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 hidden sm:table-cell">Name</th>
-                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Last</th>
+                <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right whitespace-nowrap">Last</th>
                 <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right">Today</th>
                 <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3">Alert</th>
                 <th className="font-semibold text-[10.5px] uppercase tracking-wider px-4.5 py-3 text-right"></th>
@@ -277,8 +278,8 @@ export function WatchlistClient({
                         {w.name}
                         {w.unlisted && <span className="pill bg-[#ece9f3] text-[#5c5775] text-[9.5px] font-bold px-1.5 py-0.5 rounded-full ml-2">Unlisted</span>}
                       </td>
-                      <td className="px-4.5 py-3.5 text-right font-mono text-[13px]">
-                        {w.last !== null ? `$${w.last.toFixed(w.last < 10 ? 3 : 2)}` : "—"}
+                      <td className="px-4.5 py-3.5 text-right font-mono text-[13px] whitespace-nowrap">
+                        {priceText(w.last)}
                       </td>
                       <td
                         className={`px-4.5 py-3.5 text-right font-mono text-[13px] ${
@@ -385,7 +386,7 @@ export function WatchlistClient({
               <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                 <h3 className="font-disp font-medium text-lg text-ink">Price alert &middot; {item.code}</h3>
                 <p className="text-xs text-mut">
-                  {item.name} &middot; last closes ${item.last ? item.last.toFixed(2) : "—"}
+                  {item.name} &middot; last closes {priceText(item.last)}
                 </p>
 
                 <div className="space-y-3">

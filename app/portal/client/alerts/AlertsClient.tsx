@@ -5,6 +5,7 @@ import { Clock, TrendingUp, AlertTriangle } from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
 import { ackAlert, addCustomAlert } from "@/app/actions/alerts";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
+import { priceText } from "@/lib/ui/price";
 
 export function AlertsClient({
   alerts,
@@ -33,7 +34,7 @@ export function AlertsClient({
 
     await addCustomAlert(clientId, code.trim().toUpperCase(), threshold, direction);
     setShowAddModal(false);
-    alert(`Custom price alert armed for ${code} at $${threshold.toFixed(2)}.`);
+    alert(`Custom price alert armed for ${code} at ${priceText(threshold)}.`);
   };
 
   const alertIco = (a: AlertRow) => {

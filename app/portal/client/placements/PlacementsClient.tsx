@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import type { PlacementRow, BidRow } from "@/lib/data/queries";
 import { placeBid, withdrawBid, notifyBpayPayment } from "@/app/actions/placements";
 import { asxSession, closeCountdown, DESK_TZ } from "@/lib/asx/session";
+import { priceText } from "@/lib/ui/price";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 
 export function PlacementsClient({
@@ -147,7 +148,7 @@ export function PlacementsClient({
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="card bg-white border border-line rounded-[14px] p-3 shadow-shadow select-none">
                 <div className="text-[10px] uppercase font-mono tracking-wider text-mut">Offer price</div>
-                <div className="font-mono font-bold text-[18px] text-ink mt-0.5">${p.price.toFixed(2)}</div>
+                <div className="font-mono font-bold text-[18px] text-ink mt-0.5 whitespace-nowrap">{priceText(p.price)}</div>
               </div>
               <div className="card bg-white border border-line rounded-[14px] p-3 shadow-shadow select-none">
                 <div className="text-[10px] uppercase font-mono tracking-wider text-mut">Discount</div>
@@ -173,7 +174,7 @@ export function PlacementsClient({
                 </span>
               </div>
               <p className="text-xs text-mut leading-relaxed">
-                New fully paid ordinary shares at ${p.price.toFixed(2)}, a {p.disc}% discount to last close of ${(p.last || 0).toFixed(2)}.{" "}
+                New fully paid ordinary shares at {priceText(p.price)}, a {p.disc}% discount to last close of {priceText(p.last)}.{" "}
                 {p.opts && p.opts !== "None" ? `Includes ${p.opts.toLowerCase()}. ` : ""}Lead manager: Vitti Capital.
               </p>
 
@@ -272,7 +273,7 @@ export function PlacementsClient({
             <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
               <h3 className="font-disp font-medium text-lg text-ink">Confirm your bid</h3>
               <p className="text-xs text-mut">
-                {p.name} &middot; {p.type} at ${p.price.toFixed(2)}
+                {p.name} &middot; {p.type} at {priceText(p.price)}
               </p>
 
               <div className="divide-y divide-line">
@@ -281,7 +282,7 @@ export function PlacementsClient({
                   <b className="font-mono text-ink font-semibold">${amt.toLocaleString("en-AU")}</b>
                 </div>
                 <div className="flex justify-between py-2 text-xs">
-                  <span className="text-mut font-semibold">Shares at ${p.price.toFixed(2)}</span>
+                  <span className="text-mut font-semibold">Shares at {priceText(p.price)}</span>
                   <b className="font-mono text-ink font-semibold">{sharesCount.toLocaleString("en-AU")}</b>
                 </div>
                 <div className="flex justify-between py-2 text-xs">
@@ -566,7 +567,7 @@ export function PlacementsClient({
 
                 <div className="font-mono text-[11.5px] text-mut leading-none select-none">
                   ASX: {p.code} &middot; {p.type}
-                  {p.price ? ` &middot; $${p.price.toFixed(2)}` : ""}
+                  {p.price ? ` · ${priceText(p.price)}` : ""}
                   {p.disc ? ` &middot; ${p.disc}% disc` : ""}
                 </div>
 
