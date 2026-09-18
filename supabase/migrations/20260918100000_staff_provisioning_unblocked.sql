@@ -110,14 +110,62 @@ CREATE TRIGGER block_self_registered_staff
   BEFORE INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.block_self_registered_staff();
 
--- ----------------------------------------------------------------------------
--- Checking on it
--- ----------------------------------------------------------------------------
---   -- Should SUCCEED now — this is what provisionStaffAccount does:
---   --   admin.auth.admin.createUser({ email: 'new.hire@vitti.capital',
---   --                                 email_confirm: true })
+-- ---------------------------------------------------------------------------
+-- Does it actually work now?
 --
---   -- Should still raise:
+-- This asks the database rather than assuming, because the reasoning above is
+-- an inference and the thing it infers from is deliberately hard to see: the
+-- admin API reports ANY trigger raising on `auth.users` as an empty 500, so
+-- from the application side "fixed" and "still broken for a different reason"
+-- look identical. One unreadable failure has already cost a fortnight.
+--
+-- It inserts the exact row `provisionStaffAccount` causes — staff domain, no
+-- password, unconfirmed at insert — and deletes it again. Nothing is left
+-- behind and no mail is sent; `auth.users` is written directly, so GoTrue is
+-- not involved at all.
+--
+-- Deliberately NON-fatal. A failure here means the fix above did not address
+-- the real cause, and rolling the whole migration back on that would leave
+-- nothing applied AND nothing learned. Instead it prints the exception that
+-- the 500 has been hiding — which trigger, which message, which SQLSTATE — and
+-- that is the one fact needed to fix it properly.
+--
+-- Read the output in the SQL editor's Notices/Messages, or in `db push`'s log:
+--
+--   [selftest] PASSED …   staff provisioning works; new staff can sign in.
+--   [selftest] STILL BLOCKED: <the real error> … send that line back.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  probe_id uuid := gen_random_uuid();
+BEGIN
+  BEGIN
+    INSERT INTO auth.users (
+      instance_id, id, aud, role, email,
+      encrypted_password, email_confirmed_at,
+      created_at, updated_at,
+      raw_app_meta_data, raw_user_meta_data
+    ) VALUES (
+      '00000000-0000-0000-0000-000000000000', probe_id, 'authenticated', 'authenticated',
+      'zz-migration-selftest@vitti.capital',
+      '',    -- what GoTrue writes for a user created without a password
+      NULL,  -- and it confirms in a second statement, so this is NULL at INSERT
+      now(), now(), '{}'::jsonb, '{}'::jsonb
+    );
+
+    DELETE FROM auth.users WHERE id = probe_id;
+
+    RAISE NOTICE '[selftest] PASSED — a passwordless staff INSERT is accepted. New staff can now request a code.';
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING '[selftest] STILL BLOCKED: % (SQLSTATE %)', SQLERRM, SQLSTATE;
+    RAISE WARNING '[selftest] The fix in this migration did not address the real cause. Send the line above back.';
+  END;
+END $$;
+
+-- ----------------------------------------------------------------------------
+-- Checking on it by hand
+-- ----------------------------------------------------------------------------
+--   -- Should still raise — a self-registration carrying a password:
 --   INSERT INTO auth.users (id, email, encrypted_password, aud, role)
 --   VALUES (gen_random_uuid(), 'ceo@vitti.capital', 'x', 'authenticated', 'authenticated');
 --
@@ -125,3 +173,9 @@ CREATE TRIGGER block_self_registered_staff
 --   SELECT email FROM auth.users
 --    WHERE role_from_email_domain(email) = 'admin'
 --      AND coalesce(encrypted_password, '') <> '';
+--
+--   -- Every trigger on auth.users, if the self-test points somewhere else:
+--   SELECT tgname, pg_get_triggerdef(oid)
+--     FROM pg_trigger
+--    WHERE tgrelid = 'auth.users'::regclass AND NOT tgisinternal
+--    ORDER BY tgname;
