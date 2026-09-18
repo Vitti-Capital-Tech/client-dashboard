@@ -22,11 +22,22 @@ import { SignUpClient } from "./SignUpClient";
  * the way it does from /login — resuming requires being signed in. The redirects
  * below are what stop it being a page anybody can loiter on.
  */
-export default async function SignUpPage() {
+export default async function SignUpPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ email?: string }>;
+}) {
   const session = await getSession();
 
   // Nobody signed in: the ordinary case, start at the top.
-  if (!session) return <SignUpClient start="details" />;
+  if (!session) {
+    // `?email=` is set by the sign-in page when it turns somebody away for not
+    // having an account — the same hand-off `/reset-password` already gets. It
+    // is a prefill and nothing more: `startSignUp` validates the address it is
+    // given regardless of where the form got it.
+    const { email } = await searchParams;
+    return <SignUpClient start="details" email={email ?? ""} />;
+  }
 
   // Staff have accounts in a different sense of the word and no `clients` row to
   // claim against. `startSignUp` refuses their addresses outright; this is the

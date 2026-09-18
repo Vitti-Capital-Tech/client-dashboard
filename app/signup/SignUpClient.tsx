@@ -54,12 +54,19 @@ const STEPS: { key: Step; label: string }[] = [
  * the call. So the number is required here, and `page.tsx` sends anybody who
  * closed the tab back to this step until it is done.
  */
-export function SignUpClient({ start }: { start: Step }) {
+export function SignUpClient({
+  start,
+  email: initialEmail = "",
+}: {
+  start: Step;
+  /** Prefill, from `/signup?email=` — see page.tsx. Empty when arriving cold. */
+  email?: string;
+}) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(start);
 
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [digits, setDigits] = useState<string[]>(emptyCode);

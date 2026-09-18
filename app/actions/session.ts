@@ -15,11 +15,11 @@ const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 export type SignInResult =
   | { ok: true; role: Role }
-  | { ok: false; error: string };
+  | { ok: false; error: string; unregistered?: true };
 
 export type CodeRequestResult =
   | { ok: true }
-  | { ok: false; error: string; retryAfter?: number };
+  | { ok: false; error: string; retryAfter?: number; unregistered?: true };
 
 /**
  * Email a one-time code. One of the two ways in; `signInWithPassword` is the
@@ -83,6 +83,36 @@ export async function requestLoginCode(
   // registering at /signup.
   if (staff === true) await provisionStaffAccount(address);
 
+  // ── Say so when there is no account ─────────────────────────────────────
+  // `signInWithOtp` with `shouldCreateUser: false` cannot send to an address it
+  // does not hold. It does not fail loudly either — it answers `otp_disabled`,
+  // which this function used to swallow and report as success. The screen then
+  // said "we sent a code to you@example.com" and no code was ever sent, so a
+  // first-time client sat waiting on an email that did not exist, with the
+  // product looking broken rather than looking like it wanted them to register.
+  //
+  // This is the enumeration trade, made deliberately: a form that tells "no such
+  // user" apart from "code sent" can be used to test whether a given person
+  // banks here, one address at a time. The desk's call, and the reasoning is
+  // that the leak is a stranger learning something about someone they already
+  // had to name, while the silence was every genuinely new client hitting a dead
+  // end on the most prominent button on the page. If it ever needs narrowing,
+  // the thing to add is a per-IP rate limit on this endpoint, not a return to
+  // pretending.
+  //
+  // AFTER provisioning on purpose: a staff address on its first sign-in has just
+  // been created above and is registered by the time we look. And only when the
+  // domain rule actually answered — `staff === null` means it could not be read,
+  // and refusing a real staff member who cannot then register at /signup either
+  // (it turns Vitti addresses away) would be a dead end of our own making.
+  if (staff !== null && !(await isRegistered(address))) {
+    return {
+      ok: false,
+      unregistered: true,
+      error: "We do not have an account for that address yet.",
+    };
+  }
+
   const supabase = await createClient();
   const { error } = await supabase.auth.signInWithOtp({
     email: address,
@@ -101,14 +131,18 @@ export async function requestLoginCode(
     };
   }
 
-  // An address we do not hold answers `otp_disabled` — and that answer must NOT
-  // reach the browser. Which of a wealth manager's clients has a login is itself
-  // client information, and a login form that distinguishes "no such user" from
-  // "code sent" hands over the list an address at a time. So it reports success
-  // and says nothing.
+  // The same "we do not hold this address" answer, reached the other way: the
+  // check above could not run because the domain rule was unreadable, or the row
+  // disappeared between the two calls. Reported as unregistered rather than as
+  // success — this used to return `{ ok: true }`, which is what made the screen
+  // claim a code had been sent when none had.
   if (error.code === "otp_disabled" || error.status === 422) {
     console.warn("login: no code sent to %s — %s", address, error.message);
-    return { ok: true };
+    return {
+      ok: false,
+      unregistered: true,
+      error: "We do not have an account for that address yet.",
+    };
   }
 
   // Anything else is our side failing — most likely the mail provider. Reported,
@@ -143,6 +177,34 @@ async function isStaffAddress(address: string): Promise<boolean | null> {
     return null;
   }
   return role === "admin";
+}
+
+/**
+ * Does this address have an `auth.users` row?
+ *
+ * `auth_user_id_for_email` exists because the admin API has no "get user by
+ * email" — `listUsers` is paginated, and scanning it on every sign-in attempt to
+ * answer a one-row question is the wrong shape. The function is `service_role`
+ * only and deliberately not reachable by `anon`, so the answer can only ever be
+ * given out by code like this, which decides for itself who gets told.
+ *
+ * Failure returns `true`: "we could not check" must not become "you have no
+ * account". Falling through to the OTP send is the same behaviour this had
+ * before the check existed, and an address that really is unknown is caught by
+ * the `otp_disabled` branch anyway.
+ */
+async function isRegistered(address: string): Promise<boolean> {
+  const { createAdminClient } = await import("@/lib/supabase/admin");
+  const admin = createAdminClient();
+
+  const { data, error } = await admin.rpc("auth_user_id_for_email", {
+    addr: address,
+  });
+  if (error) {
+    console.error("login: could not look up %s — %s", address, error.message);
+    return true;
+  }
+  return data !== null;
 }
 
 /**
@@ -240,19 +302,19 @@ export async function verifyLoginCode(
 /**
  * Sign in with a password. The other way in; see `requestLoginCode`.
  *
- * ── One message for every failure ───────────────────────────────────────────
- * Wrong password, no such address, and "this account has never had a password"
- * all answer the same thing. The third is the one worth dwelling on: every login
- * that predates the sign-up page — the seeded clients, anything from
- * `scripts/link-client-login.mjs`, every staff account — has an `auth.users` row
- * with no `encrypted_password`. Reporting that distinctly would say "this address
- * is registered here, it simply has no password yet", which is the client list
- * leaking one address at a time, the exact problem `requestLoginCode` is written
- * around. It would also be an invitation: a stranger who learns an address is
- * password-less knows the reset flow is the way in.
+ * ── Two messages, not three ─────────────────────────────────────────────────
+ * "There is no account for this address" is now said plainly, for the reason
+ * `requestLoginCode` gives at length: the alternative left people guessing at a
+ * form that could never work for them. The lookup runs only once the sign-in has
+ * already FAILED, so the ordinary path costs nothing extra.
  *
- * The hint that this account might want the code instead belongs on the form,
- * offered to everyone, not in an error that fires only for real addresses.
+ * What is still one message is wrong-password versus "this account has never had
+ * a password". Every login that predates the sign-up page — the seeded clients,
+ * anything from `scripts/link-client-login.mjs`, every staff account — has an
+ * `auth.users` row with no `encrypted_password`, and saying so distinctly tells a
+ * stranger which addresses can be taken over through the reset flow. That is a
+ * different and worse leak than existence, and it buys nothing: the answer for
+ * both is the same, and it is already in the sentence — use the code.
  */
 export async function signInWithPassword(
   email: string,
@@ -274,6 +336,15 @@ export async function signInWithPassword(
       return {
         ok: false,
         error: "Too many attempts. Wait a minute and try again.",
+      };
+    }
+    // Only now, on a failure that has already happened: a successful sign-in
+    // never pays for this lookup.
+    if (!(await isRegistered(address))) {
+      return {
+        ok: false,
+        unregistered: true,
+        error: "We do not have an account for that address yet.",
       };
     }
     return {

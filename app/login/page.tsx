@@ -72,6 +72,15 @@ export default function LoginPage() {
   const [digits, setDigits] = useState<string[]>(emptyCode);
 
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Set when the failure was "there is no account for this address".
+   *
+   * Separate from `error` because this one has somewhere to send them, and the
+   * message is only half the answer: telling a first-time client they have no
+   * account without putting the sign-up link under the sentence is most of the
+   * old dead end with a new sentence on top.
+   */
+  const [unregistered, setUnregistered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   /** Set once a session exists and the portal is being navigated to. */
@@ -117,6 +126,7 @@ export default function LoginPage() {
     setMode(next);
     setSent(false);
     setError(null);
+    setUnregistered(false);
     setDigits(emptyCode());
     verifying.current = false;
   };
@@ -127,12 +137,16 @@ export default function LoginPage() {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setUnregistered(false);
 
     const result = await signInWithPassword(email, password);
     if (!result.ok) {
       setBusy(false);
       setError(result.error);
-      setPassword("");
+      setUnregistered(result.unregistered === true);
+      // Kept on a "no account here" failure: they are about to be sent to
+      // sign-up, where it is the password they will register with.
+      if (!result.unregistered) setPassword("");
       // A staff address lands here too, and the message tells it to use the code
       // — which is on this same page, so there is nowhere to send anybody.
       return;
@@ -144,6 +158,7 @@ export default function LoginPage() {
   const sendCode = async (address: string) => {
     setBusy(true);
     setError(null);
+    setUnregistered(false);
     // A new code is a new attempt — including a resend after one was spent.
     verifying.current = false;
     const result = await requestLoginCode(address);
@@ -151,6 +166,7 @@ export default function LoginPage() {
 
     if (!result.ok) {
       setError(result.error);
+      setUnregistered(result.unregistered === true);
       if (result.retryAfter) setCooldown(result.retryAfter);
       return false;
     }
@@ -172,6 +188,7 @@ export default function LoginPage() {
       verifying.current = true;
       setBusy(true);
       setError(null);
+      setUnregistered(false);
 
       const result = await verifyLoginCode(email, code);
       if (!result.ok) {
@@ -194,7 +211,25 @@ export default function LoginPage() {
 
   /** One error block for all three views, so the "wrong door" link cannot end up
    *  on some of them and not others. */
-  const errorBlock = error && <FormError id="login-error">{error}</FormError>;
+  const errorBlock = error && (
+    <FormError id="login-error">
+      {error}
+      {unregistered && (
+        <>
+          {" "}
+          <Link
+            // Carries the address across, the way "Forgot password?" does, so
+            // sign-up does not open by asking for the thing they just typed.
+            href={`/signup?email=${encodeURIComponent(email.trim())}`}
+            className="underline underline-offset-2 whitespace-nowrap"
+          >
+            Create an account
+          </Link>{" "}
+          to get started.
+        </>
+      )}
+    </FormError>
+  );
 
   // The form is replaced rather than covered: it has done its job, and nothing
   // underneath should be tabbable while the browser is on its way to the portal.
@@ -407,6 +442,7 @@ export default function LoginPage() {
               onClick={() => {
                 setSent(false);
                 setError(null);
+                setUnregistered(false);
               }}
               className="text-green-d underline underline-offset-2 cursor-pointer"
             >
