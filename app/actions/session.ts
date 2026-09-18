@@ -100,17 +100,23 @@ export async function requestLoginCode(
   // the thing to add is a per-IP rate limit on this endpoint, not a return to
   // pretending.
   //
-  // `staff === false` and nothing else. Not `!== null`: the two other answers
-  // are both cases where "create an account" is the wrong sentence.
+  // `staff !== null`: clients AND staff both get the plain "no account yet"
+  // answer, so an unregistered person sees the same clear message and the same
+  // "create an account" affordance whichever domain they are on — rather than a
+  // client being told to register while a staff member gets a bare "could not
+  // send the code, try again", which was the confusing split before.
   //
-  // A Vitti address was just provisioned a few lines up, so it is registered by
-  // the time we look — but if that create FAILED, this would tell a new staff
-  // member to register at /signup, which turns Vitti addresses away. And
-  // `staff === null` means the domain rule could not be read at all, so we do
-  // not know which kind of person this is and must not guess the answer that
-  // ends in a refusal. Both fall through to the send below, which is exactly
-  // what this function did before the check existed.
-  if (staff === false && !(await isRegistered(address))) {
+  // For a staff address this branch fires ONLY while provisioning is failing. In
+  // a healthy system `provisionStaffAccount` a few lines up creates the row, so
+  // `isRegistered` is true here and the code is sent — the seamless first
+  // sign-in staff are meant to get, with no account to set up. It is failing now
+  // because the trigger fix in 20260918100000 is unapplied; once it is, staff
+  // never see this message at all.
+  //
+  // `null` (the domain rule could not be read) still falls through to the send,
+  // because guessing "no account" for someone we could not classify is the one
+  // wrong answer that strands a real user.
+  if (staff !== null && !(await isRegistered(address))) {
     return {
       ok: false,
       unregistered: true,
@@ -137,21 +143,18 @@ export async function requestLoginCode(
   }
 
   // The same "we do not hold this address" answer, reached the other way: the
-  // check above was skipped, or the row disappeared between the two calls.
-  // Reported rather than swallowed — this used to return `{ ok: true }`, which
-  // is what made the screen claim a code had been sent when none had.
-  //
-  // A Vitti address landing here means provisioning failed, which is our problem
-  // and not theirs. Sending them to /signup would be sending them somewhere that
-  // refuses them, so they are told to try again instead.
+  // registration check above was skipped (domain rule unreadable) or the row
+  // disappeared between the two calls. `otp_disabled` means precisely "no account
+  // to send to", so it gets the same message the check gives, for clients and
+  // staff alike — this used to return `{ ok: true }`, which is what made the
+  // screen claim a code had been sent when none had.
   if (error.code === "otp_disabled" || error.status === 422) {
     console.warn("login: no code sent to %s — %s", address, error.message);
     if (staff === true) {
-      console.error("login: staff address %s has no account to send to", address);
-      return {
-        ok: false,
-        error: "Could not send the code just now. Please try again.",
-      };
+      console.error(
+        "login: staff address %s has no account and provisioning failed — apply 20260918100000",
+        address,
+      );
     }
     return {
       ok: false,
