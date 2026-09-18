@@ -279,7 +279,20 @@ async function provisionStaffAccount(address: string): Promise<void> {
   // Already registered is the normal case — every sign-in after the first.
   if (error.code === "email_exists" || error.status === 422) return;
 
-  console.error("login: could not provision %s — %s", address, error.message);
+  // Status and code alongside the message, because the message is sometimes not
+  // there. A trigger raising on `auth.users` reaches us as HTTP 500 with an
+  // empty body, so this line read `could not provision … — {}` for the fortnight
+  // `block_self_registered_staff` was refusing every staff account — see
+  // 20260918100000_staff_provisioning_unblocked.sql. A 500 here is nearly always
+  // that: the admin API itself is fine, something in the database said no.
+  console.error(
+    "login: could not provision %s — status %s, code %s, message %s%s",
+    address,
+    error.status ?? "?",
+    error.code ?? "?",
+    error.message || "(empty)",
+    error.status === 500 ? " — a trigger on auth.users is probably refusing the row" : "",
+  );
 }
 
 /**
