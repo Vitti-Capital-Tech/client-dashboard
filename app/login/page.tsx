@@ -321,7 +321,12 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={busy || email.trim() === "" || password === ""}
+            // Not gated on the email being filled: the dev bypass is the secret
+            // in this box with no address, and the button has to be clickable for
+            // it. A normal empty-email submit is caught server-side with "Enter
+            // your email and password", the same message the field would have
+            // prompted, so nothing is lost.
+            disabled={busy || password === ""}
             className={`${buttonClass} bg-navy text-white hover:bg-slate-800`}
           >
             {busy ? "Signing in…" : "Sign in"}

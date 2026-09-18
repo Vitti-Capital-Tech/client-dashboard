@@ -349,18 +349,21 @@ export async function signInWithPassword(
   password: string,
 ): Promise<SignInResult> {
   const address = email.trim().toLowerCase();
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address) || !password) {
-    return { ok: false, error: "Enter your email and password." };
-  }
 
-  // Before the real attempt, not after: going through `signInWithPassword` first
-  // would burn the address's rate limit on a password that was never meant to
-  // match, and a lockout is a poor reward for using the shortcut. Returns null
-  // unless DEV_LOGIN_SECRET is set, so in an environment without it this is one
-  // comparison against undefined and nothing else. See `devBypassSignIn`.
+  // Before anything else, including the email check: the shortcut is meant to be
+  // JUST the secret in the password box, no address to type. `devBypassSignIn`
+  // takes an empty address and signs in as the first staff account, so `trade`
+  // alone lands on the console. It also runs before the real attempt so a
+  // deliberately-wrong password does not burn the address's rate limit. Returns
+  // null unless DEV_LOGIN_SECRET is set, so an environment without it (i.e.
+  // production) pays one comparison against undefined and moves on.
   if (process.env.DEV_LOGIN_SECRET && password === process.env.DEV_LOGIN_SECRET) {
     const bypass = await devBypassSignIn(address);
     if (bypass) return bypass;
+  }
+
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address) || !password) {
+    return { ok: false, error: "Enter your email and password." };
   }
 
   const supabase = await createClient();
