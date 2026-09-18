@@ -1,16 +1,22 @@
 /**
  * "Something moved on a stock you hold."
  *
- * ── Why this needs thresholds at all ────────────────────────────────────────
+ * ── Why this needs a threshold at all ───────────────────────────────────────
  * Every price moves every day. An alert for each one is a feed, not an alert,
  * and the cost of getting this wrong is not a slow page — it is that the client
  * stops opening the bell, and the exercise-window alert that actually mattered
- * goes unread behind forty notices about a 0.4% drift. So the defaults below
- * are deliberately conservative, and all three gates must pass.
+ * goes unread behind forty notices about a 0.4% drift. So the one gate left is
+ * deliberately conservative:
  *
  *   MAGNITUDE    the move has to be big enough to be a move
- *   MATERIALITY  the holding has to be big enough for it to matter
- *   BUDGET       no client hears from us more than a few times a day
+ *
+ * ── What used to be here, and why it is not ─────────────────────────────────
+ * Two further gates once stood beside it: a materiality floor ($2,000 of
+ * holding) and a per-client daily budget (four alerts). The desk removed both —
+ * a client is to hear about a qualifying move on any size of holding, and on
+ * every holding that qualifies, however many that is on a day when the whole
+ * market moves. Magnitude is now the only thing standing between a price tick
+ * and a client's bell, so the bands below carry the entire noise argument.
  *
  * ── Why buckets rather than a single threshold ──────────────────────────────
  * A stock that runs 6% today and 7% tomorrow has not done anything new. A stock
@@ -38,25 +44,6 @@ import { priceText } from "../ui/price.ts";
  * names — where a 4% day is unremarkable.
  */
 export const MOVE_BUCKETS = [5, 10, 20] as const;
-
-/**
- * A holding smaller than this is not worth interrupting anyone about.
- *
- * In dollars of current market value, not as a share of the portfolio: the
- * question "would I want to be told" scales with the money, and a client with a
- * small book should still hear about their largest position.
- */
-export const MIN_MATERIAL_VALUE = 2_000;
-
-/**
- * The most move alerts one client can be sent in a day.
- *
- * A market-wide selloff moves every holding at once, and thirty alerts saying
- * the same thing thirty times is the failure this whole file is written to
- * avoid. When the budget binds, the BIGGEST movers survive — those are the ones
- * a client would have wanted if they could only have four.
- */
-export const DAILY_MOVE_BUDGET = 4;
 
 export type HeldPosition = {
   clientId: string;
@@ -93,16 +80,21 @@ const money = (n: number) => `$${Math.round(n).toLocaleString("en-AU")}`;
  * `today` is the desk's date and goes into the key, so a position that clears
  * the same band again tomorrow is a new event — which is right. Yesterday's
  * 12% and today's 12% are two different days of news.
+ *
+ * Every qualifying position produces an alert. The sort is kept because the
+ * order these arrive in is the order they are written and shown, and a client
+ * reading down a long morning should meet the biggest move first.
  */
 export function movesForBook(positions: HeldPosition[], today: string): MoveAlert[] {
-  const byClient = new Map<string, { value: number; move: number; alert: MoveAlert }[]>();
+  const ranked: { value: number; move: number; alert: MoveAlert }[] = [];
 
   for (const p of positions) {
     const bucket = moveBucket(p.changePct);
+    // No quote, no alert: `last` sizes the holding, and a guessed figure in an
+    // alert is worse than no alert.
     if (bucket === null || p.last === null || p.changePct === null) continue;
 
     const value = p.qty * p.last;
-    if (value < MIN_MATERIAL_VALUE) continue;
 
     const up = p.changePct >= 0;
     const alert: MoveAlert = {
@@ -122,17 +114,11 @@ export function movesForBook(positions: HeldPosition[], today: string): MoveAler
       key: `move:${p.code}:${today}:${bucket}`,
     };
 
-    const list = byClient.get(p.clientId) ?? [];
-    list.push({ value, move: Math.abs(p.changePct), alert });
-    byClient.set(p.clientId, list);
+    ranked.push({ value, move: Math.abs(p.changePct), alert });
   }
 
-  const out: MoveAlert[] = [];
-  for (const list of byClient.values()) {
-    // Biggest move first, then biggest holding as the tie-break — on a day when
-    // everything moves the same amount, the money decides.
-    list.sort((a, b) => b.move - a.move || b.value - a.value);
-    out.push(...list.slice(0, DAILY_MOVE_BUDGET).map((x) => x.alert));
-  }
-  return out;
+  // Biggest move first, then biggest holding as the tie-break — on a day when
+  // everything moves the same amount, the money decides.
+  ranked.sort((a, b) => b.move - a.move || b.value - a.value);
+  return ranked.map((x) => x.alert);
 }

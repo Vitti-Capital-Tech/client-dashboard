@@ -2176,13 +2176,13 @@ So the guard lives in the application, where the calendar already lives and is t
 
 Every price moves every day. An alert per move is a feed, not an alert — and the cost of getting it wrong is not a noisy page, it is that **the client stops opening the bell and the exercise-window alert goes unread behind forty notices about a 0.4% drift.**
 
-Three gates, all of which must pass:
+One gate:
 
 - **Magnitude** — bands at 5 / 10 / 20%. The *band* is the alert key, not the percentage, so a position drifting from 12.1% to 12.4% is one event and reaching 21% is a new one. Same event-not-condition discipline as the option ladder.
-- **Materiality** — the holding must be worth at least $2,000. A 30% move on $400 is not worth interrupting anyone. In dollars rather than as a share of the portfolio, because a client with a small book should still hear about their largest position.
-- **Budget** — at most four move alerts per client per day, biggest movers first. A market-wide selloff moves every holding at once, and thirty alerts saying the same thing thirty times is the exact failure the other two gates were written to avoid.
 
-All three are constants at the top of `lib/alerts/moves.ts`, so they are reviewed and tested beside the rules they belong to rather than buried in a schedule.
+It is a constant at the top of `lib/alerts/moves.ts`, so it is reviewed and tested beside the rule it belongs to rather than buried in a schedule.
+
+**Two gates were removed on the desk's instruction (18 Sep 2026), and what that costs is worth stating.** A **materiality** floor held alerts back below $2,000 of holding, and a per-client daily **budget** capped them at four, biggest movers first. Both are gone: a client now hears about a qualifying move on any size of holding, and about every holding that qualifies. The consequence is the one the budget existed to prevent — on a market-wide selloff day a book of thirty held codes can raise thirty alerts at once, and the exercise-window alert competes with all of them for attention. Magnitude alone now carries the entire noise argument, so the bands are the only lever left if the bell gets too loud. Ordering by move size (then by holding value) is kept, so the biggest move is still the first thing read.
 
 #### The wording rule now has three enforcers
 

@@ -85,9 +85,8 @@ SELECT cron.schedule(
 --     body := '{}'::jsonb);
 --
 -- Tuning the alert thresholds does NOT happen here — they are constants at the
--- top of `lib/alerts/moves.ts` (MOVE_BUCKETS, MIN_MATERIAL_VALUE,
--- DAILY_MOVE_BUDGET), so they are reviewed and tested with the rules they
--- belong to rather than buried in a schedule.
+-- top of `lib/alerts/moves.ts` (MOVE_BUCKETS), so they are reviewed and tested
+-- with the rules they belong to rather than buried in a schedule.
 --
 -- To pause without deleting:
 --   UPDATE cron.job SET active = false WHERE jobname = 'alert-live-tick';

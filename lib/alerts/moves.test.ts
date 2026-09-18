@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  DAILY_MOVE_BUDGET,
-  MIN_MATERIAL_VALUE,
-  moveBucket,
-  movesForBook,
-  type HeldPosition,
-} from "./moves.ts";
+import { moveBucket, movesForBook, type HeldPosition } from "./moves.ts";
 
 const TODAY = "2026-09-15";
 
@@ -39,11 +33,13 @@ test("ordinary daily drift says nothing", () => {
   assert.deepEqual(movesForBook([pos({ changePct: 3 })], TODAY), []);
 });
 
-test("a big move on a small holding says nothing", () => {
-  // The materiality gate. A 30% move on $400 is not worth interrupting anyone.
+test("a big move on a small holding is still reported", () => {
+  // There is no materiality floor: magnitude is the only gate. A 30% move on
+  // $100 of stock is told the same as a 30% move on $100,000 of it.
   const tiny = pos({ changePct: 30, qty: 100, last: 1 });
-  assert.equal(tiny.qty * (tiny.last ?? 0) < MIN_MATERIAL_VALUE, true);
-  assert.deepEqual(movesForBook([tiny], TODAY), []);
+  const alerts = movesForBook([tiny], TODAY);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].subtitle, /\$100 at/);
 });
 
 test("a position with no quote is skipped rather than guessed at", () => {
@@ -71,29 +67,32 @@ test("the same band tomorrow is a new event", () => {
   assert.notEqual(a.key, b.key);
 });
 
-test("a selloff does not produce thirty alerts", () => {
+test("a selloff reports every holding that moved, biggest first", () => {
   /**
-   * The failure this file exists to prevent. When everything moves at once, a
-   * client hears about the few that moved most — not about all of them, which
-   * is how a bell stops being read and takes the exercise-window alert with it.
+   * There is no daily cap. When everything moves at once the client hears about
+   * all of it — ordered so the largest move is the first thing read.
    */
   const book = Array.from({ length: 30 }, (_, i) =>
     pos({ code: `T${i}`, changePct: -(6 + i) }),
   );
   const alerts = movesForBook(book, TODAY);
-  assert.equal(alerts.length, DAILY_MOVE_BUDGET);
-  // The biggest movers are the ones that survive the budget.
-  assert.deepEqual(alerts.map((a) => a.title.split(" ")[0]), ["T29", "T28", "T27", "T26"]);
+  assert.equal(alerts.length, 30);
+  assert.deepEqual(alerts.slice(0, 4).map((a) => a.title.split(" ")[0]), [
+    "T29",
+    "T28",
+    "T27",
+    "T26",
+  ]);
 });
 
-test("the budget is per client, not across the book", () => {
+test("no client's alerts are capped by another client's", () => {
   const book = [
     ...Array.from({ length: 6 }, (_, i) => pos({ clientId: "a", code: `A${i}`, changePct: 9 + i })),
     ...Array.from({ length: 6 }, (_, i) => pos({ clientId: "b", code: `B${i}`, changePct: 9 + i })),
   ];
   const alerts = movesForBook(book, TODAY);
-  assert.equal(alerts.filter((x) => x.clientId === "a").length, DAILY_MOVE_BUDGET);
-  assert.equal(alerts.filter((x) => x.clientId === "b").length, DAILY_MOVE_BUDGET);
+  assert.equal(alerts.filter((x) => x.clientId === "a").length, 6);
+  assert.equal(alerts.filter((x) => x.clientId === "b").length, 6);
 });
 
 test("keys are unique within a run", () => {

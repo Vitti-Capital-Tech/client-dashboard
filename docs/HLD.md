@@ -362,7 +362,7 @@ The first live alert exposed two things worth recording. A grant **one cent abov
 
 Alerts are now noticeable without the bell being on screen: the unread count rides in the browser tab title, and a synthesised two-note chime plays on arrival — best-effort, since browsers block audio until the visitor has interacted with the page, which is why the count rather than the sound is the channel anything important travels on.
 
-The same tick raises **move alerts on held positions**, gated on magnitude band, materiality and a per-client daily budget — the budget because a market-wide selloff would otherwise bury the exercise-window alert under thirty notices. See LLD §8.52.
+The same tick raises **move alerts on held positions**, gated on magnitude band alone — the materiality floor and the per-client daily budget were removed on the desk's instruction, so every holding clearing a band alerts, however small and however many. See LLD §8.52.
 
 ### 3.2 Unified Shell Wrapper (`app/portal/layout.tsx` → `PortalShell.tsx`)
 The portal layout is now a **Server Component** (`layout.tsx`): it reads the session and fetches badge data (client, clients, alerts, placements) from the DAL, computes the `pendingAllocCount`, and passes everything as props to the `"use client"` **`PortalShell.tsx`** island, which owns the interactive chrome (nav, alerts drawer, sign-out via the `signOut` / `ackAlert` server actions). The shell coordinates a single role-aware navigation config (`navItems.client` / `navItems.admin`) rendered across multiple surfaces:
