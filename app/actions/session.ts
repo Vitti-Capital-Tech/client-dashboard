@@ -15,7 +15,7 @@ const MAX_AGE = 60 * 60 * 24 * 7; // 7 days
 
 export type SignInResult =
   | { ok: true; role: Role }
-  | { ok: false; error: string; unregistered?: true };
+  | { ok: false; error: string; unregistered?: true; useCode?: true };
 
 export type CodeRequestResult =
   | { ok: true }
@@ -100,12 +100,17 @@ export async function requestLoginCode(
   // the thing to add is a per-IP rate limit on this endpoint, not a return to
   // pretending.
   //
-  // AFTER provisioning on purpose: a staff address on its first sign-in has just
-  // been created above and is registered by the time we look. And only when the
-  // domain rule actually answered — `staff === null` means it could not be read,
-  // and refusing a real staff member who cannot then register at /signup either
-  // (it turns Vitti addresses away) would be a dead end of our own making.
-  if (staff !== null && !(await isRegistered(address))) {
+  // `staff === false` and nothing else. Not `!== null`: the two other answers
+  // are both cases where "create an account" is the wrong sentence.
+  //
+  // A Vitti address was just provisioned a few lines up, so it is registered by
+  // the time we look — but if that create FAILED, this would tell a new staff
+  // member to register at /signup, which turns Vitti addresses away. And
+  // `staff === null` means the domain rule could not be read at all, so we do
+  // not know which kind of person this is and must not guess the answer that
+  // ends in a refusal. Both fall through to the send below, which is exactly
+  // what this function did before the check existed.
+  if (staff === false && !(await isRegistered(address))) {
     return {
       ok: false,
       unregistered: true,
@@ -132,12 +137,22 @@ export async function requestLoginCode(
   }
 
   // The same "we do not hold this address" answer, reached the other way: the
-  // check above could not run because the domain rule was unreadable, or the row
-  // disappeared between the two calls. Reported as unregistered rather than as
-  // success — this used to return `{ ok: true }`, which is what made the screen
-  // claim a code had been sent when none had.
+  // check above was skipped, or the row disappeared between the two calls.
+  // Reported rather than swallowed — this used to return `{ ok: true }`, which
+  // is what made the screen claim a code had been sent when none had.
+  //
+  // A Vitti address landing here means provisioning failed, which is our problem
+  // and not theirs. Sending them to /signup would be sending them somewhere that
+  // refuses them, so they are told to try again instead.
   if (error.code === "otp_disabled" || error.status === 422) {
     console.warn("login: no code sent to %s — %s", address, error.message);
+    if (staff === true) {
+      console.error("login: staff address %s has no account to send to", address);
+      return {
+        ok: false,
+        error: "Could not send the code just now. Please try again.",
+      };
+    }
     return {
       ok: false,
       unregistered: true,
@@ -338,6 +353,27 @@ export async function signInWithPassword(
         error: "Too many attempts. Wait a minute and try again.",
       };
     }
+    // ── Staff first, before anything is said about accounts ───────────────
+    // A Vitti address has NO password and never will — `provisionStaffAccount`
+    // creates the row without one and the database refuses to let one be set.
+    // So a staff member's first ever visit fails here by design, and for a
+    // moment this told them "no account, create one" and linked them to
+    // /signup, which refuses Vitti addresses — after they had filled in a name,
+    // a password and a confirmation. A loop, and one this change introduced.
+    //
+    // They are not unregistered in any sense that helps them: the account is
+    // created the instant they ask for a code. So say the one thing that is
+    // true and useful, and `useCode` moves the form to the path that works
+    // rather than leaving them to find the button.
+    if ((await isStaffAddress(address)) === true) {
+      return {
+        ok: false,
+        useCode: true,
+        error:
+          "Vitti Capital staff sign in with a one-time code — there is no password to set up.",
+      };
+    }
+
     // Only now, on a failure that has already happened: a successful sign-in
     // never pays for this lookup.
     if (!(await isRegistered(address))) {

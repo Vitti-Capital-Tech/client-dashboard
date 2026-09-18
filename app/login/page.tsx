@@ -147,8 +147,18 @@ export default function LoginPage() {
       // Kept on a "no account here" failure: they are about to be sent to
       // sign-up, where it is the password they will register with.
       if (!result.unregistered) setPassword("");
-      // A staff address lands here too, and the message tells it to use the code
-      // — which is on this same page, so there is nowhere to send anybody.
+
+      // A Vitti address, which has no password and never will. Rather than
+      // telling them the code is the way in and leaving them to find the
+      // button, put them on it — `switchMode` is not used because it clears the
+      // error, and the error is the explanation for why the form just changed
+      // under them. The address is kept, so this is one press from a code.
+      if (result.useCode) {
+        setMode("code");
+        setSent(false);
+        setDigits(emptyCode());
+        verifying.current = false;
+      }
       return;
     }
     land(result.role);
