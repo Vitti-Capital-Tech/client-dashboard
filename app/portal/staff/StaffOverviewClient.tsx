@@ -45,7 +45,7 @@ export function StaffOverviewClient({
   const activeDeals = placements.filter(
     (p) => p.stage === "open" || p.stage === "closed",
   );
-  const unackAlerts = alerts.filter((a) => !a.ack);
+  const unreadAlerts = alerts.filter((a) => !a.read);
 
   const handleViewClient = (cid: string) => {
     void setViewClient(cid);
@@ -102,11 +102,22 @@ export function StaffOverviewClient({
           <div className="text-xs text-mut mt-1">open or awaiting allocation</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Unack alerts</div>
-          <div className={`font-disp font-medium text-2xl mt-1 ${unackAlerts.length > 0 ? "text-loss-d animate-pulse font-bold" : "text-ink"}`}>
-            {unackAlerts.length}
+          {/*
+            "Unack alerts · requiring staff attention", pulsing red, off a flag
+            that could only be cleared one click at a time. It sat at 141 for
+            months, which is the failure mode of every counter nobody can clear:
+            it stopped being read. This counts what the desk has not opened yet,
+            it goes to zero the moment someone does, and it is styled as news
+            rather than as an emergency — a red pulse on a number that is 3 most
+            mornings is a boy crying wolf.
+          */}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Unread alerts</div>
+          <div className={`font-disp font-medium text-2xl mt-1 ${unreadAlerts.length > 0 ? "text-green-d font-bold" : "text-ink"}`}>
+            {unreadAlerts.length}
           </div>
-          <div className="text-xs text-mut mt-1">requiring staff attention</div>
+          <div className="text-xs text-mut mt-1">
+            {unreadAlerts.length > 0 ? "since the desk last looked" : "all caught up"}
+          </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Wholesale clients</div>

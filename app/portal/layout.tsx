@@ -57,8 +57,13 @@ export default async function PortalLayout({
     await Promise.all([
       getClient(activeClientId),
       isAdmin ? getClients() : Promise.resolve([]),
-      // Admin sees firm-wide alerts; a client sees only their own.
-      getAlerts(isAdmin ? undefined : activeClientId),
+      // Admin sees firm-wide alerts; a client sees only their own. The second
+      // argument picks WHOSE read state the badge counts — the desk and the
+      // client each have their own, and neither clears the other's.
+      getAlerts(
+        isAdmin ? undefined : activeClientId,
+        isAdmin ? "staff" : "client",
+      ),
       isAdmin ? getPlacements() : Promise.resolve([]),
       // Both of these resolve through the one cached `accounts` fetch, so the
       // switcher's list and the account the pages are scoped to cost one round

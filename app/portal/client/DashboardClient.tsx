@@ -28,7 +28,7 @@ import {
   portfolioValue,
   isITM,
 } from "@/lib/data/compute";
-import { ackAlert } from "@/app/actions/alerts";
+import { TimeAgo } from "@/app/components/TimeAgo";
 import { isComingSoon } from "@/lib/nav/coming-soon";
 import { PortfolioAnalytics } from "@/app/components/PortfolioAnalytics";
 import { asxSession, closeCountdown, deskHour, sessionStamp } from "@/lib/asx/session";
@@ -116,8 +116,18 @@ export function DashboardClient({
   const liveDeal = placements.find(p => p.stage === "open");
   const myBid = liveDeal ? liveDeal.bids.find(b => b.clientId === clientId) : null;
 
-  // Filter alerts visible to this client
-  const clientAlerts = alerts.filter(a => a.clientId === clientId && !a.ack).slice(0, 3);
+  /**
+   * The three most recent alerts for this client — read or not.
+   *
+   * It used to filter to unread, which made sense when "unread" meant "nobody
+   * has clicked Ack yet" and so stayed true for months. Now that opening the
+   * bell marks things read, that filter would empty this card the moment the
+   * client looked at their notifications, and a dashboard panel headed "Alerts"
+   * that says "none" while three sit in the drawer is just wrong. Unread ones
+   * are marked with a dot instead.
+   */
+  const clientAlerts = alerts.filter(a => a.clientId === clientId).slice(0, 3);
+  const unreadCount = alerts.filter(a => a.clientId === clientId && !a.read).length;
 
   /**
    * Open options, soonest expiry first.
@@ -563,30 +573,29 @@ export function DashboardClient({
                 onClick={() => router.push("/portal/client/alerts")}
                 className="text-green-d font-semibold text-xs underline underline-offset-2 hover:opacity-85 cursor-pointer"
               >
-                {alerts.filter(a => a.clientId === clientId && !a.ack).length} unread
+                {unreadCount > 0 ? `${unreadCount} unread` : "View all"}
               </button>
             </div>
             <div className="space-y-2">
               {clientAlerts.length > 0 ? (
                 clientAlerts.map(a => (
-                  <div key={a.id} className="flex gap-2.5 p-2.5 border border-line rounded-xl bg-white items-start text-xs">
+                  <div key={a.id} className={`flex gap-2.5 p-2.5 border border-line rounded-xl bg-white items-start text-xs ${a.read ? "opacity-75" : ""}`}>
                     {getAlertIco(a.kind, a.sev)}
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-ink leading-tight truncate">{a.title}</div>
                       <div className="text-[11px] text-mut truncate mt-0.5">{a.sub}</div>
+                      <TimeAgo iso={a.ts} className="block text-[10.5px] text-mut-d mt-0.5" />
                     </div>
-                    {!a.ack && (
-                      <button
-                        onClick={() => ackAlert(a.id)}
-                        className="btn ghost sm text-[10px] py-1 px-2 border border-line rounded-md hover:border-green cursor-pointer flex-none align-self-center"
-                      >
-                        Ack
-                      </button>
+                    {!a.read && (
+                      <span
+                        aria-label="Unread"
+                        className="w-1.75 h-1.75 rounded-full bg-green flex-none self-center"
+                      />
                     )}
                   </div>
                 ))
               ) : (
-                <div className="text-[12.5px] text-mut py-1">No unread alerts.</div>
+                <div className="text-[12.5px] text-mut py-1">No alerts yet.</div>
               )}
             </div>
           </div>

@@ -39,7 +39,7 @@ export default async function StaffOverview() {
   const [clients, placements, alerts, audit] = await Promise.all([
     getClients(),
     getPlacements(),
-    getAlerts(),
+    getAlerts(undefined, "staff"),
     // The register, not the raw audit table — so the morning ingest's own runs
     // surface on the overview card without a second widget to read.
     getOperationsRegister(5),

@@ -3,7 +3,9 @@
 import React, { useState } from "react";
 import { Clock, TrendingUp, AlertTriangle } from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
-import { ackAlert, addCustomAlert } from "@/app/actions/alerts";
+import { addCustomAlert } from "@/app/actions/alerts";
+import { useAlertsRead } from "@/app/components/useAlertsRead";
+import { TimeAgo } from "@/app/components/TimeAgo";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
 import { priceText } from "@/lib/ui/price";
 
@@ -21,11 +23,26 @@ export function AlertsClient({
   const [direction, setDirection] = useState<"above" | "below">("above");
   const [targetVal, setTargetVal] = useState("46.00");
 
-  const visibleAlerts = alerts;
-  const unackCount = visibleAlerts.filter(a => !a.ack).length;
+  /**
+   * Reading this page IS acknowledging these alerts — there is no Acknowledge
+   * button any more, here or on the bell. The write happens when you leave, so
+   * the "new" markers hold still while you are reading them. See
+   * app/components/useAlertsRead.ts.
+   *
+   * `active` is `true` rather than a piece of state: a page is open by virtue of
+   * having been navigated to, and closed by virtue of being navigated away from.
+   */
+  useAlertsRead(alerts, true);
 
-  const critical = visibleAlerts.filter(a => a.sev === "red" && !a.ack);
-  const others = visibleAlerts.filter(a => !(a.sev === "red" && !a.ack));
+  const visibleAlerts = alerts;
+  const newAlerts = visibleAlerts.filter(a => !a.read);
+  const earlierAlerts = visibleAlerts.filter(a => a.read);
+
+  // Three bands, in the order they need reading: act now, new, history.
+  // Critical is drawn from the new ones only — a red alert you have already
+  // read and decided about should not keep shouting from the top of the page.
+  const critical = newAlerts.filter(a => a.sev === "red");
+  const restNew = newAlerts.filter(a => a.sev !== "red");
 
   const handleAddCustomAlert = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,11 +84,12 @@ export function AlertsClient({
       amber: "border-l-[3px] border-l-amber",
       green: "border-l-[3px] border-l-green"
     };
+    const isNew = !a.read;
 
     return (
       <div
         key={a.id}
-        className={`flex gap-3.5 p-3.5 border border-line bg-white rounded-xl items-start ${a.ack ? "opacity-70" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
+        className={`flex gap-3.5 p-3.5 border border-line bg-white rounded-xl items-start ${isNew ? `shadow-shadow ${borderColors[a.sev] || ""}` : "opacity-70"}`}
       >
         {alertIco(a)}
         <div className="flex-1 min-w-0">
@@ -79,23 +97,16 @@ export function AlertsClient({
             {a.title}
           </div>
           <div className="text-xs text-mut mt-0.5 leading-normal">{a.sub}</div>
-          <div className="text-[9.5px] font-mono text-mut-d mt-2">
-            {new Date(a.ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {new Date(a.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
-            {a.kind === "window" && " · unlisted exercise window"}
-            {a.ack && " · acknowledged"}
+          <div className="text-[10.5px] text-mut-d mt-2 flex items-center gap-1.5">
+            <TimeAgo iso={a.ts} />
+            {a.kind === "window" && <span>&middot; unlisted exercise window</span>}
           </div>
         </div>
-        {!a.ack ? (
-          <button
-            onClick={() => ackAlert(a.id)}
-            className="btn ghost sm text-xs py-1.5 px-3 border border-line bg-white hover:border-green rounded-lg cursor-pointer flex-none self-center font-semibold"
-          >
-            Acknowledge
-          </button>
-        ) : (
-          <span className="pill bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-1 rounded-md select-none self-center flex-none">
-            Acked
-          </span>
+        {isNew && (
+          <span
+            aria-label="New"
+            className="w-1.75 h-1.75 rounded-full bg-green flex-none self-center"
+          />
         )}
       </div>
     );
@@ -114,7 +125,7 @@ export function AlertsClient({
             so the sentence stays. Do not put "email" back until something sends
             one.
           */}
-          <div className="font-mono text-xs tracking-wider uppercase text-mut">In-platform &middot; manual acknowledgement</div>
+          <div className="font-mono text-xs tracking-wider uppercase text-mut">In-platform &middot; read when you open them</div>
           <h1 className="font-disp font-medium text-[26px] mt-0.5">Alerts</h1>
           <p className="text-xs text-mut mt-1 leading-normal max-w-[50em]">
             Expiry alerts escalate at 30, 14, 7, 3 and 1 days. Unlisted options that are
@@ -134,17 +145,22 @@ export function AlertsClient({
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/*
+          "New" is simply what is unread, straight from the server. It holds
+          still while the page is open because the read is written on the way
+          out, not on the way in — see app/components/useAlertsRead.ts.
+        */}
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Unacknowledged</div>
-          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{unackCount}</div>
-          <div className={`text-xs mt-1 font-semibold ${unackCount > 0 ? "text-loss-d animate-pulse" : "text-mut"}`}>
-            {unackCount > 0 ? "need attention" : "all clear"}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">New</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">{newAlerts.length}</div>
+          <div className={`text-xs mt-1 font-semibold ${newAlerts.length > 0 ? "text-green-d" : "text-mut"}`}>
+            {newAlerts.length > 0 ? "since you last looked" : "all caught up"}
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Critical (&le;3d / window)</div>
           <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">
-            {visibleAlerts.filter(a => a.sev === "red" && !a.ack).length}
+            {critical.length}
           </div>
           <div className="text-xs text-mut mt-1">requires action</div>
         </div>
@@ -155,10 +171,17 @@ export function AlertsClient({
           </div>
           <div className="text-xs text-mut mt-1">option thresholds</div>
         </div>
+        {/*
+          This card claimed "In-app + email · manual ack required" and neither
+          half was true. There is no mailer in the codebase — the header copy
+          above already had "email" struck out for exactly that reason and this
+          card was missed — and acknowledging is gone: opening the bell or this
+          page is what marks an alert read.
+        */}
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Delivery</div>
-          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">In-app + email</div>
-          <div className="text-xs text-mut mt-1">manual ack required</div>
+          <div className="font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 text-ink">In-app</div>
+          <div className="text-xs text-mut mt-1">read when you open them</div>
         </div>
       </div>
 
@@ -172,16 +195,28 @@ export function AlertsClient({
         </div>
       )}
 
-      {/* All/Other Alerts Block */}
+      {/* New (everything below critical) */}
+      {restNew.length > 0 && (
+        <div className="space-y-2 pt-2">
+          <div className="font-mono text-[11px] tracking-wider uppercase text-mut font-semibold">New</div>
+          <div className="space-y-3">{restNew.map(renderAlertItem)}</div>
+        </div>
+      )}
+
+      {/* Earlier */}
       <div className="space-y-2 pt-2">
-        <div className="font-mono text-[11px] tracking-wider uppercase text-mut font-semibold">All alerts</div>
+        {earlierAlerts.length > 0 && (
+          <div className="font-mono text-[11px] tracking-wider uppercase text-mut font-semibold">Earlier</div>
+        )}
         <div className="space-y-3">
-          {others.length === 0 && critical.length === 0 ? (
+          {visibleAlerts.length === 0 ? (
             <div className="card bg-white border border-line rounded-[14px] p-8 text-center text-mut select-none">
-              No alerts. New triggers will appear here and in your email.
+              {/* Said "and in your email". Nothing sends one — see the Delivery card. */}
+              No alerts yet. Expiry windows, in-the-money options and your own price
+              triggers all land here.
             </div>
           ) : (
-            others.map(renderAlertItem)
+            earlierAlerts.map(renderAlertItem)
           )}
         </div>
       </div>

@@ -238,7 +238,9 @@ export type Database = {
           id: string
           kind: Database["public"]["Enums"]["alert_kind"]
           option_id: string | null
+          read_at: string | null
           severity: Database["public"]["Enums"]["alert_severity"]
+          staff_read_at: string | null
           subtitle: string | null
           title: string
           triggered_at: string
@@ -251,7 +253,9 @@ export type Database = {
           id?: string
           kind: Database["public"]["Enums"]["alert_kind"]
           option_id?: string | null
+          read_at?: string | null
           severity: Database["public"]["Enums"]["alert_severity"]
+          staff_read_at?: string | null
           subtitle?: string | null
           title: string
           triggered_at?: string
@@ -264,7 +268,9 @@ export type Database = {
           id?: string
           kind?: Database["public"]["Enums"]["alert_kind"]
           option_id?: string | null
+          read_at?: string | null
           severity?: Database["public"]["Enums"]["alert_severity"]
+          staff_read_at?: string | null
           subtitle?: string | null
           title?: string
           triggered_at?: string
@@ -1927,6 +1933,7 @@ export type Database = {
       current_client_id: { Args: never; Returns: string }
       is_staff: { Args: never; Returns: boolean }
       lookup_account_for_claim: { Args: { p_number: string }; Returns: Json }
+      mark_alerts_read: { Args: { up_to?: string }; Returns: number }
       normalise_account_number: { Args: { raw: string }; Returns: string }
       preview_account_claim: { Args: { p_request_id: string }; Returns: Json }
       role_from_email_domain: { Args: { addr: string }; Returns: string }

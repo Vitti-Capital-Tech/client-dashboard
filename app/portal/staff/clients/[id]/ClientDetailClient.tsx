@@ -1779,8 +1779,15 @@ export function ClientDetailClient({
                     </div>
                     <p className="text-mut text-[11.5px] mt-0.5 leading-normal">{a.sub}</p>
                   </div>
+                  {/*
+                    Said "Acknowledged" / "Active" off the old shared ack flag.
+                    This table is the desk looking at ONE client's alert history,
+                    so the honest label is whether the desk has seen it — the
+                    client's own read state is not the desk's business and was
+                    never what this column showed.
+                  */}
                   <span className="text-[10px] font-mono text-mut leading-normal select-none">
-                    {a.ack ? "Acknowledged" : "Active"}
+                    {a.read ? "Seen" : "New"}
                   </span>
                 </div>
               ))

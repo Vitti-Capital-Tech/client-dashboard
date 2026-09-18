@@ -48,7 +48,7 @@ export default async function Page({
     getClientPositions(id),
     getClientOptions(id),
     getPlacements(),
-    getAlerts(id),
+    getAlerts(id, "staff"),
     getSignals(),
     getClientTrades(id),
     getClientPnlOverrides(id),

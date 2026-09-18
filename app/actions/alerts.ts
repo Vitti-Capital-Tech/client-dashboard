@@ -12,19 +12,36 @@ type AlertDirection = Database["public"]["Enums"]["alert_direction"];
  * (mutateAckAlert / mutateAddCustomAlert) with Supabase writes.
  */
 
-/** Acknowledge an alert (client or staff). */
-export async function ackAlert(alertId: string) {
+/**
+ * Mark every alert the caller can see, up to and including `upToIso`, as read.
+ *
+ * ── Why there is no per-alert version of this ───────────────────────────────
+ * There used to be: `ackAlert(id)`, behind an "Ack" button on every row. It
+ * asked the reader to do the bookkeeping — a notification bell that makes you
+ * confirm you read each notification is a bell with a chore attached, and the
+ * predictable result was 141 unread alerts on the staff console and a badge
+ * nobody could clear without 141 clicks. Reading is what marks things read.
+ *
+ * ── Why a timestamp and not a list of ids ───────────────────────────────────
+ * `.in("id", [...])` with a backlog that size builds a 5KB query string, which
+ * is a length limit waiting to be hit. A cutoff is also the more accurate
+ * statement: what the reader saw is "everything up to here", and an alert that
+ * arrives after the last render is genuinely NOT one of them. Passing the
+ * newest rendered `ts` leaves that one unread, where a blanket "mark all" would
+ * have swallowed it silently.
+ *
+ * ── Why an RPC and not an update ────────────────────────────────────────────
+ * Which column gets written depends on who is asking, and that decision cannot
+ * live here: `alerts_update` lets a client write any column on their own rows,
+ * so a client could clear `staff_read_at` and empty the desk's queue straight
+ * from the PostgREST endpoint. `mark_alerts_read` reads the audience off the
+ * JWT instead, and UPDATE on the table is revoked from `authenticated`. See
+ * supabase/migrations/…_alert_read_state.sql.
+ */
+export async function markAlertsRead(upToIso: string) {
   const supabase = await createClient();
-  const { actor } = await getActor();
 
-  const { error } = await supabase
-    .from("alerts")
-    .update({
-      acknowledged: true,
-      acknowledged_at: new Date().toISOString(),
-      acknowledged_by: actor,
-    })
-    .eq("id", alertId);
+  const { error } = await supabase.rpc("mark_alerts_read", { up_to: upToIso });
   if (error) throw error;
 
   revalidatePath("/portal", "layout");

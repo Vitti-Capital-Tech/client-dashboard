@@ -190,6 +190,27 @@ html[data-theme-mode="dark"] .hover\:bg-white\/40:hover {
   background-color: rgba(255, 255, 255, 0.08) !important;
 }
 
+/*
+  The same fix for the *opaque* `bg-white`, whose hover and focus variants were
+  left behind.
+
+  `.bg-white` is remapped to the card colour near the top of this file, so a
+  panel painted with it follows the theme. `hover:bg-white` and `focus:bg-white`
+  are different class names, matched none of those rules, and so kept emitting
+  literal `#fff`. On a dark console that is not a subtle hover — it is a solid
+  white block dropped on top of the page: the alerts bell, the drawer's close
+  button, the pagination arrows, and every input that lifts to white on focus.
+
+  Worth knowing if you add another: `html[data-theme-mode="dark"] input` (above)
+  loses to `.focus\:bg-white:focus` on specificity — one element plus one
+  attribute against two classes — which is why the input rule up there did not
+  already cover this, and why these carry `!important` like their neighbours.
+*/
+html[data-theme-mode="dark"] .hover\:bg-white:hover,
+html[data-theme-mode="dark"] .focus\:bg-white:focus {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
 /* --- Historical P&L Rows (Light Mode) --- */
 .theme-row-held,
 tr.theme-row-held {

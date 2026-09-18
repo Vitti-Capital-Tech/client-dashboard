@@ -31,7 +31,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { AlertRow } from "@/lib/data/queries";
-import { ackAlert } from "@/app/actions/alerts";
+import { useAlertsRead } from "@/app/components/useAlertsRead";
+import { TimeAgo } from "@/app/components/TimeAgo";
 import { AlertsLive } from "@/app/components/AlertsLive";
 import { TabUnreadCount } from "@/app/components/TabUnreadCount";
 import { AlertSoundToggle } from "@/app/components/AlertSoundToggle";
@@ -44,6 +45,29 @@ import { PortalSkeleton } from "@/app/components/PortalSkeleton";
 import { LEAVING_MS, SIGN_OUT_TIPS } from "@/lib/ui/leaving";
 
 type AccountOption = { id: string; label: string; accountType: string };
+
+/**
+ * What a counter badge prints.
+ *
+ * These badges are circles a few pixels across — the one on the bottom nav is
+ * `min-w-3.5` — sized when the only counts anyone had seen were single digits.
+ * The staff console reached 141 unread alerts and rendered it as a stretched
+ * oval with the digits crowding the border. 99+ is what every other product
+ * settled on for the same reason: past a hundred, the precise number is not the
+ * thing being read off a bell.
+ */
+function badgeText(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
+
+/** The "New" / "Earlier" divider in the notifications drawer. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="text-[10.5px] tracking-[0.1em] uppercase font-semibold text-mut pt-1.5 first:pt-0">
+      {children}
+    </div>
+  );
+}
 
 /**
  * Says the click landed, while the next page is on its way.
@@ -91,7 +115,8 @@ const ICON_MOTION =
 /**
  * Interactive portal shell (client island). The layout Server Component fetches
  * session + alerts + badge counts and hands them here as props; this component
- * owns the drawer/menu state and calls server actions for ack / sign-out.
+ * owns the drawer/menu state and calls server actions for marking notifications
+ * read and for sign-out.
  */
 
 interface NavItem {
@@ -335,20 +360,37 @@ export function PortalShell({
     (it) => !isComingSoon(it.path),
   );
 
-  const unreadAlerts = alerts.filter((a) => !a.ack);
-  const alertsCount = unreadAlerts.length;
+  /**
+   * Reading the drawer is what marks it read — there is no longer an "Ack"
+   * button on each row. The write is deferred until the drawer closes, which is
+   * what lets everything below split on `read` straight from the server without
+   * the rows greying out under the reader. See useAlertsRead.
+   */
+  useAlertsRead(alerts, isAlertsOpen);
+
+  const newAlerts = alerts.filter((a) => !a.read);
+  const alreadyRead = alerts.filter((a) => a.read);
+  const alertsCount = newAlerts.length;
+
+  /**
+   * The bell is a recent-items panel, not the archive.
+   *
+   * Every unread alert is shown — those are the ones the reader came for, and
+   * silently hiding the 21st would be the one failure this whole feature exists
+   * to prevent. History is capped, because it only grows: the desk is already
+   * past 140 alerts and a drawer that renders all of them (and every one after)
+   * is a scrollbar nobody reaches the end of. The full list is one link away at
+   * the bottom of the panel.
+   */
+  const EARLIER_IN_DRAWER = 20;
+  const earlierAlerts = alreadyRead.slice(0, EARLIER_IN_DRAWER);
+  const alertsPath = role === "admin" ? "/portal/staff/alerts" : "/portal/client/alerts";
 
   const getBadgeValue = (badgeName?: string) => {
     if (badgeName === "alerts") return alertsCount > 0 ? alertsCount : null;
     if (badgeName === "pendingAlloc") return pendingAllocCount > 0 ? pendingAllocCount : null;
     if (badgeName === "pendingMerge") return pendingMergeCount > 0 ? pendingMergeCount : null;
     return null;
-  };
-
-  const handleAck = (id: string) => {
-    startTransition(() => {
-      void ackAlert(id);
-    });
   };
 
   const alertIco = (a: AlertRow) => {
@@ -375,6 +417,51 @@ export function PortalShell({
     );
   };
 
+  /**
+   * One row in the drawer.
+   *
+   * What "new" looks like: the severity stripe down the left edge, a lift off
+   * the page, and a dot. Three cues rather than one because the stripe is also
+   * the severity colour, and a red dot on a red-striped card is not a signal —
+   * the dot is what carries it for the amber and green rows.
+   */
+  const alertCard = (a: AlertRow, isNew: boolean) => {
+    const stripe: Record<string, string> = {
+      red: "border-l-[3px] border-l-loss",
+      amber: "border-l-[3px] border-l-amber",
+      green: "border-l-[3px] border-l-green",
+    };
+
+    return (
+      <div
+        key={a.id}
+        className={`flex gap-3 p-3.5 border border-line bg-white rounded-xl items-start transition-colors ${
+          isNew ? `shadow-shadow ${stripe[a.sev] ?? ""}` : "opacity-75"
+        }`}
+      >
+        {alertIco(a)}
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-ink leading-tight flex items-center gap-1.5 flex-wrap">
+            {role === "admin" && a.clientId && (
+              <span className="bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-0.5 rounded-sm uppercase">
+                {clientLabels[a.clientId] ?? ""}
+              </span>
+            )}
+            {a.title}
+          </div>
+          <div className="text-xs text-mut mt-0.5 leading-normal">{a.sub}</div>
+          <TimeAgo iso={a.ts} className="block text-[10.5px] text-mut-d mt-1.5" />
+        </div>
+        {isNew && (
+          <span
+            aria-label="Unread"
+            className="w-1.75 h-1.75 rounded-full bg-green flex-none mt-1.5"
+          />
+        )}
+      </div>
+    );
+  };
+
   const sidebar = (
     <aside className="hidden md:flex w-59 flex-none bg-navy text-[#c2c7d8] flex-col p-5 sticky top-0 h-screen z-40 select-none">
       <Link href="/" className="inline-flex w-fit py-1 px-2 mb-2">
@@ -396,7 +483,7 @@ export function PortalShell({
               {it.ai && <span className="ml-auto text-[8.5px] font-bold tracking-wider bg-green text-[#08130e] px-1.5 py-0.5 rounded-[5px]">AI</span>}
               {badgeVal !== null && (
                 <span className={`ml-auto text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center ${it.badge === "pendingAlloc" ? "bg-green text-[#08130e]" : "bg-loss text-white"}`}>
-                  {badgeVal}
+                  {badgeText(badgeVal)}
                 </span>
               )}
             </>
@@ -503,16 +590,24 @@ export function PortalShell({
         )
       )}
 
-      {/* Alerts toggle button */}
+      {/*
+        Alerts toggle.
+
+        The count is capped at 99+ because the badge is a circle 15px across and
+        the staff console genuinely reached 141 — three digits rendered as an
+        oval with the number clipped. Past a hundred the exact figure is not
+        what anyone is reading off a bell anyway.
+      */}
       <button
         onClick={() => setIsAlertsOpen(true)}
         className="relative flex p-1.5 rounded-[9px] hover:bg-white border border-transparent hover:border-line cursor-pointer text-ink transition-all"
-        aria-label="Alerts"
+        aria-label={alertsCount > 0 ? `Notifications, ${alertsCount} unread` : "Notifications"}
+        title="Notifications"
       >
         <Bell className="w-4.75 h-4.75 stroke-[1.7]" />
         {alertsCount > 0 && (
-          <span className="absolute top-0.75 right-0.5 min-w-3.75 h-3.75 px-1 rounded-full bg-loss text-white text-[9px] font-bold flex items-center justify-center border-2 border-paper">
-            {alertsCount}
+          <span className="absolute -top-0.25 -right-0.25 min-w-4 h-4 px-1 rounded-full bg-loss text-white text-[9px] font-bold flex items-center justify-center border-2 border-paper tabular-nums">
+            {badgeText(alertsCount)}
           </span>
         )}
       </button>
@@ -716,7 +811,7 @@ export function PortalShell({
             <span>{it.label}</span>
             {badgeVal !== null && (
               <span className="absolute -top-0.75 right-[50%] -mr-4 bg-loss text-white text-[8.5px] font-bold rounded-full px-1 min-w-3.5 text-center">
-                {badgeVal}
+                {badgeText(badgeVal)}
               </span>
             )}
           </Link>
@@ -741,60 +836,77 @@ export function PortalShell({
         className={`fixed inset-0 bg-navy/55 backdrop-blur-[2px] transition-opacity z-50 ${isAlertsOpen ? "opacity-100 block" : "opacity-0 hidden"}`}
         onClick={() => setIsAlertsOpen(false)}
       />
-      <div className={`fixed top-0 right-0 w-98 max-w-[94vw] h-full bg-paper border-l border-line z-50 shadow-shadow-lg transition-all duration-300 transform flex flex-col ${isAlertsOpen ? "translate-x-0" : "translate-x-full"}`}>
-        <div className="flex justify-between items-center px-4.5 py-3 border-b border-line bg-paper sticky top-0 z-10">
-          <h3 className="font-disp text-xl font-medium text-ink">Alerts</h3>
-          <div className="flex items-center gap-0.5">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Notifications"
+        className={`fixed top-0 right-0 w-98 max-w-[94vw] h-full bg-paper border-l border-line z-50 shadow-shadow-lg transition-all duration-300 transform flex flex-col ${isAlertsOpen ? "translate-x-0" : "translate-x-full"}`}
+      >
+        <div className="flex justify-between items-center gap-2 px-4.5 py-3 border-b border-line bg-paper sticky top-0 z-10">
+          <div className="flex items-baseline gap-2 min-w-0">
+            <h3 className="font-disp text-xl font-medium text-ink">Notifications</h3>
+            {newAlerts.length > 0 && (
+              <span className="text-[11px] font-semibold text-green-d tabular-nums">
+                {newAlerts.length} new
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 flex-none">
             <AlertSoundToggle />
             <button
               onClick={() => setIsAlertsOpen(false)}
               className="p-1.5 rounded-[9px] hover:bg-white text-ink cursor-pointer"
+              aria-label="Close notifications"
             >
               <X className="w-4.75 h-4.75 stroke-[1.7]" />
             </button>
           </div>
         </div>
-        <div className="p-4.5 overflow-y-auto flex-1 space-y-2.5">
+        <div className="overflow-y-auto flex-1 p-4.5 space-y-2.5">
           {alerts.length === 0 ? (
-            <div className="text-center text-mut py-10 text-[13px]">No alerts triggered.</div>
+            <div className="text-center text-mut py-14 px-6 text-[13px] space-y-1">
+              <Bell className="w-7 h-7 stroke-[1.4] mx-auto text-mut-d" />
+              <div className="font-semibold text-ink pt-1">You&rsquo;re all caught up</div>
+              <div className="text-xs text-mut">
+                Expiry windows, in-the-money options and price triggers land here.
+              </div>
+            </div>
           ) : (
-            alerts.map(a => {
-              const borderColors = {
-                red: "border-l-[3px] border-l-loss",
-                amber: "border-l-[3px] border-l-amber",
-                green: "border-l-[3px] border-l-green"
-              };
-              return (
-                <div
-                  key={a.id}
-                  className={`flex gap-3 p-3.5 border border-line bg-white rounded-xl items-start ${a.ack ? "opacity-75" : `shadow-shadow ${borderColors[a.sev] || ""}`}`}
-                >
-                  {alertIco(a)}
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[13px] font-semibold text-ink leading-tight flex items-center gap-1.5 flex-wrap">
-                      {role === "admin" && a.clientId && (
-                        <span className="bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-0.5 rounded-sm uppercase">{clientLabels[a.clientId] ?? ""}</span>
-                      )}
-                      {a.title}
-                    </div>
-                    <div className="text-xs text-mut mt-0.5 leading-normal">{a.sub}</div>
-                    <div className="text-[9.5px] font-mono text-mut-d mt-1.5">
-                      {new Date(a.ts).toLocaleDateString("en-AU", { day: "numeric", month: "short" })} &middot; {new Date(a.ts).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}
-                    </div>
-                  </div>
-                  {!a.ack && (
-                    <button
-                      onClick={() => handleAck(a.id)}
-                      className="btn ghost sm text-xs py-1.5 px-2.5 rounded-lg bg-white border border-line hover:border-green cursor-pointer flex-none self-center"
-                    >
-                      Ack
-                    </button>
-                  )}
-                </div>
-              );
-            })
+            /*
+              New above, earlier below — the split every notification panel has,
+              and the reason the read is deferred until the drawer closes: these
+              two lists have to hold still while they are being read. The
+              headings appear only when there is something on both sides of the
+              line, so a caught-up drawer is a plain list rather than a heading
+              saying nothing is new.
+            */
+            <>
+              {newAlerts.length > 0 && <SectionLabel>New</SectionLabel>}
+              {newAlerts.map((a) => alertCard(a, true))}
+              {newAlerts.length > 0 && earlierAlerts.length > 0 && (
+                <SectionLabel>Earlier</SectionLabel>
+              )}
+              {earlierAlerts.map((a) => alertCard(a, false))}
+            </>
           )}
         </div>
+        {/*
+          The way out of a capped list, and — for a client — the only way in to
+          the alerts page at all: their nav has no Alerts entry, on the argument
+          that the bell already opens the same list. That argument only holds
+          while the bell can get you to the rest of it.
+        */}
+        {alerts.length > 0 && (
+          <Link
+            href={alertsPath}
+            onClick={() => setIsAlertsOpen(false)}
+            className="flex-none border-t border-line px-4.5 py-3 text-center text-[12px] font-semibold text-green-d hover:bg-white transition-colors"
+          >
+            {alreadyRead.length > earlierAlerts.length
+              ? `View all ${alerts.length} notifications`
+              : "View all notifications"}
+          </Link>
+        )}
       </div>
     </>
   );
@@ -833,7 +945,7 @@ export function PortalShell({
                   <span>{it.label}</span>
                   {badgeVal !== null && (
                     <span className="ml-auto bg-loss text-white text-[10.5px] font-bold rounded-full px-2 py-0.5 min-w-4.5 text-center">
-                      {badgeVal}
+                      {badgeText(badgeVal)}
                     </span>
                   )}
                 </Link>

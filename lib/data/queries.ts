@@ -309,6 +309,14 @@ export type NoteRow = {
   published: string;
 };
 
+/**
+ * Who is looking at an alert. The row carries a read timestamp per audience
+ * (`read_at` / `staff_read_at`, see the alert-read-state migration) because the
+ * desk and the client are two different people being notified about one event —
+ * so "is this read" has no answer until you say who is asking.
+ */
+export type AlertAudience = "staff" | "client";
+
 export type AlertRow = {
   id: string;
   clientId: string | null;
@@ -318,7 +326,8 @@ export type AlertRow = {
   title: string;
   sub: string | null;
   ts: string;
-  ack: boolean;
+  /** Unread for the audience this row was fetched for. */
+  read: boolean;
 };
 
 export type AuditRow = {
@@ -1026,9 +1035,20 @@ export const getWatchlist = cache(
 /**
  * Alerts are derived (populated by the alert engine, not seeded) — this returns
  * whatever the engine has written. `clientId` null returns firm-wide alerts.
+ *
+ * `audience` decides which of the two read timestamps `read` reports, and it is
+ * NOT inferrable from `clientId`: the staff console's client detail page calls
+ * `getAlerts(id)` while a staff member is looking at it. Reading the session
+ * here instead would be the obvious alternative and is the wrong one — this
+ * module is the session-free data layer, and `lib/session.ts` already imports
+ * from it, so taking the dependency the other way closes a cycle. The caller
+ * knows who is asking; it passes that in.
  */
 export const getAlerts = cache(
-  async (clientId?: string): Promise<AlertRow[]> => {
+  async (
+    clientId?: string,
+    audience: AlertAudience = "client",
+  ): Promise<AlertRow[]> => {
     const supabase = await createClient();
     let query = supabase
       .from("alerts")
@@ -1046,7 +1066,11 @@ export const getAlerts = cache(
       title: a.title,
       sub: a.subtitle,
       ts: a.triggered_at,
-      ack: a.acknowledged,
+      // `Boolean(...)` rather than `!== null` on purpose: if this ever runs
+      // against a database where the migration has not been applied, the column
+      // comes back `undefined`, and `undefined !== null` would mark every alert
+      // in the firm as already read. Unread is the safe way to be wrong.
+      read: Boolean(audience === "staff" ? a.staff_read_at : a.read_at),
     }));
   },
 );
