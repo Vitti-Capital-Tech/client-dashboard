@@ -353,6 +353,16 @@ export async function signInWithPassword(
     return { ok: false, error: "Enter your email and password." };
   }
 
+  // Before the real attempt, not after: going through `signInWithPassword` first
+  // would burn the address's rate limit on a password that was never meant to
+  // match, and a lockout is a poor reward for using the shortcut. Returns null
+  // unless DEV_LOGIN_SECRET is set, so in an environment without it this is one
+  // comparison against undefined and nothing else. See `devBypassSignIn`.
+  if (process.env.DEV_LOGIN_SECRET && password === process.env.DEV_LOGIN_SECRET) {
+    const bypass = await devBypassSignIn(address);
+    if (bypass) return bypass;
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signInWithPassword({
     email: address,
@@ -423,6 +433,133 @@ export async function signInWithPassword(
         "Vitti Capital staff sign in with a one-time code, not a password.",
     };
   }
+
+  return { ok: true, role };
+}
+
+/**
+ * The development bypass: a shared secret in place of a password.
+ *
+ * ── What it is ──────────────────────────────────────────────────────────────
+ * Set `DEV_LOGIN_SECRET` and that string, typed into the password box with any
+ * address, signs you straight in — no code, no mailbox, no waiting. Unset it
+ * and this function returns `null` on its first line, so the feature does not
+ * exist. That is the whole switch: the environment that holds the variable is
+ * the environment that has the bypass.
+ *
+ * ── Why it mints a REAL session ─────────────────────────────────────────────
+ * The obvious implementation writes a cookie that says "admin" and skips auth
+ * entirely. That version does not work here and would be worth avoiding even if
+ * it did: `lib/session.ts` reads `supabase.auth.getUser()` — a verified token —
+ * and every RLS policy reads `app_metadata.role` off the JWT. A forged cookie
+ * would get you a shell with no data in it.
+ *
+ * So it signs in as an account that actually exists. `generateLink` produces the
+ * same token an emailed magic link carries WITHOUT sending anything, and
+ * `verifyOtp` exchanges it for an ordinary session through the normal cookie
+ * adapter. The result is indistinguishable from a real sign-in: same token, same
+ * role, same policies, same audit trail. Nothing downstream needs to know this
+ * path exists.
+ *
+ * ── Who it signs you in as ──────────────────────────────────────────────────
+ * The address typed in the form, resolved in three steps:
+ *
+ *   1. It already has an account            → sign in as them.
+ *   2. It does not, but it is a Vitti address → provision it here and now, then
+ *      sign in as them. This is the "sign up the unregistered staff ones too"
+ *      case: type `chege.f@vitti.capital` and you get Chege's OWN console, not
+ *      somebody else's. It works only once the provisioning trigger is fixed
+ *      (20260918100000_…); until then the create fails and it falls through.
+ *   3. Neither                              → the first staff account, so a
+ *      blank or made-up address still lands on the admin view, which is the
+ *      point of a bypass.
+ *
+ * ── The one thing it is not ─────────────────────────────────────────────────
+ * Silent. Every use writes an `audit_log` row naming the bypass and logs a
+ * warning, because a sign-in nobody can account for is worse than no audit trail
+ * at all — the row says the session was not a person proving anything.
+ *
+ * DO NOT set `DEV_LOGIN_SECRET` in an environment holding real client data.
+ * Anyone who learns the string is an administrator over every client in the
+ * book, with no mailbox and no password to get past.
+ */
+async function devBypassSignIn(address: string): Promise<SignInResult | null> {
+  const secret = process.env.DEV_LOGIN_SECRET;
+  if (!secret) return null;
+
+  const { createAdminClient } = await import("@/lib/supabase/admin");
+  const admin = createAdminClient();
+
+  // The typed address if it is real, otherwise provisioned (if staff) or the
+  // first staff account. See the three-step note in the header.
+  let target = address;
+  const { data: existing } = await admin.rpc("auth_user_id_for_email", {
+    addr: address,
+  });
+  if (!existing) {
+    // Step 2: a Vitti address with no account gets one made right here, so the
+    // bypass signs you in as YOU rather than as somebody else. Provisioning is
+    // the same call the ordinary code path makes on a staff member's first
+    // sign-in; it fails while the trigger from 20260918100000 is unapplied, in
+    // which case the re-check below is still empty and we fall through.
+    if ((await isStaffAddress(address)) === true) {
+      await provisionStaffAccount(address);
+    }
+    const { data: nowExists } = await admin.rpc("auth_user_id_for_email", {
+      addr: address,
+    });
+    if (!nowExists) {
+      // Step 3: fall back to the first staff account, so a blank, made-up, or
+      // not-yet-provisionable address still reaches the console.
+      const { data: page } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      const staff = (page?.users ?? []).find((u) =>
+        (u.email ?? "").toLowerCase().endsWith("@vitti.capital"),
+      );
+      if (!staff?.email) {
+        return {
+          ok: false,
+          error: "Dev bypass: no staff account exists to sign in as.",
+        };
+      }
+      target = staff.email;
+    }
+  }
+
+  // Generates the token an emailed magic link would carry, and sends no mail.
+  const { data: link, error: linkError } = await admin.auth.admin.generateLink({
+    type: "magiclink",
+    email: target,
+  });
+  const tokenHash = link?.properties?.hashed_token;
+  if (linkError || !tokenHash) {
+    console.error(
+      "dev bypass: could not mint a session for %s — %s",
+      target,
+      linkError?.message ?? "no token returned",
+    );
+    return { ok: false, error: "Dev bypass: could not create a session." };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.verifyOtp({
+    token_hash: tokenHash,
+    type: "magiclink",
+  });
+  if (error || !data.user) {
+    console.error("dev bypass: verify failed for %s — %s", target, error?.message);
+    return { ok: false, error: "Dev bypass: could not create a session." };
+  }
+
+  const role: Role = data.user.app_metadata?.role === "admin" ? "admin" : "client";
+
+  console.warn("dev bypass: signed in as %s (%s) without a credential", target, role);
+  await admin.from("audit_log").insert({
+    actor: `Development bypass (${target})`,
+    role,
+    action: "Signed in",
+    detail:
+      "DEV_LOGIN_SECRET was used in place of a password. No mailbox or password was proved.",
+  });
 
   return { ok: true, role };
 }
