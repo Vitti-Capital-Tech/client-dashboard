@@ -42,6 +42,7 @@ function row(over: Partial<StoredPnlRow> = {}): StoredPnlRow {
     isDbMarketValued: false,
     isDbOpenValued: false,
     isDbOnly: false,
+    isPrivate: false,
     isPartialExit: false,
     isPartialBuy: false,
     notInHoldings: false,

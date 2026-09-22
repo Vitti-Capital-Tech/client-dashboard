@@ -5,6 +5,13 @@
 // anything the broker no longer reports has been sold, and must disappear.
 // Accounts absent from the file are left completely untouched.
 //
+// ONE EXEMPTION: positions marked `is_private`. The broker does not custody
+// them, so their absence from the file is not evidence of a sale — it is the
+// defining property of a private holding. Without this carve-out the desk would
+// key an off-market parcel and the next 05:30 run would delete it, every time,
+// with nothing in any log to explain where it went. See the migration
+// `…_private_transactions.sql` for the whole argument.
+//
 // That full-replace is also why the caller — not this function — decides
 // whether a given file is safe to apply. An export that arrives truncated
 // would faithfully delete every position it fails to mention. `--dry-run`
@@ -287,7 +294,13 @@ export async function runHoldingsImport(
   const {
     error: delErr,
     count: deleted,
-  } = await db.from("positions").delete({ count: "exact" }).in("account_id", accountIds);
+  } = await db
+    .from("positions")
+    .delete({ count: "exact" })
+    .in("account_id", accountIds)
+    // Private holdings are not the broker's to confirm or retire — see the
+    // exemption in this file's header.
+    .eq("is_private", false);
   if (delErr) throw delErr;
 
   const positionRows = holdings.map((h) => {
@@ -298,6 +311,18 @@ export async function runHoldingsImport(
       security_code: h.rawSecurity,
       qty: h.qty,
       avg_cost: h.avgCost,
+      // The snapshot RECLAIMS a code it reports. A holding the desk keyed by
+      // hand while the broker was silent about it stops being private the day
+      // the broker starts custodying it — otherwise the row keeps its exemption
+      // from the delete above forever and goes on wearing a "Private" badge the
+      // client would rightly query. Stated explicitly because the upsert only
+      // writes the columns named here: omitting it would leave the stale `true`
+      // in place, which is the bug this comment exists to prevent.
+      is_private: false,
+      // A desk valuation is superseded by a real market price, and a superseded
+      // one left behind is an undated figure waiting to be read as current.
+      manual_price: null,
+      manual_price_at: null,
     };
   });
 

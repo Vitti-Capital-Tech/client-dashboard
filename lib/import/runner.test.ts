@@ -133,11 +133,15 @@ test("holdings: the full replace deletes only the accounts in the file", async (
     external_ref: "999999",
     client_id: "c-other",
   });
+  // `is_private` is NOT NULL DEFAULT false on the real table, so a row that
+  // predates the private-transactions migration still reads as false. A fixture
+  // that omits it would be a row no database could produce.
   tables.positions.push({
     account_id: untouchedAccountId,
     client_id: "c-other",
     security_code: "ABC",
     qty: 5,
+    is_private: false,
   });
 
   // A holding that has since been sold: present in the database, absent from
@@ -148,6 +152,7 @@ test("holdings: the full replace deletes only the accounts in the file", async (
     client_id: acct114716.client_id,
     security_code: "GONE",
     qty: 42,
+    is_private: false,
   });
 
   const res = await runHoldingsImport(db, HOLDINGS_CSV);
@@ -163,6 +168,65 @@ test("holdings: the full replace deletes only the accounts in the file", async (
     "an account absent from the file must be left completely alone",
   );
   assert.equal(res.written!.staleRemoved, 4);
+});
+
+test("holdings: a private holding survives the full replace", async () => {
+  /**
+   * The feature's load-bearing test.
+   *
+   * A private transaction is by definition absent from the broker's snapshot,
+   * so the full replace would read it as sold and delete it — every morning,
+   * silently, with nothing in any log to say where the client's holding went.
+   * The delete is scoped to `is_private = false` for exactly this row.
+   */
+  const { db, tables } = fakeDb();
+  await runHoldingsImport(db, HOLDINGS_CSV);
+
+  const acct114716 = tables.accounts.find((a) => a.external_ref === "114716")!;
+  tables.positions.push({
+    account_id: acct114716.id,
+    client_id: acct114716.client_id,
+    security_code: "ACMEPL",
+    qty: 10_000,
+    avg_cost: 1.25,
+    is_private: true,
+  });
+
+  const res = await runHoldingsImport(db, HOLDINGS_CSV);
+
+  const survivor = tables.positions.find((p) => p.security_code === "ACMEPL");
+  assert.ok(survivor, "a private holding is not the broker's to retire");
+  assert.equal(Number(survivor!.qty), 10_000, "and it is not altered on the way past");
+  // Only the three snapshot rows are replaced; the private one is never counted.
+  assert.equal(res.written!.staleRemoved, 3);
+});
+
+test("holdings: the snapshot reclaims a code it starts reporting", async () => {
+  /**
+   * The other half. Once the broker custodies the parcel it is broker data, and
+   * a row that kept `is_private` would stay exempt from the delete forever and
+   * go on wearing a "Private" badge the client would rightly query.
+   */
+  const { db, tables } = fakeDb();
+  await runHoldingsImport(db, HOLDINGS_CSV);
+
+  const acct114716 = tables.accounts.find((a) => a.external_ref === "114716")!;
+  const eos = tables.positions.find(
+    (p) => p.account_id === acct114716.id && p.security_code === "EOS",
+  )!;
+  // The desk keyed EOS by hand before the broker reported it, and valued it.
+  eos.is_private = true;
+  eos.manual_price = 4.5;
+  eos.manual_price_at = "2026-09-01";
+
+  await runHoldingsImport(db, HOLDINGS_CSV);
+
+  const after = tables.positions.find(
+    (p) => p.account_id === acct114716.id && p.security_code === "EOS",
+  )!;
+  assert.equal(after.is_private, false, "the broker reports it, so it is no longer private");
+  assert.equal(after.manual_price, null, "and the desk valuation is superseded, not left to age");
+  assert.equal(after.manual_price_at, null);
 });
 
 test("holdings: re-running the same file converges, it does not accumulate", async () => {

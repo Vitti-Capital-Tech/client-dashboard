@@ -79,6 +79,8 @@ export type StoredPnlRow = {
   isDbMarketValued: boolean;
   isDbOpenValued: boolean;
   isDbOnly: boolean;
+  /** Backed by desk-entered private transactions rather than broker data. */
+  isPrivate: boolean;
   isPartialExit: boolean;
   isPartialBuy: boolean;
   /**
@@ -141,6 +143,7 @@ export interface PnlSummaryDbRow {
   is_db_market_valued?: boolean | null;
   is_db_open_valued?: boolean | null;
   is_db_only?: boolean | null;
+  is_private?: boolean | null;
   is_partial_exit?: boolean | null;
   is_partial_buy?: boolean | null;
   not_in_holdings?: boolean | null;
@@ -227,6 +230,7 @@ export function toStoredPnlRow(r: PnlSummaryDbRow): StoredPnlRow {
     isDbMarketValued: !!r.is_db_market_valued,
     isDbOpenValued: !!r.is_db_open_valued,
     isDbOnly: !!r.is_db_only,
+    isPrivate: !!r.is_private,
     isPartialExit: !!r.is_partial_exit,
     isPartialBuy: !!r.is_partial_buy,
     // Absent on a row stored before the column existed, which coerces to false

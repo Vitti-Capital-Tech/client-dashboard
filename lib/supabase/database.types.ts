@@ -1295,6 +1295,7 @@ export type Database = {
           is_option: boolean
           is_partial_buy: boolean
           is_partial_exit: boolean
+          is_private: boolean
           is_unlisted_option: boolean
           not_in_holdings: boolean
           open_qty: number
@@ -1328,6 +1329,7 @@ export type Database = {
           is_option?: boolean
           is_partial_buy?: boolean
           is_partial_exit?: boolean
+          is_private?: boolean
           is_unlisted_option?: boolean
           not_in_holdings?: boolean
           open_qty?: number
@@ -1361,6 +1363,7 @@ export type Database = {
           is_option?: boolean
           is_partial_buy?: boolean
           is_partial_exit?: boolean
+          is_private?: boolean
           is_unlisted_option?: boolean
           not_in_holdings?: boolean
           open_qty?: number
@@ -1406,6 +1409,9 @@ export type Database = {
           client_id: string
           created_at: string
           id: string
+          is_private: boolean
+          manual_price: number | null
+          manual_price_at: string | null
           qty: number
           security_code: string
           updated_at: string
@@ -1416,6 +1422,9 @@ export type Database = {
           client_id: string
           created_at?: string
           id?: string
+          is_private?: boolean
+          manual_price?: number | null
+          manual_price_at?: string | null
           qty: number
           security_code: string
           updated_at?: string
@@ -1426,6 +1435,9 @@ export type Database = {
           client_id?: string
           created_at?: string
           id?: string
+          is_private?: boolean
+          manual_price?: number | null
+          manual_price_at?: string | null
           qty?: number
           security_code?: string
           updated_at?: string
@@ -1780,8 +1792,10 @@ export type Database = {
           id: string
           imported_at: string
           instrument: string | null
+          is_private: boolean
           other_charges: number
           parent_code: string
+          private_note: string | null
           raw_security: string
           security_code: string
           side: Database["public"]["Enums"]["trade_side"]
@@ -1804,8 +1818,10 @@ export type Database = {
           id?: string
           imported_at?: string
           instrument?: string | null
+          is_private?: boolean
           other_charges?: number
           parent_code: string
+          private_note?: string | null
           raw_security: string
           security_code: string
           side: Database["public"]["Enums"]["trade_side"]
@@ -1828,8 +1844,10 @@ export type Database = {
           id?: string
           imported_at?: string
           instrument?: string | null
+          is_private?: boolean
           other_charges?: number
           parent_code?: string
+          private_note?: string | null
           raw_security?: string
           security_code?: string
           side?: Database["public"]["Enums"]["trade_side"]

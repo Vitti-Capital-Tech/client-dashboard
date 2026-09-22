@@ -56,6 +56,16 @@ export type ClientPortfolioRow = {
   openPosition: boolean;
   /** `Equity`, `Option`, `Unlisted Option` — the rollup's own wording. */
   type: string;
+  /**
+   * The holding is one the desk recorded, not one the broker reported.
+   *
+   * The single exception to this type's rule about desk state. `edited` and
+   * `note` are stripped because they are facts about the firm's process; this
+   * is a fact about the client's own holding — that it sits outside the broker
+   * and is therefore carried on the desk's word. A client is entitled to know
+   * which of their figures rest on that, so it is the one flag that crosses.
+   */
+  isPrivate: boolean;
 };
 
 export type ClientPortfolio = {
@@ -203,6 +213,7 @@ export function clientPortfolio(
     pnl: r.pnl,
     openPosition: r.openPosition,
     type: r.type,
+    isPrivate: r.isPrivate === true,
   }));
 
   return {

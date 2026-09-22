@@ -2367,3 +2367,82 @@ The watchlist asks about the securities on one client's watchlist — a dozen at
 This is the same failure shape as §8.42's successful POST that imported nothing, §8.51's realtime stream that connected and delivered nothing, and §8.52's scanner that read an empty table and reported `scanned: 0`. In every case the code did not throw, no status was an error, and the only symptom was an absence that looked exactly like quiet.
 
 The lesson each time has been the same and is worth stating as a rule: **a count of things done is not an observation unless the count of things attempted is beside it.**
+
+### 8.56 What a client holds via us that the broker never sees (`is_private`, `PrivateTransactionModal`, `…_private_transactions.sql`)
+
+The portal answers "what do I have via Vitti" out of two sources, and both of them are the broker's: the holdings snapshot (`positions`) and the contract-note ledger (`trades`). Anything arranged off-market — an off-market crossing, a transfer, shares in a private company, a convertible note — is invisible to both. A client who holds it via us could not see it on the one screen built to show them everything, and the desk had no way to put it there.
+
+The desk now enters those by hand, from the Portfolio tab of the client's own staff page — the screen a staff member is already on when they notice the gap.
+
+#### Most of it already existed, and that was the trap
+
+`addTradeAction` and `TradeForm` had been in the codebase since the mismatches work (§3.1i): a hand-keyed contract note line, written `SETTLED`, stamped into `source_file`, followed by a `recomputeClient`. It looked like the feature was one button away.
+
+It was not, because of one line in `run-holdings.ts`:
+
+```ts
+await db.from("positions").delete().in("account_id", accountIds);
+```
+
+**`positions` is a full replace.** Every position for every account in the snapshot is deleted and rebuilt from the file — correctly, because anything the broker stops reporting has been sold. A private holding is by definition absent from that file, so the desk would key an off-market parcel, the client would see it, and the 05:30 run would delete it. Every morning, silently, with nothing in any log to say where it went: the delete would have been doing exactly its job.
+
+So the delete is scoped to `is_private = false`, and `runner.test.ts` pins it — a private holding survives the replace, unaltered, and is never counted in `staleRemoved`.
+
+#### The reclaim, which is the same bug from the other side
+
+A code the desk keys by hand today may be one the broker starts custodying next month. A position that kept `is_private` would stay exempt from the delete *forever* and go on wearing a Private badge the client would rightly query.
+
+So the snapshot **reclaims** what it reports: the position upsert writes `is_private: false` and clears the desk valuation explicitly. Explicitly, because a PostgREST upsert only writes the columns named — omitting the field would have left the stale `true` in place, which is the failure this paragraph exists to prevent. Pinned by its own test.
+
+#### A flag on existing rows, not a new table
+
+`is_private` lands on `trades`, `positions` and `pnl_summary` rather than in a `private_holdings` table. A separate table would have needed its own path through `loadDbHoldings`, `mergeDbHoldingsIntoSummary`, the staff Holdings table, the client portfolio and both exports — five integration points, each a place for the two kinds of holding to drift apart. The flag inherits every one of those paths, and only the code that must treat them differently does.
+
+It rides onto `pnl_summary` through the recompute because **`pnl_summary` is what the client portal actually renders**. A flag living only on `trades` would be correct in the ledger and absent from the one screen it exists to label.
+
+#### Valuing something with no market
+
+An off-market parcel of a *listed* security prices itself — the ASX feed already carries the code. A genuinely unlisted asset has no feed and never will, and `loadDbHoldings` would fall back to cost base, marking it flat forever.
+
+So `positions.manual_price` / `manual_price_at` carry a desk-stated valuation, **ranked below the market price**. An off-market parcel of a listed security is still a listed security: a stale typed figure outranking a live quote is how a private entry would start distorting an ordinary holding. The manual price fills the gap where there is no market at all, which is the only case it was added for.
+
+The two columns move together, enforced by a `CHECK` and restated in English by the action: **a valuation with no date is a number of unknown age being read as current**, which is the specific way this kind of figure misleads.
+
+#### The code is the thing the desk has to get right
+
+Everything downstream slices a plain code to its first three characters to find the ASX ordinary underneath it (`getParentTicker`). `ACMEPRIVATE` therefore files itself under `ACM`, beside a company it has nothing to do with.
+
+The codebase already had the answer and it is not a new rule: a code carrying an **exchange suffix** (`BRAI:NAS`, and so `ACME:PVT`) is its own parent, because there is no ASX ordinary underneath it. `getParentTicker`, `getSummaryGroupKey`, `parentCode` and the snapshot matcher all honour that already. So there is deliberately **no private-only parent rule** — one rule about what a security IS, honoured everywhere, which is the property the importer's own comment insists on. The form tells the desk to use the suffix, because it is the one field that silently produces a wrong-looking portfolio rather than an error.
+
+#### Ledger and position, written together
+
+A broker line gets its position for free from the next snapshot. A private line never will, so `addPrivateTransactionAction` writes both: the trade, and the position it left. Without the second, the merge finds no holding behind the row and marks it *not held* — a transaction correctly recorded and a holding correctly worth nothing.
+
+The position is **added to**, not replaced: two off-market buys of one code are two transactions and one holding, and overwriting would make the most recent entry the whole history. Only a BUY moves the weighted average cost — a sale removes units at the average the parcel already carries, and letting the exit price into the cost base would report the position as having no gain, which is the opposite of what just happened.
+
+#### The one flag a client is shown
+
+`clientPortfolio` strips the desk's working notes — `edited`, `overridden`, `note` — because they are facts about how the firm works, not about the client's money. `isPrivate` is the exception and crosses deliberately: it says the holding sits outside the broker and is carried on the desk's own record, which changes how much weight the figures beside it carry. A client is entitled to know which of their figures rest on that.
+
+The badge renders in `PnlRow`, which the client's portfolio table and the staff view of the same rows both use (§3.1l) — so it appears on the client's screen and on the adviser's, from one implementation, which is the property that stops the two screens disagreeing about whose data a row is.
+
+#### Bulk import, and the two things that make it not a loop
+
+**Import file** sits beside the manual button on the same Portfolio header, and takes a `.xlsx` or `.csv` in the historical-trades shape. `parsePnlFileBuffer` already reads that shape out of either format with a fuzzy header match, so the file half is reused untouched; `lib/import/private-rows.ts` is the new half, and it is pure.
+
+**The file is read in the browser and the ROWS are sent, not the bytes.** The same arrangement the P&L Calculator uses, for the reason §8.21 measured: ExcelJS parsing is CPU-bound in the single Node process, and a tracker parse starved every other server action for ~48s. It also means the desk sees exactly what will be written, and can abandon the upload, before anything is — which matters because a hand-typed spreadsheet read through fuzzy-matched columns can put forty parcels in the wrong year, and the first sight of that should not be a client's portfolio.
+
+**It is deliberately not `addPrivateTransactionAction` in a loop**, for two reasons of different weight:
+
+- The small one: that would recompute the client's whole P&L once per row — forty recomputes for a forty-line file, each re-reading the same trackers and re-quoting the same tickers. The batch recomputes **once**, at the end.
+- The one that changes numbers: each call re-reads a position the previous call moved, so a SELL halfway down the file would be weighted against a cost base the BUYs below it had not yet contributed to — and the answer would depend on how the spreadsheet happened to be sorted. `netPositionEffects` nets each code's whole effect first, so the result is order-independent. Pinned by a test that imports the same rows forwards and reversed and asserts the same cost.
+
+**Positions move by what LANDED, never by what was offered.** The ledger upsert is `ignoreDuplicates` on `(cnote, raw_security, side)` with a `.select()`, so re-uploading a file the desk already imported is a no-op rather than a second copy of every parcel. The position pass then runs off the returned rows: a holding advanced by a duplicate the ledger refused would be a quantity backed by no transaction, and it would compound on every re-upload — exactly what the ledger's own idempotency exists to prevent. The skipped count is reported rather than swallowed, because *"40 rows, 12 imported"* is the one number that tells the desk the file had already been through.
+
+**A rejected row is reported, not dropped.** Every row that will not be written comes back with its line number and the reason, and is shown before the write. A silent skip leaves the client's portfolio missing a parcel with nothing anywhere saying so — the same failure shape as §8.51's stream that connected and delivered nothing. A blank `Status` is accepted, because the column is the broker's convention and a desk spreadsheet of off-market parcels has no reason to carry it; `CANCELLED` and `PENDING` are refused by name.
+
+The file's **Account** column is ignored. The desk opens this from one client's portfolio and picks the account there, so a file naming a different one would offer a second answer to a question already settled.
+
+#### Not built
+
+**Editing a private line once entered.** Correcting one means the existing trade tools on the mismatches desk. There is also no bulk *valuation* update — an unlisted asset's `manual_price` is set per holding through the manual form.

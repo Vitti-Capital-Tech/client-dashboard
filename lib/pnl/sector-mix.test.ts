@@ -23,6 +23,7 @@ function row(over: Partial<ClientPortfolioRow> = {}): ClientPortfolioRow {
     sellOrCurrent: 8000,
     pnl: 3000,
     openPosition: true,
+    isPrivate: false,
     type: "Equity",
     ...over,
   };

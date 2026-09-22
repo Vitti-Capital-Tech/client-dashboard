@@ -213,6 +213,15 @@ export interface PnlSummaryItem {
   isDbMarketValued?: boolean; // true if sellQty/sellPrice auto-filled from database portfolio market value
   isDbOpenValued?: boolean; // true when a FULLY open position was valued off the DB — nothing was sold
   isDbOnly?: boolean; // true when the row exists ONLY because the DB holds it — no trade in the file
+  /**
+   * The holding behind this row is desk-entered, not broker-reported.
+   *
+   * Set from the snapshot merge, because `positions` is where the fact lives.
+   * Drives the client-facing "Private" badge, so it is the one provenance flag
+   * on this type that a client ever sees — the rest are the desk's own working
+   * notes and are stripped by `clientPortfolio`.
+   */
+  isPrivate?: boolean;
   isPartialExit?: boolean; // true when a still-held parcel was ADDED on top of a realised part-sale
   isPartialBuy?: boolean; // true when a Placement allocation was ADDED on top of a short buy side
   /**
@@ -3176,6 +3185,8 @@ export function mergeDbHoldingsIntoSummary(
     marketValue: number;
     /** `qty × avg_cost` from the snapshot. 0 for a free option. */
     costBase?: number;
+    /** The holding is desk-entered rather than broker-reported. */
+    isPrivate?: boolean;
   }>,
   opts?: {
     /**
@@ -3228,6 +3239,11 @@ export function mergeDbHoldingsIntoSummary(
     // position as no holding, which is exactly right: a snapshot row at qty 0
     // is a parcel that has gone, not one that is held.
     item.notInHoldings = !match;
+
+    // The badge follows the HOLDING, which is where the fact is recorded. A row
+    // whose ledger lines are private but whose parcel has since been taken over
+    // by the broker's snapshot is broker data now, and says so.
+    if (match) item.isPrivate = match.isPrivate === true;
 
     const isFullyOpen = item.sellQty === 0 || item.sellPrice === 0;
     // A part-sale still holding a remainder. Requires a real buy side to compare
@@ -3346,6 +3362,7 @@ export function mergeDbHoldingsIntoSummary(
       // named for what it is (`Listed Options`, against the modelled unlisted
       // rows); an equity for why it has no trades.
       isDbOnly: true,
+      isPrivate: h.isPrivate === true,
       // The row exists BECAUSE the snapshot holds it, so the verification is
       // settled here rather than left absent and read as "never checked".
       notInHoldings: false,

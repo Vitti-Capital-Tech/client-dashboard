@@ -286,6 +286,7 @@ export function storedToSummaryRows(
       isUnlistedOption: r.isUnlistedOption,
       isDbOpenValued: r.isDbOpenValued,
       isDbOnly: r.isDbOnly,
+      isPrivate: r.isPrivate,
       // Both feed `positionStatus`, which is what the exports' Position column
       // and the row fills read. Valuing an open parcel off the snapshot sets
       // both legs from the same held count, so `openQty` alone cannot tell a

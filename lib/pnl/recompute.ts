@@ -422,6 +422,10 @@ async function persist(
         is_db_market_valued: Boolean(s.isDbMarketValued),
         is_db_open_valued: Boolean(s.isDbOpenValued),
         is_db_only: Boolean(s.isDbOnly),
+        // Carried onto the stored row because `pnl_summary` is what the client
+        // portal renders: a flag that lived only on `trades` would be correct in
+        // the ledger and missing from the one screen it exists to label.
+        is_private: Boolean(s.isPrivate),
         is_partial_exit: Boolean(s.isPartialExit),
         is_partial_buy: Boolean(s.isPartialBuy),
         // "Checked, and the client holds none of it" — see the migration. An

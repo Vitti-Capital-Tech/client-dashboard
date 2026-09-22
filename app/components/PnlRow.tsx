@@ -191,6 +191,24 @@ export function PnlRow({
         </td>
         <td className={`px-4.5 py-3 ${row.flagged ? "text-loss-d font-semibold" : "text-ink font-medium"}`}>
           {row.name}
+          {/*
+            The one provenance flag a client is shown.
+            The rest of the row's flags are the desk's working notes and are
+            stripped before a client ever sees them. This one is not about
+            process: it says the holding sits outside the broker and is carried
+            on the desk's own record, which is a fact about the client's money
+            and changes how much weight the figures beside it carry. Rendered
+            here rather than in the code cell so it reads as a property of the
+            holding, and so a long company name wraps before the badge does.
+          */}
+          {row.isPrivate && (
+            <span
+              className="ml-2 align-middle inline-block text-[9.5px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-[4px] bg-paper-2 border border-line-2 text-mut"
+              title="Held via us but not through the broker — recorded by the desk"
+            >
+              Private
+            </span>
+          )}
         </td>
         <td className="px-4.5 py-3 text-right font-mono text-ink">
           <span {...mark(row.overridden.buyQty, qty(effComputedBuyQty))}>

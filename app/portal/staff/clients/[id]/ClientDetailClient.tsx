@@ -52,6 +52,8 @@ import { buildPnlSummaryXlsx } from "@/app/actions/exports";
 import { recalculateClientPnl, previewClientPnlCsv } from "@/app/actions/pnl";
 import { TablePagination } from "@/app/components/TablePagination";
 import { PnlRow } from "@/app/components/PnlRow";
+import { PrivateTransactionModal } from "./PrivateTransactionModal";
+import { ImportPrivateModal } from "./ImportPrivateModal";
 import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { RealisedRangePicker, type DateRange } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
@@ -220,6 +222,14 @@ export function ClientDetailClient({
   // to one account. Holdings/options/bids/cash follow this; alerts stay
   // person-level.
   const [acctFilter, setAcctFilter] = useState<string>("all");
+  /**
+   * The private-transaction form. Opened from the Portfolio header, because
+   * that is the screen a staff member is on when they notice the client holds
+   * something via us that is not on it.
+   */
+  const [privateTxnOpen, setPrivateTxnOpen] = useState(false);
+  /** The bulk version of the same thing — a .xlsx/.csv of private transactions. */
+  const [importPrivateOpen, setImportPrivateOpen] = useState(false);
   /**
    * Which summary row has its inline editor open.
    *
@@ -900,6 +910,23 @@ export function ClientDetailClient({
           <div className="px-4.5 py-3.5 border-b border-line bg-white select-none">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <b className="text-sm font-semibold text-ink">Portfolio</b>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPrivateTxnOpen(true)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-[9px] border border-line-2 text-ink hover:border-navy transition-colors"
+                  title="Record something held via us that the broker does not custody"
+                >
+                  + Private transaction
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImportPrivateOpen(true)}
+                  className="text-xs font-semibold px-3 py-1.5 rounded-[9px] border border-line-2 text-ink hover:border-navy transition-colors"
+                  title="Import a .xlsx or .csv of private transactions"
+                >
+                  Import file
+                </button>
               <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-mut pointer-events-none" />
                 <input
@@ -914,8 +941,27 @@ export function ClientDetailClient({
                   className="w-56 border border-line-2 bg-white rounded-[9px] pl-8.5 pr-3 py-1.5 text-xs focus:border-green focus:outline-none transition-colors"
                 />
               </div>
+              </div>
             </div>
           </div>
+
+          <PrivateTransactionModal
+            isOpen={privateTxnOpen}
+            onClose={() => setPrivateTxnOpen(false)}
+            clientId={cid}
+            clientName={client.name}
+            accounts={accounts.map((a) => ({ id: a.id, label: a.label || a.externalRef || a.id }))}
+            defaultAccountId={acctFilter === "all" ? null : acctFilter}
+          />
+
+          <ImportPrivateModal
+            isOpen={importPrivateOpen}
+            onClose={() => setImportPrivateOpen(false)}
+            clientId={cid}
+            clientName={client.name}
+            accounts={accounts.map((a) => ({ id: a.id, label: a.label || a.externalRef || a.id }))}
+            defaultAccountId={acctFilter === "all" ? null : acctFilter}
+          />
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-left text-xs font-medium">
               <thead>

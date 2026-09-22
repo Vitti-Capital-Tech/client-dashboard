@@ -627,6 +627,89 @@ test("PNL Calculator - DB market value never prices an option row off the underl
   assert.equal(both.mergedCount, 2);
 });
 
+test("a private holding badges its row, and a broker-held one does not", () => {
+  /**
+   * The badge follows the HOLDING, not the ledger line, because the holding is
+   * where custody is recorded. A row the desk keyed and the broker has since
+   * taken over is broker data and must stop claiming otherwise — that is the
+   * case the second assertion pins.
+   */
+  const summary = [
+    {
+      ticker: "ACME:PVT",
+      parentTicker: "ACME:PVT",
+      company: "ACME PRIVATE",
+      buyQty: 10000,
+      sellQty: 0,
+      buyPrice: 12500,
+      sellPrice: 0,
+      totalBuyValue: 12500,
+      totalSellValue: 0,
+      pnlCalculated: -12500,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 10000,
+      tradeCount: 1,
+    },
+    {
+      ticker: "EOS",
+      parentTicker: "EOS",
+      company: "ELECTRO OPTIC",
+      buyQty: 1000,
+      sellQty: 0,
+      buyPrice: 5000,
+      sellPrice: 0,
+      totalBuyValue: 5000,
+      totalSellValue: 0,
+      pnlCalculated: -5000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      openQty: 1000,
+      tradeCount: 1,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(summary, [
+    { ticker: "ACME:PVT", parentTicker: "ACME:PVT", qty: 10000, marketValue: 15000, isPrivate: true },
+    { ticker: "EOS", parentTicker: "EOS", qty: 1000, marketValue: 8000 },
+  ]);
+
+  assert.equal(merged.summary.find((s) => s.ticker === "ACME:PVT")?.isPrivate, true);
+  assert.equal(merged.summary.find((s) => s.ticker === "EOS")?.isPrivate, false);
+});
+
+test("a row the broker has taken over stops being private", () => {
+  // The desk keyed it while the broker was silent; the snapshot now carries it.
+  const summary = [
+    {
+      ticker: "EOS",
+      parentTicker: "EOS",
+      company: "ELECTRO OPTIC",
+      buyQty: 1000,
+      sellQty: 0,
+      buyPrice: 5000,
+      sellPrice: 0,
+      totalBuyValue: 5000,
+      totalSellValue: 0,
+      pnlCalculated: -5000,
+      isMatched: false,
+      isOption: false,
+      hasOptionCode: false,
+      isPrivate: true,
+      openQty: 1000,
+      tradeCount: 1,
+    },
+  ];
+
+  const merged = mergeDbHoldingsIntoSummary(summary, [
+    { ticker: "EOS", parentTicker: "EOS", qty: 1000, marketValue: 8000, isPrivate: false },
+  ]);
+
+  assert.equal(merged.summary[0].isPrivate, false);
+});
+
 /** A part-sold parcel: 121,213 bought, 50,000 sold, 71,213 still held. */
 const partialExitRow = () => [
   {

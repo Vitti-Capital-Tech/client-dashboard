@@ -516,6 +516,8 @@ Add `--dry-run` to either to print the parsed totals and a P&L preview **without
 | `run-holdings.ts` | `clients`, `accounts`, `securities`, `positions` | account × security code |
 | `run-trades.ts` | `trades`, `realized_pnl` | account × **parent** code |
 
+**Neither import touches a private transaction.** What a client holds via us that the broker does not custody — an off-market parcel, a transfer, an unlisted asset — is entered by the desk from the client's Portfolio tab (staff → Clients → a client → **+ Private transaction**), not by either CSV. Those rows carry `is_private`, and the snapshot's full replace of `positions` deliberately **excludes** them: the broker never reported them, so their absence from the file is not evidence of a sale, and without the carve-out every hand-keyed holding would disappear on the next morning run. A code the broker later starts reporting is reclaimed back to ordinary broker data automatically. See §4.5a.
+
 **Two ledger dialects, one parser.** The broker sends the trade ledger in more than one shape: the fuller export whose columns say what they mean (`CNote`, `Security`, `Value`, `Status = SETTLED`), and the `ContractNotesListing` report the scheduled mail actually carries — same data, different names, and different *encodings* (`B`/`S` sides, single-letter statuses, a sale's units written negative, `Nett` for the fee-inclusive value). `lib/import/trade-formats.ts` rewrites the second into the first so `trades.ts` keeps knowing exactly one shape, and `detectCsvKind` recognises both. Only `S` maps to `SETTLED`; every other status code is stored **verbatim** rather than guessed at, which already excludes it from P&L. That export carries no company name, so the field is left empty rather than filled with the account holder's — names arrive through the holdings snapshot.
 
 **Security codes.** ASX ordinaries are exactly three characters and may contain digits (`ADN`, `AT4`, `PC2`); derivatives extend that root (`EOSXX`, `ADNOD`, `PC2ZZ`). The parent is the **first three characters** — never a literal `XX` strip, which would mangle real codes like `LDX`. Each raw code keeps its own `securities` row (an option and its ordinary trade at different prices, so their units are not additive); `securities.parent_code` links them, and the UI rolls up by `COALESCE(parent_code, code)`.
@@ -534,6 +536,50 @@ Run the pipeline's unit tests (Node's built-in runner, no framework):
 ```bash
 npm test
 ```
+
+### 4.5a Private transactions (what the broker never sees)
+
+Both broker exports answer questions about what sits at the broker. A client may also hold things **via us** that it does not custody — an off-market crossing, a transfer, shares in a private company, a convertible note. None of it appears in either CSV, so none of it reached the one screen built to show a client everything.
+
+The desk enters those by hand:
+
+**Staff → Clients → _(a client)_ → Portfolio tab → `+ Private transaction`**
+
+They are written to the same ledger as everything else, appear on the client's own portfolio badged **Private**, and are visible to the client and to staff from the same row.
+
+| Field | When to fill it |
+|---|---|
+| **Account** | Which of the client's accounts it belongs to. Pre-selected when the page is already scoped to one |
+| **Code** | The ASX code if listed. If it is **not** an ASX security, add an exchange suffix — `ACME:PVT` |
+| **Side / date / units / price** | The transaction itself. `Consideration` defaults to units × price when left blank |
+| **Value per unit** + **Valued as at** | Only for something with no price feed. Leave blank for a listed code |
+| **Note** | Staff-only provenance — "Off-market transfer from SMSF". Never shown to the client |
+
+**The code is the one field that fails quietly.** Everything downstream slices a plain code to its first three characters to find the ASX ordinary underneath it, so `ACMEPRIVATE` files itself under `ACM` beside a company it has nothing to do with. An exchange-qualified code (`ACME:PVT`) is already how this codebase says "this instrument is its own parent", and it survives the whole pipeline intact. Nothing errors if you get this wrong — the holding simply appears under the wrong ticker.
+
+**Valuation, and why it is dated.** An off-market parcel of a *listed* security needs no valuation: the ASX feed prices it like any other line, and a typed figure would only go stale beside a live quote (the market price always wins). Something genuinely unlisted has no feed and never will — without a stated valuation it is carried at **cost**, which reads as neither gain nor loss forever. The date is not optional decoration: an undated valuation is a number of unknown age being read as current.
+
+**What happens on save.** The trade is written, the holding it left is created or adjusted (a BUY adds, a SELL reduces, and only a BUY moves the weighted-average cost), the client's P&L is recomputed, and an `audit_log` row records who entered it. The morning import then leaves it alone.
+
+#### Importing a file of them
+
+Beside the manual button, **Import file** takes a `.xlsx` or `.csv` in the **same shape as the historical trades file** — the columns `parsePnlFileBuffer` already reads, matched fuzzily, so an export or a hand-made sheet both work:
+
+```
+CNote,Account,Type,Security,Company,Contract Date,Units,Avg Price,Consideration,Value,Status
+,,BUY,ACME:PVT,ACME HOLDINGS,04-03-2026,10000,1.25,12500,12500,SETTLED
+```
+
+- **Dates** are read **day-first** (`04-03-2026` is 4 March). A `yyyy-mm-dd` date is read as written, and Excel's own serial numbers are handled.
+- **Status** may be blank — a desk spreadsheet has no broker column. `CANCELLED` and `PENDING` rows are refused by name.
+- **The Account column is ignored.** The account picked in the dialog is the one they land on.
+- **Nothing is written until you confirm.** The dialog shows every transaction that will be imported and every row that will be skipped, with the row number and the reason.
+- **Re-importing the same file is a no-op.** Rows are keyed on `(reference, code, side)`, so duplicates are skipped and counted rather than doubling the client's holding. Rows with no reference get a generated `PRIVATE-…` one, so a file with a blank CNote column imports twice if you upload it twice — fill the column if that matters.
+- Up to **500 rows** per file. Anything larger is a data migration and wants the CLI importers.
+
+The client's P&L is recomputed **once** at the end, not per row.
+
+**Not yet built:** editing a private line once entered — correcting one means the existing trade tools on the mismatches desk. See LLD §8.56.
 
 ### 4.6 Automated morning ingest (broker mail → database → P&L)
 
@@ -805,6 +851,7 @@ Every such read now pages until a short page arrives. There are deliberately two
 | Layer | State |
 |---|---|
 | Schema on Supabase | ✅ applied (`supabase/migrations/`). No seed file — real data comes from the broker import |
+| Private transactions | ✅ `…_private_transactions.sql` — `is_private` on `trades` / `positions` / `pnl_summary`, plus a dated `manual_price` for assets with no feed. Entered one at a time or imported from a `.xlsx`/`.csv` from the client's Portfolio tab; **exempt from the holdings-snapshot full replace**, or each one would be deleted the morning after it was keyed. README §4.5a, LLD §8.56 |
 | Data-access layer + generated types | ✅ `lib/data/queries.ts`, `lib/supabase/*` |
 | Auth session bridge (`getUser()`) | ✅ `lib/session.ts`, `app/actions/session.ts` |
 | Migrated routes — client | ✅ dashboard, invest, positions, insights, markets, placements, options, watchlist, alerts, askvitti |

@@ -48,6 +48,10 @@ type PositionRow = {
   security_code: string | null;
   qty: number | string | null;
   avg_cost: number | string | null;
+  /** True for a holding the broker does not custody. See the private-transactions migration. */
+  is_private?: boolean | null;
+  /** Desk-stated unit valuation, for an asset with no price feed. */
+  manual_price?: number | string | null;
 };
 
 type AccountHolderRow = {
@@ -253,6 +257,16 @@ export type DbHolding = {
   costBase: number;
   marketValue: number;
   unrealizedPnl: number;
+  /**
+   * The holding is desk-entered rather than broker-reported.
+   *
+   * Set when EVERY position behind the group is private. A group that mixes the
+   * two — an off-market parcel of a code the broker also custodies — is not
+   * private: most of what the client sees on that row is the broker's own data,
+   * and badging the whole line as desk-entered would overstate how much of it
+   * was typed by hand.
+   */
+  isPrivate: boolean;
 };
 
 const round2 = (v: number): number => Math.round(v * 100) / 100;
@@ -279,8 +293,11 @@ export async function loadDbHoldings(
   if (accountIds.length === 0) return [];
 
   const [positions, secMap] = await Promise.all([
-    selectAll<PositionRow>(db, "positions", "account_id, security_code, qty, avg_cost", (q) =>
-      q.in("account_id", accountIds),
+    selectAll<PositionRow>(
+      db,
+      "positions",
+      "account_id, security_code, qty, avg_cost, is_private, manual_price",
+      (q) => q.in("account_id", accountIds),
     ),
     securities ?? loadSecurityCatalogue(db),
   ]);
@@ -299,11 +316,26 @@ export async function loadDbHoldings(
     const secInfo = secMap.get(code) || secMap.get(parent);
     const lastClose = secInfo?.lastClose || 0;
 
+    /**
+     * A desk-stated valuation, for the asset that will never have a feed.
+     *
+     * Ranked BELOW the market price deliberately. An off-market parcel of a
+     * listed security is still a listed security: the ASX price is a better
+     * answer than anything the desk can type, and a stale manual figure
+     * outranking a live quote is how a private entry would start distorting an
+     * ordinary holding. So this only fills the gap where there is no market at
+     * all — which is exactly the case it was added for.
+     */
+    const manualPrice = Number(p.manual_price) || 0;
+
     // No quote is not the same as worthless. Falling back to cost base marks
     // the position flat rather than writing it off to zero, which is the more
     // honest of the two available lies until a price arrives.
+    const unitPrice = lastClose > 0 ? lastClose : manualPrice;
     const marketValue =
-      qty > 0 && lastClose > 0 ? round2(qty * lastClose) : costBase > 0 ? costBase : 0;
+      qty > 0 && unitPrice > 0 ? round2(qty * unitPrice) : costBase > 0 ? costBase : 0;
+
+    const isPrivate = p.is_private === true;
 
     const existing = byGroup.get(groupKey);
     if (!existing) {
@@ -316,12 +348,16 @@ export async function loadDbHoldings(
         costBase,
         marketValue,
         unrealizedPnl: round2(marketValue - costBase),
+        isPrivate,
       });
     } else {
       existing.qty += qty;
       existing.costBase = round2(existing.costBase + costBase);
       existing.marketValue = round2(existing.marketValue + marketValue);
       existing.unrealizedPnl = round2(existing.marketValue - existing.costBase);
+      // Every contributing position must be private for the group to be. See
+      // the field's own comment on why a mixed group is not badged.
+      existing.isPrivate = existing.isPrivate && isPrivate;
     }
   }
 

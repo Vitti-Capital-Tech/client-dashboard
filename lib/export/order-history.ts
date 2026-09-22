@@ -137,6 +137,8 @@ export type PnlSummaryRow = {
   isUnlistedOption?: boolean;
   isDbOpenValued?: boolean;
   isDbOnly?: boolean;
+  /** Desk-entered rather than broker-reported. Shown to the client as a badge. */
+  isPrivate?: boolean;
   /** A still-held parcel sits on top of a realised part-sale. */
   isPartialExit?: boolean;
   openQty?: number;

@@ -6,6 +6,10 @@ import { getActor } from "@/lib/session";
 import { recomputeClient } from "@/lib/pnl/batch";
 import { getParentTicker, isOptionCode } from "@/lib/pnl-calculator";
 import { savePnlOverride } from "./pnl-overrides";
+import {
+  netPositionEffects,
+  type PrivateTxnRow,
+} from "@/lib/import/private-rows";
 
 export interface TradeDetail {
   id: string;
@@ -775,4 +779,491 @@ export async function excludePositionAction(
     sellOrCurrent: 0,
     note: note?.trim() || "Excluded / Dismissed by desk",
   });
+}
+
+/* ────────────────────────── private transactions ─────────────────────────── */
+
+/**
+ * What the desk types to record something the broker never sees.
+ *
+ * A superset of `TradeInput`: a private transaction IS a trade — it moves units
+ * and cash and belongs in the same ledger, on the same P&L row — plus the two
+ * things a broker line never needs. Modelled as an extension rather than a
+ * parallel type so a private line cannot quietly diverge from the arithmetic
+ * every other line goes through.
+ */
+export type PrivateTransactionInput = TradeInput & {
+  /**
+   * The desk's own note on provenance — "Off-market transfer from SMSF",
+   * "Series A". Staff-only; the client portal never renders it.
+   */
+  privateNote?: string | null;
+  /**
+   * Unit valuation for an asset with no price feed, and the date it is as at.
+   *
+   * Left blank for an off-market parcel of a LISTED security: the ASX feed
+   * already prices that code, and a typed figure would only go stale beside it.
+   * Required in practice for anything genuinely unlisted, or the holding is
+   * carried at cost and reads as flat forever.
+   */
+  manualPrice?: number | null;
+  /** `yyyy-mm-dd`. Must accompany `manualPrice`; see the migration's CHECK. */
+  manualPriceAt?: string | null;
+  /** Display name for a code the securities catalogue has never seen. */
+  securityName?: string | null;
+};
+
+/**
+ * ── How to code something that is not an ASX security ───────────────────────
+ *
+ * `getParentTicker` slices any code of three or more characters down to its
+ * first three and calls that the parent — right for `ADNOD` to `ADN`, and
+ * nonsense for `ACMEPRIVATE`, which would hang the holding off a phantom `ACM`.
+ *
+ * The codebase already has the answer and it is not a new rule: a code carrying
+ * an exchange suffix (`BRAI:NAS`, and so `ACME:PVT`) is ITS OWN parent, because
+ * there is no ASX ordinary underneath it. `getParentTicker`, `getSummaryGroupKey`,
+ * `parentCode` and the snapshot matcher all honour that already, so a private
+ * asset coded that way survives the whole pipeline whole instead of collapsing
+ * into a three-letter group.
+ *
+ * So there is deliberately no private-only parent rule here. One rule about
+ * what a security IS, honoured everywhere — the property the importer's own
+ * comment insists on. The form is what tells the desk to use the suffix.
+ */
+
+/**
+ * Record a transaction the broker does not know about, and the holding it left.
+ *
+ * ── Why this writes to two tables ───────────────────────────────────────────
+ * The ledger row is what the P&L is computed FROM; the position row is what the
+ * open side is valued AGAINST. A broker line gets its position for free from
+ * the next morning's holdings snapshot — that is the snapshot's whole job. A
+ * private line never will, by definition, so if this wrote only the trade the
+ * merge would find no holding behind it and mark the row *not held*: a
+ * transaction correctly recorded and a holding correctly worth nothing.
+ *
+ * So a BUY creates or adds to the private position, and a SELL reduces it. Both
+ * are the position the desk would otherwise have to remember to maintain by
+ * hand beside the ledger it already keyed.
+ *
+ * ── Why the position is added to rather than replaced ───────────────────────
+ * Two off-market buys of the same code are two transactions and one holding.
+ * Reading the current row and writing qty + units keeps the weighted average
+ * cost meaningful across them; overwriting would make the most recent entry the
+ * whole history and silently discard the earlier parcel's cost base.
+ */
+export async function addPrivateTransactionAction(
+  accountId: string,
+  clientId: string,
+  input: PrivateTransactionInput,
+): Promise<Result<{ cnote: string; code: string }>> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  const invalid = validateTrade(input);
+  if (invalid) return { ok: false, error: invalid };
+
+  // The migration's CHECK enforces this too, but a constraint violation reaches
+  // the desk as a Postgres error string. This is the same rule, said in English.
+  const hasPrice = typeof input.manualPrice === "number" && Number.isFinite(input.manualPrice);
+  const hasDate = !!input.manualPriceAt?.trim();
+  if (hasPrice !== hasDate) {
+    return {
+      ok: false,
+      error: hasPrice
+        ? "Give the date the valuation is as at — an undated valuation gets read as today's."
+        : "Enter the valuation the date applies to, or clear the date.",
+    };
+  }
+  if (hasPrice && (input.manualPrice as number) < 0) {
+    return { ok: false, error: "A valuation cannot be negative." };
+  }
+  if (hasDate && !/^\d{4}-\d{2}-\d{2}$/.test(input.manualPriceAt!.trim())) {
+    return { ok: false, error: "Enter the valuation date as yyyy-mm-dd." };
+  }
+
+  const code = input.securityCode.trim().toUpperCase();
+  const parent = getParentTicker(code);
+  const money = tradeMoney({ ...input, securityCode: code });
+
+  const cnote =
+    input.cnote?.trim() ||
+    `PRIVATE-${input.tradeDate.replace(/-/g, "")}-${Math.random().toString(16).slice(2, 6).toUpperCase()}`;
+
+  try {
+    const supabase = await createClient();
+
+    const catalogueErr = await ensureSecurityExists(supabase, code, input.securityName ?? undefined);
+    if (catalogueErr) return { ok: false, error: catalogueErr };
+
+    const { error } = await supabase.from("trades").insert({
+      cnote,
+      account_id: accountId,
+      client_id: clientId,
+      raw_security: code,
+      security_code: code,
+      parent_code: parent,
+      instrument: input.instrument?.trim() || (isOptionCode(code) ? "OPTION" : "FPO"),
+      side: input.side,
+      trade_date: input.tradeDate,
+      units: input.units,
+      avg_price: input.avgPrice,
+      consideration: money.consideration,
+      brokerage: money.brokerage,
+      other_charges: money.otherCharges,
+      gst: money.gst,
+      value: money.value,
+      // Same reasoning as a manual repair line: the desk has a statement in
+      // hand, or it would have nothing to type in from.
+      status: "SETTLED",
+      is_private: true,
+      private_note: input.privateNote?.trim() || null,
+      source_file: `Private transaction entered by ${actor}`,
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        return {
+          ok: false,
+          error: `Reference "${cnote}" already exists for ${code} ${input.side}. Use a different reference.`,
+        };
+      }
+      return { ok: false, error: error.message };
+    }
+
+    const posErr = await applyPrivatePosition(supabase, accountId, clientId, code, input);
+    if (posErr) return { ok: false, error: posErr };
+
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Added private transaction",
+      detail: `Private ${input.side} ${input.units.toLocaleString("en-AU")} ${code} @ $${input.avgPrice.toFixed(4)} (ref ${cnote}) on account ${accountId}`,
+      client_id: clientId,
+    });
+
+    await recomputeClient(clientId, { trigger: "manual" });
+    revalidatePath("/portal", "layout");
+
+    return { ok: true, data: { cnote, code } };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to record the private transaction.",
+    };
+  }
+}
+
+/**
+ * Move the private holding by what the transaction did, keeping WAC intact.
+ *
+ * Returns an error string rather than throwing, matching the action's own
+ * contract. A BUY that leaves the ledger correct and the position unwritten is
+ * the failure mode worth being loud about: the transaction would be recorded
+ * and the client would still not see the holding.
+ */
+async function applyPrivatePosition(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  accountId: string,
+  clientId: string,
+  code: string,
+  input: PrivateTransactionInput,
+): Promise<string | null> {
+  const { data: existing, error: readErr } = await supabase
+    .from("positions")
+    .select("qty, avg_cost, is_private")
+    .eq("account_id", accountId)
+    .eq("security_code", code)
+    .maybeSingle();
+  if (readErr) return `Could not read the existing holding: ${readErr.message}`;
+
+  const prevQty = Number(existing?.qty) || 0;
+  const prevCost = Number(existing?.avg_cost) || 0;
+  const delta = input.side === "BUY" ? input.units : -input.units;
+  const nextQty = Math.max(0, prevQty + delta);
+
+  /**
+   * Weighted average cost, and only a BUY may move it.
+   *
+   * A sale removes units at the average the parcel already carries — it is not
+   * new information about what the holding cost. Letting a SELL price into this
+   * would rewrite the cost base to the exit price and report the position as
+   * having no gain, which is the opposite of what just happened.
+   */
+  const nextCost =
+    input.side === "BUY" && nextQty > 0
+      ? (prevQty * prevCost + input.units * input.avgPrice) / nextQty
+      : prevCost;
+
+  const hasValuation =
+    typeof input.manualPrice === "number" && Number.isFinite(input.manualPrice);
+
+  // Omitted entirely when not supplied, so re-entering a transaction without a
+  // valuation does not wipe one the desk set earlier. The pair moves together
+  // or not at all — the table's CHECK insists, and so does the form.
+  const valuation = hasValuation
+    ? {
+        manual_price: input.manualPrice as number,
+        manual_price_at: input.manualPriceAt as string,
+      }
+    : {};
+
+  // A holding the broker already custodies must not be quietly reclassified as
+  // private by an off-market top-up: the snapshot would go on overwriting it
+  // and the badge would be a lie about most of the parcel.
+  const claimsPrivate = !existing || existing.is_private === true ? { is_private: true } : {};
+
+  const { error: writeErr } = await supabase.from("positions").upsert(
+    {
+      account_id: accountId,
+      client_id: clientId,
+      security_code: code,
+      qty: nextQty,
+      avg_cost: Math.round(nextCost * 1e6) / 1e6,
+      ...claimsPrivate,
+      ...valuation,
+    },
+    { onConflict: "account_id,security_code" },
+  );
+  if (writeErr) return `The transaction was saved but the holding was not: ${writeErr.message}`;
+
+  return null;
+}
+
+/**
+ * Import a file of private transactions onto one account.
+ *
+ * ── Why the rows arrive parsed ──────────────────────────────────────────────
+ * The browser reads the .csv/.xlsx with `parsePnlFileBuffer` and sends rows,
+ * not bytes. Two reasons, both learned elsewhere in this codebase: a server
+ * action carries a body limit that a real workbook exceeds, and ExcelJS parsing
+ * is CPU-bound in the single Node process — §8.21 measured a tracker parse
+ * starving every other server action for ~48s. The desk also sees exactly what
+ * will be written, and can abandon the upload, before anything is.
+ *
+ * ── Why this is not addPrivateTransactionAction in a loop ───────────────────
+ * That would recompute the client's whole P&L once per row — forty recomputes
+ * for a forty-line file, each one reading the same trackers and quoting the
+ * same tickers. It would also get the weighted average cost WRONG: each call
+ * re-reads a position the previous call moved, so a SELL halfway down the file
+ * would be applied against a cost base that the BUYs below it had not yet
+ * contributed to. The batch nets each code's effect first (`netPositionEffects`)
+ * and recomputes exactly once, at the end.
+ *
+ * ── Partial success is a real outcome and is reported as one ────────────────
+ * A duplicate reference is not a reason to refuse the other thirty-nine rows,
+ * so the ledger insert reports what it skipped rather than throwing. What must
+ * never happen is a position moved by a trade that was not written, so the
+ * holdings are computed from the rows that actually landed.
+ */
+export async function importPrivateTransactionsAction(
+  accountId: string,
+  clientId: string,
+  rows: PrivateTxnRow[],
+): Promise<
+  Result<{ imported: number; skipped: number; codes: string[]; notes: string[] }>
+> {
+  const { role, actor } = await getActor();
+  if (role !== "admin") return { ok: false, error: "Staff only." };
+
+  if (!accountId) return { ok: false, error: "Choose the account these belong to." };
+  if (rows.length === 0) return { ok: false, error: "There is nothing to import." };
+  // A guard, not a judgement about what is reasonable: this runs inside one
+  // request and writes a position per code afterwards. A file bigger than this
+  // is a data migration and wants the CLI importers, not a browser upload.
+  if (rows.length > 500) {
+    return {
+      ok: false,
+      error: `That file has ${rows.length} rows. Import up to 500 at a time.`,
+    };
+  }
+
+  const notes: string[] = [];
+
+  try {
+    const supabase = await createClient();
+
+    // Catalogue first, and once per distinct code rather than once per row:
+    // every trade row carries an FK to `securities`, so a missing code fails
+    // the whole insert.
+    const byCode = netPositionEffects(rows);
+    for (const [code, effect] of byCode) {
+      const catalogueErr = await ensureSecurityExists(supabase, code, effect.name ?? undefined);
+      if (catalogueErr) return { ok: false, error: catalogueErr };
+    }
+
+    const payload = rows.map((r) => {
+      const money = tradeMoney({
+        securityCode: r.securityCode,
+        side: r.side,
+        tradeDate: r.tradeDate,
+        units: r.units,
+        avgPrice: r.avgPrice,
+        consideration: r.consideration,
+      });
+
+      return {
+        cnote:
+          r.cnote ||
+          `PRIVATE-${r.tradeDate.replace(/-/g, "")}-${Math.random().toString(16).slice(2, 6).toUpperCase()}`,
+        account_id: accountId,
+        client_id: clientId,
+        raw_security: r.securityCode,
+        security_code: r.securityCode,
+        parent_code: getParentTicker(r.securityCode),
+        instrument: isOptionCode(r.securityCode) ? "OPTION" : "FPO",
+        side: r.side,
+        trade_date: r.tradeDate,
+        units: r.units,
+        avg_price: r.avgPrice,
+        consideration: money.consideration,
+        brokerage: money.brokerage,
+        other_charges: money.otherCharges,
+        gst: money.gst,
+        value: money.value,
+        status: "SETTLED",
+        is_private: true,
+        source_file: `Private import by ${actor}`,
+      };
+    });
+
+    /**
+     * `ignoreDuplicates` rather than a merge, and `.select()` to learn what
+     * landed.
+     *
+     * The ledger is keyed on (cnote, raw_security, side). Re-uploading a file
+     * the desk already imported must be a no-op, not a second copy of every
+     * parcel — and overwriting instead would silently rewrite figures a person
+     * may have corrected by hand since. Skipped rows are counted and said out
+     * loud, because "40 rows, 12 imported" is the one number that tells the
+     * desk the file had already been through.
+     */
+    const { data: inserted, error } = await supabase
+      .from("trades")
+      .upsert(payload, { onConflict: "cnote,raw_security,side", ignoreDuplicates: true })
+      .select("raw_security, side, units, avg_price, trade_date");
+
+    if (error) return { ok: false, error: error.message };
+
+    const landed = inserted ?? [];
+    const skipped = rows.length - landed.length;
+    if (skipped > 0) {
+      notes.push(
+        `${skipped} row${skipped === 1 ? "" : "s"} already in the ledger under the same reference — not imported again.`,
+      );
+    }
+
+    if (landed.length === 0) {
+      return {
+        ok: true,
+        data: { imported: 0, skipped, codes: [], notes },
+      };
+    }
+
+    /**
+     * Positions are moved by what ACTUALLY landed, never by what was offered.
+     *
+     * A holding advanced by a duplicate row the ledger refused would be a
+     * quantity backed by no transaction — and it would compound on every
+     * re-upload of the same file, which is precisely the mistake the ledger's
+     * own idempotency exists to prevent.
+     */
+    const landedRows: PrivateTxnRow[] = landed.map((t) => ({
+      securityCode: String(t.raw_security),
+      securityName: null,
+      side: t.side as "BUY" | "SELL",
+      tradeDate: String(t.trade_date),
+      units: Number(t.units) || 0,
+      avgPrice: Number(t.avg_price) || 0,
+      consideration: null,
+      cnote: null,
+    }));
+
+    const effects = netPositionEffects(landedRows);
+    for (const [code, effect] of effects) {
+      const posErr = await applyPrivateBatchToPosition(
+        supabase,
+        accountId,
+        clientId,
+        code,
+        effect,
+      );
+      if (posErr) notes.push(posErr);
+    }
+
+    await supabase.from("audit_log").insert({
+      actor,
+      role,
+      action: "Imported private transactions",
+      detail: `Imported ${landed.length} private transaction${landed.length === 1 ? "" : "s"} across ${effects.size} code${effects.size === 1 ? "" : "s"} onto account ${accountId}${skipped > 0 ? ` (${skipped} duplicate rows skipped)` : ""}`,
+      client_id: clientId,
+    });
+
+    // Once, at the end. See this function's header.
+    await recomputeClient(clientId, { trigger: "manual" });
+    revalidatePath("/portal", "layout");
+
+    return {
+      ok: true,
+      data: { imported: landed.length, skipped, codes: [...effects.keys()], notes },
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to import the transactions.",
+    };
+  }
+}
+
+/**
+ * Apply one code's netted effect to its private position.
+ *
+ * Returns a note rather than throwing: by the time this runs the ledger rows
+ * are written, and unwinding them to report a position failure would discard
+ * good data to tidy up a worse problem. The trades are the source of truth; a
+ * position that did not move is visible and fixable, and the note says so.
+ */
+async function applyPrivateBatchToPosition(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  accountId: string,
+  clientId: string,
+  code: string,
+  effect: { deltaUnits: number; buyUnits: number; buyCost: number },
+): Promise<string | null> {
+  const { data: existing, error: readErr } = await supabase
+    .from("positions")
+    .select("qty, avg_cost, is_private")
+    .eq("account_id", accountId)
+    .eq("security_code", code)
+    .maybeSingle();
+  if (readErr) return `${code}: could not read the existing holding (${readErr.message}).`;
+
+  const prevQty = Number(existing?.qty) || 0;
+  const prevCost = Number(existing?.avg_cost) || 0;
+  const nextQty = Math.max(0, prevQty + effect.deltaUnits);
+
+  // The whole file's buys enter the average together, which is what makes the
+  // result independent of the order the rows happen to sit in.
+  const nextCost =
+    effect.buyUnits > 0 && nextQty > 0
+      ? (prevQty * prevCost + effect.buyCost) / (prevQty + effect.buyUnits)
+      : prevCost;
+
+  const claimsPrivate = !existing || existing.is_private === true ? { is_private: true } : {};
+
+  const { error: writeErr } = await supabase.from("positions").upsert(
+    {
+      account_id: accountId,
+      client_id: clientId,
+      security_code: code,
+      qty: nextQty,
+      avg_cost: Math.round(nextCost * 1e6) / 1e6,
+      ...claimsPrivate,
+    },
+    { onConflict: "account_id,security_code" },
+  );
+  if (writeErr) return `${code}: the transactions were saved but the holding was not.`;
+
+  return null;
 }
