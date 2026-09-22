@@ -347,6 +347,28 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
 ```
 
+#### Desk alerts on account requests (optional — reuses the Microsoft app registration)
+
+When a client registers and claims their first broker account, adds another account to an existing login, or asks for two accounts to be merged, the request lands on **Staff → Merge requests** — a page somebody has to think to open. Set these and the desk is emailed instead:
+
+```bash
+STAFF_NOTIFY_TO=desk@vitti.capital,ops@vitti.capital   # comma or semicolon separated
+STAFF_NOTIFY_FROM=noreply@vitti.capital                 # optional; defaults to BROKER_MAILBOX
+APP_URL=https://portal.vitti.capital                    # optional; adds a link straight to the request
+```
+
+**No email provider is needed.** The mail goes out through the Microsoft Graph app registration this app already uses to read the broker mailbox (`MICROSOFT_TENANT_ID` / `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET`), from a mailbox in your own tenant — so there is no second API key, no new sending domain, and no DNS work.
+
+**One thing must be granted in Azure**, because reading mail and sending it are different permissions:
+
+> Azure Portal → App registrations → *(this app)* → API permissions → Add a permission → Microsoft Graph → **Application permissions** → **`Mail.Send`** → Add → then **Grant admin consent**.
+
+Until that is granted, every send fails with `403` and the reason is written to the server log naming this permission. Nothing else breaks: the request itself is already saved before the mail is attempted.
+
+**Leave `STAFF_NOTIFY_TO` unset and the feature is simply off** — no mail, no errors, exactly the behaviour before it existed.
+
+**A failed send never reaches the client.** The request is committed first and the mail is sent from `after()`, so a mailbox that is down cannot make a client's account request appear to fail, and nobody waits on a Graph round trip.
+
 #### Weekly position commentary (optional — Claude API)
 Each week after the Friday close, a short note is written against every security a client holds — what has been weighing on it, or where it stands if the holder is ahead. Without a key the feature is simply off: the job reports `not-configured` and returns success, and the portal renders exactly as before with no note on the holding.
 ```bash

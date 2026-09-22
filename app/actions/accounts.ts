@@ -8,6 +8,13 @@ import {
   normaliseAccountNumber,
   accountNumberProblem,
 } from "@/lib/accounts/account-number";
+import { after } from "next/server";
+import {
+  accountClaimMail,
+  accountMergeMail,
+  sendStaffMail,
+  staffMailConfig,
+} from "@/lib/notify/staff-mail";
 
 /**
  * Account lifecycle actions (Stage 10):
@@ -18,6 +25,36 @@ import {
  *  - requestAccountClaim  — a client says an EXISTING account number is theirs.
  *  - decideAccountClaim   — STAFF verify; approval re-parents that account.
  */
+
+/**
+ * Who the desk is being told about, for an alert mail.
+ *
+ * Read here rather than taken from `getActor()` because that returns the actor
+ * STRING — which, once a client can have several logins, is deliberately the
+ * signed-in address rather than the client's name (see lib/session.ts). The
+ * desk wants both: whose portfolio this is, and who asked.
+ *
+ * Returns nulls rather than throwing. This runs after the request is already
+ * committed, and a mail with a missing name is worth more than no mail.
+ */
+async function notifySubject(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  clientId: string,
+): Promise<{ clientName: string; clientEmail: string | null; accountCount: number }> {
+  const [{ data: client }, { count }] = await Promise.all([
+    supabase.from("clients").select("display_name, email").eq("id", clientId).maybeSingle(),
+    supabase
+      .from("accounts")
+      .select("id", { count: "exact", head: true })
+      .eq("client_id", clientId),
+  ]);
+
+  return {
+    clientName: client?.display_name || "A client",
+    clientEmail: client?.email ?? null,
+    accountCount: count ?? 0,
+  };
+}
 
 /** Client opens a new (empty) account. s708 stays null = verification pending. */
 export async function createAccount(label: string, accountType: string) {
@@ -104,6 +141,24 @@ export async function requestAccountMerge(
     detail: `${source.label} → ${target.label}`,
     client_id: clientId,
   });
+
+  // Same arrangement as the claim above: committed first, told afterwards.
+  const mergeMailCfg = staffMailConfig();
+  if (mergeMailCfg.ok) {
+    const subject = await notifySubject(supabase, clientId);
+    after(async () => {
+      await sendStaffMail(
+        accountMergeMail({
+          appUrl: mergeMailCfg.config.appUrl,
+          clientName: subject.clientName,
+          clientEmail: subject.clientEmail,
+          sourceLabel: source.label,
+          targetLabel: target.label,
+          note: note?.trim() || null,
+        }),
+      );
+    });
+  }
 
   revalidatePath("/portal", "layout");
 }
@@ -438,6 +493,34 @@ export async function requestAccountClaim(accountNumber: string, note?: string) 
     detail: `Account number ${normalised}`,
     client_id: clientId,
   });
+
+  /**
+   * Tell the desk, AFTER the response.
+   *
+   * The request is committed above; this is a nudge so somebody knows to look.
+   * Run inside `after()` so the client is never waiting on a Graph round trip,
+   * and never sees an account request fail because a mailbox did — and gated
+   * before the reads, so an unconfigured deployment does not pay for two
+   * queries per request to build a mail it will not send.
+   */
+  const claimMailCfg = staffMailConfig();
+  if (claimMailCfg.ok) {
+    const subject = await notifySubject(supabase, clientId);
+    after(async () => {
+      await sendStaffMail(
+        accountClaimMail({
+          appUrl: claimMailCfg.config.appUrl,
+          clientName: subject.clientName,
+          clientEmail: subject.clientEmail,
+          accountNumber: normalised,
+          note: note?.trim() || null,
+          // No accounts yet means the portal is still a locked screen for them,
+          // which is a different urgency and says so in the subject line.
+          isFirstAccount: subject.accountCount === 0,
+        }),
+      );
+    });
+  }
 
   revalidatePath("/portal", "layout");
 }

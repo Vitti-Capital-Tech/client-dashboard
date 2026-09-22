@@ -175,6 +175,14 @@ The broker mails the same two exports every weekday around 9am AEST. A cron rout
 - **And it is read where the desk already looks.** Written-down is not the same as seen: for a while the only way to ask "did this morning land?" was a SQL console, which is the wrong place for an operational answer when the pipeline's worst failure is a *silent* one — a run killed at the host's ceiling writes no row at all, so the evidence is an **absence**. The runs are therefore merged into the audit log's chronology rather than given a page of their own, so a missing morning shows up as a gap in a list the desk reads anyway, and the accounts a run left owed surface as a `Recompute pending` pill on the client profile — the one place a stale figure would otherwise be mistaken for a settled one.
 - **Safe to repeat, which is the DST answer.** Cron is UTC and Sydney is UTC+10/+11, so the schedule is a net rather than a time: each job fires on all three UTC hours that could be the wanted Sydney hour (22:15 / 23:15 / 00:15) and a `WHERE` on `now() AT TIME ZONE 'Australia/Sydney'` lets exactly one through — 9:15am Sydney for the ingest, 10:15am for its retry, in either offset and on the changeover day itself. Attachment dedupe on Graph's own ids, content-hash dedupe on the bytes, and idempotent importers make a redundant run almost free — and the second entry doubles as the retry for whatever the first run left queued. See LLD §8.19.
 
+### 3.1f-3 Mail OUT: the desk is told a client is waiting (`lib/notify/staff-mail.ts`)
+
+The same Microsoft app registration that reads the broker mailbox also **sends**, which is what turns three silent queues into alerts. A client registering and claiming their first account, an existing client adding another, and a merge between two of a client's own all raise a request that previously sat on `/portal/staff/merge-requests` until somebody thought to look — and the client saw a locked screen for exactly that long.
+
+Reusing Graph rather than adding an email provider costs nothing to run and nothing to set up: no second API key, no new sending domain, no SPF/DKIM work, and the mail leaves a mailbox the tenant already owns. It needs one permission granted once (`Mail.Send`, application, admin-consented); because the token is requested with the `.default` scope, an ungranted tenant fails at the send with a `403` that the log translates by name.
+
+The mail is a nudge and the audit log is the record, so it is sent from `after()` and can never fail or delay the client's request — and the whole feature is off unless `STAFF_NOTIFY_TO` is set. See LLD §8.57.
+
 ### 3.1f-2 Deal mail → the placements book (`placement_candidates`, `/api/ingest/placements`)
 
 Placement and IPO announcements are processed by a **separate system** — `Placement_Email` summarises them into SQLite, `placement_api.py` serves them from EC2, and the ASX_Dashboard app views them. This is how those deals reach the desk's book.

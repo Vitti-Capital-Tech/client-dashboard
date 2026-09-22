@@ -2446,3 +2446,46 @@ The file's **Account** column is ignored. The desk opens this from one client's 
 #### Not built
 
 **Editing a private line once entered.** Correcting one means the existing trade tools on the mismatches desk. There is also no bulk *valuation* update — an unlisted asset's `manual_price` is set per holding through the manual form.
+
+### 8.57 The approval nobody knew was waiting (`lib/notify/staff-mail.ts`, `after()`)
+
+A client registers, reaches step 3, claims their broker account — and then sees a locked screen saying the desk will approve it. The request goes into `account_claim_requests` and appears on `/portal/staff/merge-requests`. Nothing tells anyone. **The wait was as long as it took a staff member to wonder whether anything was queued**, and for a client whose entire first experience of the portal is that locked screen, the wait *is* the product.
+
+Three paths raise one, and all three are now emailed: sign-up's first account and an existing client adding another both go through `requestAccountClaim`, and `requestAccountMerge` covers a merge between two of a client's own.
+
+#### No email provider was needed, and that is the point
+
+The obvious build is Resend or SendGrid: a new dependency, an API key, a sending domain, SPF/DKIM records, and a warm-up period before anything lands in an inbox rather than a spam folder.
+
+None of that was necessary. The app **already** holds a Microsoft app registration and already uses it to *read* the broker mailbox every morning (§3.1f). `getMicrosoftAccessToken` returns a client-credentials token against `https://graph.microsoft.com/.default`, and the same token sends mail through `POST /users/{mailbox}/sendMail`. The mail leaves a vitti.capital mailbox that exists, is owned, and already passes its own SPF/DKIM.
+
+What it does need is one permission that reading did not: **`Mail.Send` as an APPLICATION permission**, with admin consent, on that same registration. Because the scope is `.default`, nothing in the code requests it — the token simply carries whatever Azure has consented to, so an ungranted tenant fails at the send with `403` rather than at the token. That specific status is therefore translated in the log to the permission it almost certainly means, instead of being printed as a number.
+
+`STAFF_NOTIFY_FROM` falls back to `BROKER_MAILBOX` deliberately: it is a mailbox the tenant demonstrably owns and the app already reaches, which is one fewer thing to configure wrongly.
+
+#### Sent after the response, and never able to fail the request
+
+The request is written, audited and committed before any of this runs. The mail is a **nudge**, not a record — the audit log is the record. So:
+
+- every entry point returns a result rather than throwing, and
+- the callers invoke it inside `after()`.
+
+A mailbox that is down, an expired token, a permission nobody has granted yet — none of those may tell a client their account request failed, and none of them may make the client wait on a Graph round trip for something that is purely for the desk's benefit.
+
+The config gate is checked **before** the two lookups that build the mail, so an unconfigured deployment does not pay for two queries per account request to assemble a message it will not send.
+
+#### Off unless configured, which is the same shape as the commentary
+
+No `STAFF_NOTIFY_TO`, no mail — exactly as the weekly commentary is gated on `ANTHROPIC_API_KEY` (§8.36). A deployment that has not set it gets the behaviour it had before this file existed, rather than an error on every account request. `staffMailConfig()` returns a *reason* rather than a bare false, so "why did no mail arrive" is answerable without reading the code.
+
+#### Two things the message itself has to get right
+
+**A client's own text is escaped before it reaches a staff mailbox.** The display name and the free-text note are both chosen by the client and both are interpolated into HTML. The desk opening an account request is precisely the audience worth not handing crafted markup to. Pinned by a test that puts a `<script>` tag in the name and an `onerror` image in the note.
+
+**The subject line distinguishes the two urgencies.** A client with no accounts yet *cannot open the portal at all* until this is approved; a client adding a second account is already using it. Those want different response times, so the first reads *"New client waiting for approval"* and the second *"Account request"* — decided from an account count, not from which page raised it, because both paths call the same action.
+
+A row with no value is dropped rather than printed blank, and the deep link appears only when the deployment knows its own address (`APP_URL`); with none it names the page instead of inventing a URL.
+
+#### Why the token helper is imported on demand
+
+`lib/remote-sheets.ts` opens with `import "server-only"`, which throws the moment the module is loaded outside a Server Component — `node --test` included. Imported at the top, it would have taken the pure half of this file down with it: the config gate and the two message builders, which are exactly the half worth testing. It is pulled in inside the send instead, the same arrangement and the same reason as `lib/ingest/morning.ts` and `lib/commentary/run.ts` (§8.19).
