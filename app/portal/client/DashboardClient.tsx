@@ -21,6 +21,7 @@ import type {
   SignalRow,
 } from "@/lib/data/queries";
 import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
+import type { NetPnl } from "@/lib/pnl/net-pnl";
 import {
   posValue,
   posCost,
@@ -56,6 +57,10 @@ function greetingFor(hour: number): string {
   return "Good evening";
 }
 
+/** `+$1,234` / `-$1,234` — whole dollars, sign always shown. */
+const signedMoney = (n: number) =>
+  `${n >= 0 ? "+" : "-"}$${Math.round(Math.abs(n)).toLocaleString("en-AU")}`;
+
 export function DashboardClient({
   clientId,
   clientName,
@@ -67,6 +72,7 @@ export function DashboardClient({
   alerts,
   signals,
   portfolio,
+  netPnl,
   filings,
   sectorByTicker,
   unlisted,
@@ -82,6 +88,11 @@ export function DashboardClient({
   signals: Record<string, SignalRow>;
   /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
   portfolio: ClientPortfolio;
+  /**
+   * Realised + unrealised across all accounts, built on the server through
+   * lib/pnl/net-pnl.ts — the same figure as the Portfolio page on All accounts.
+   */
+  netPnl: NetPnl;
   /** Today's price-sensitive ASX filings, already narrowed to this book. */
   filings: AsxAnnouncement[];
   /** Ticker → sector, derivatives already rolled up. For the sector split. */
@@ -105,13 +116,12 @@ export function DashboardClient({
   // the desk opened this screen; not harmless at all once a client could sign in
   // and read them as fact.
   //
-  // What replaces them is the figure that is real and reproducible: the stored
-  // P&L, the same one the adviser sees. A true month- or year-to-date needs the
-  // per-sale dates the staff chart replays, which is a feature rather than a
-  // subtitle.
+  // What replaces them is the figure that is real and reproducible: Net P&L,
+  // realised plus unrealised, built from the same pieces the Portfolio page's
+  // tabs show (lib/pnl/net-pnl.ts, LLD §8.58). A true month- or year-to-date
+  // needs the per-sale dates the staff chart replays, which is a feature rather
+  // than a subtitle.
   const deskCost = portfolio.total.buyPrice;
-  const deskPnl = portfolio.total.pnl;
-  const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
 
   const liveDeal = placements.find(p => p.stage === "open");
   const myBid = liveDeal ? liveDeal.bids.find(b => b.clientId === clientId) : null;
@@ -342,12 +352,25 @@ export function DashboardClient({
           <div className="text-xs text-mut mt-1">invested, all accounts</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
-          <div className={`font-disp font-medium text-xl sm:text-2xl mt-1 tabular-nums ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {deskPnl >= 0 ? "+" : ""}${Math.round(deskPnl).toLocaleString("en-AU")}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Net P&amp;L</div>
+          <div className={`font-disp font-medium text-xl sm:text-2xl mt-1 tabular-nums ${netPnl.net >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {signedMoney(netPnl.net)}
           </div>
-          <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {deskPnl >= 0 ? "+" : ""}{deskPnlPct.toFixed(1)}% &middot; realised + open
+          {/* The two halves, named as the Portfolio page's tabs name them, so the
+              total can be traced to where each part is itemised. */}
+          <div className="mt-1.5 space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between gap-2">
+              <span className="text-mut">Realised</span>
+              <span className={netPnl.realised >= 0 ? "text-gain" : "text-loss-d"}>
+                {signedMoney(netPnl.realised)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-mut">Holdings</span>
+              <span className={netPnl.holdings >= 0 ? "text-gain" : "text-loss-d"}>
+                {signedMoney(netPnl.holdings)}
+              </span>
+            </div>
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">

@@ -54,6 +54,7 @@ import { RealizedPnlChart } from "@/app/components/RealizedPnlChart";
 import { TablePagination } from "@/app/components/TablePagination";
 import { RealisedRangePicker } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
+import { allTimeRealised, holdingsTotals, unlistedGrantHoldings } from "@/lib/pnl/net-pnl";
 import { TransactionsTable } from "./TransactionsTable";
 import { priceText } from "@/lib/ui/price";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
@@ -336,6 +337,19 @@ export function PositionsClient({
   );
 
   /**
+   * Realised P&L over ALL TIME, whatever range the Historical tab is showing.
+   *
+   * The Net P&L card must not move when the client narrows the Historical
+   * picker to last month — that picker answers "what did I make in this
+   * period", and the card answers "what have I made, in total". Same replay,
+   * same corrections, same figure the Historical tab reads on All time.
+   */
+  const allTimeRealized = useMemo(
+    () => allTimeRealised(sells, deltaByTicker),
+    [sells, deltaByTicker],
+  );
+
+  /**
    * Changing the period changes WHICH TABLE is on screen — all-time parcels, or
    * the sales inside a window — so the filter and the page number go back to
    * the start with it. A `Matched` pill carried into a realised view would
@@ -363,12 +377,10 @@ export function PositionsClient({
   // NOT come from here — see below.
   const scopedTv = visiblePositions.reduce((sum, p) => sum + posValue(p), 0);
 
-  // The desk's stored figures, at the selected scope. Cost base and P&L come
-  // from here rather than from `scopedTv` above, so this page and the adviser's
-  // screen cannot report different returns on the same holdings.
+  // The desk's stored cost base, at the selected scope — what was invested, the
+  // same figure the adviser's screen shows. The P&L beside it is NOT the stored
+  // one any more; see `netPnl` for why.
   const deskCost = scoped.total.buyPrice;
-  const deskPnl = scoped.total.pnl;
-  const deskPnlPct = deskCost > 0 ? (deskPnl / deskCost) * 100 : 0;
 
   // ── The Historical P&L tab's own derivations ───────────────────────────────
   //
@@ -680,20 +692,7 @@ export function PositionsClient({
    * derived rather than read. It is a modelled price, not a market one — nothing
    * quotes these — which is why the row says so on its face.
    */
-  const unlistedHoldings = useMemo(
-    () =>
-      allOptionRows
-        .filter((o) => isRowUnlistedOption(o.row))
-        .map((o) => ({
-          code: o.row.ticker,
-          name: o.row.name,
-          qty: o.qty,
-          value: o.row.sellOrCurrent,
-          cost: o.row.buyPrice,
-          pnl: o.row.pnl,
-        })),
-    [allOptionRows],
-  );
+  const unlistedHoldings = useMemo(() => unlistedGrantHoldings(allOptionRows), [allOptionRows]);
 
   /** What the unlisted grants in scope are carried at, all in. */
   const unlistedScopedValue = unlistedHoldings.reduce((s, o) => s + o.value, 0);
@@ -715,15 +714,10 @@ export function PositionsClient({
    * Quantities are deliberately not totalled: units of different companies are
    * not the same thing.
    */
-  const holdingsTotal = useMemo(() => {
-    const value =
-      visiblePositions.reduce((s, p) => s + posValue(p), 0) +
-      unlistedHoldings.reduce((s, o) => s + o.value, 0);
-    const cost =
-      visiblePositions.reduce((s, p) => s + posCost(p), 0) +
-      unlistedHoldings.reduce((s, o) => s + o.cost, 0);
-    return { value, cost, pnl: value - cost };
-  }, [visiblePositions, unlistedHoldings]);
+  const holdingsTotal = useMemo(
+    () => holdingsTotals(visiblePositions, unlistedHoldings),
+    [visiblePositions, unlistedHoldings],
+  );
 
   /**
    * One row per holding, listed and unlisted together.
@@ -1513,6 +1507,30 @@ export function PositionsClient({
   };
 
 
+  /**
+   * Net P&L — the two tabs' own figures, added. Home shows the same figure
+   * through `netPnlFigures`; both are built from lib/pnl/net-pnl.ts, so the two
+   * screens cannot compose it differently.
+   *
+   *   realised  the Historical P&L tab on All time: money that has changed hands
+   *   holdings  the Holdings tab's footer: today's value against cost, on what is
+   *             still held, listed and unlisted
+   *
+   * ── Why these two and not the stored grand total ────────────────────────────
+   * This card used to show the desk's stored total, labelled "realised + open".
+   * It is valued as at the last recompute, while the Holdings tab values at last
+   * price and the Historical tab replays the ledger — so a client adding up the
+   * two tabs got a third number, on a card that said it was their sum. A total
+   * the reader cannot reconstruct from the page it sits on is not a total they
+   * can trust. So the card now IS the sum of the two figures on this page, and
+   * says which is which, so the check takes one glance.
+   *
+   * The cost it gives up: this can differ from the adviser's stored figure by
+   * however far prices have moved since the last recompute. That is the honest
+   * direction to differ in — it is today's number.
+   */
+  const netPnl = allTimeRealized + holdingsTotal.pnl;
+
   const selectedStock = positions.find(pos => pos.code === selectedHolding);
   const advice = selectedHolding ? signals[selectedHolding] : null;
 
@@ -1576,13 +1594,18 @@ export function PositionsClient({
 
       {/* KPI Cards Grid
 
-          The first three are the desk's own Grand Total and are the SAME
-          question — cost, what it came to, the difference. They were briefly
-          shown beside "Market value", which is a different question entirely
-          (current holdings of ONE account at last price), and the pair read as a
-          catastrophe: $3,289 next to a $9.9M lifetime cost base. Comparable
-          figures sit together; the account's current value is labelled as what
-          it is and put last. */}
+          Cost base and Proceeds & value are the desk's stored Grand Total —
+          what was invested and what it came to. Net P&L is NOT their
+          difference: it is the two tabs' own figures added (realised on All
+          time, plus the Holdings footer at last price), so it can differ from
+          Proceeds − Cost by however far prices have moved since the last
+          recompute. See `netPnl`.
+
+          They were once shown beside "Market value", which is a different
+          question entirely (current holdings of ONE account at last price), and
+          the pair read as a catastrophe: $3,289 next to a $9.9M lifetime cost
+          base. The account's current value is labelled as what it is and put
+          last. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
           <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Cost base</div>
@@ -1595,12 +1618,25 @@ export function PositionsClient({
           <div className="text-xs text-mut mt-1">sold, plus what is still held</div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">
-          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Profit &amp; loss</div>
-          <div className={`font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {deskPnl >= 0 ? "+" : ""}{money0(deskPnl)}
+          <div className="text-[11px] tracking-wider uppercase text-mut font-semibold">Net P&amp;L</div>
+          <div className={`font-disp font-medium text-lg sm:text-2xl tabular-nums mt-1 ${netPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
+            {netPnl >= 0 ? "+" : "-"}{money0(Math.abs(netPnl))}
           </div>
-          <div className={`text-xs mt-1 font-mono ${deskPnl >= 0 ? "text-gain" : "text-loss-d"}`}>
-            {deskPnl >= 0 ? "+" : ""}{deskPnlPct.toFixed(1)}% &middot; realised + open
+          {/* The two halves, named after the tabs they come from, so the total
+              can be checked against this page rather than taken on trust. */}
+          <div className="mt-1.5 space-y-0.5 text-xs font-mono">
+            <div className="flex justify-between gap-2">
+              <span className="text-mut">Realised</span>
+              <span className={allTimeRealized >= 0 ? "text-gain" : "text-loss-d"}>
+                {allTimeRealized >= 0 ? "+" : "-"}{money0(Math.abs(allTimeRealized))}
+              </span>
+            </div>
+            <div className="flex justify-between gap-2">
+              <span className="text-mut">Holdings</span>
+              <span className={holdingsTotal.pnl >= 0 ? "text-gain" : "text-loss-d"}>
+                {holdingsTotal.pnl >= 0 ? "+" : "-"}{money0(Math.abs(holdingsTotal.pnl))}
+              </span>
+            </div>
           </div>
         </div>
         <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow">

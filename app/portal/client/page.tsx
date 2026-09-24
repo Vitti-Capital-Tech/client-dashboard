@@ -1,7 +1,9 @@
 import { getActiveClientId, getActiveAccountId } from "@/lib/session";
 import { getClientStoredPnl } from "@/lib/data/pnl";
 import { getClientPnlOverrides } from "@/lib/data/holdings";
-import { clientPortfolio } from "@/lib/pnl/client-portfolio";
+import { clientPortfolio, clientSummary } from "@/lib/pnl/client-portfolio";
+import { offLedgerBuyLines } from "@/lib/pnl/off-ledger-buys";
+import { netPnlFigures } from "@/lib/pnl/net-pnl";
 import {
   getClient,
   getAccount,
@@ -11,6 +13,8 @@ import {
   getPlacements,
   getAlerts,
   getSignals,
+  getClientPositions,
+  getClientTrades,
   type SignalRow,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
@@ -49,16 +53,39 @@ export default async function ClientDashboardPage() {
     getAsxMarketSensitive(),
   ]);
 
-  // The desk's own stored figures, so the headline numbers here, on the
-  // portfolio page and on the adviser's screen are one number rather than three
-  // computed three ways. See lib/pnl/client-portfolio.ts.
-  const [storedPnl, overrides] = await Promise.all([
+  // The desk's own stored figures — the cost base, the P&L lines and the
+  // unlisted grants all come from here. See lib/pnl/client-portfolio.ts.
+  //
+  // The client's whole ledger and book ride along for ONE number, Net P&L,
+  // which is computed here rather than in the browser so the page does not
+  // ship every trade the client ever made to render a single figure.
+  const [storedPnl, overrides, clientTrades, clientPositions] = await Promise.all([
     clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
     clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
+    clientId ? getClientTrades(clientId) : Promise.resolve([]),
+    clientId ? getClientPositions(clientId) : Promise.resolve([]),
   ]);
 
   const cash = account?.cash ?? 0;
   const portfolio = clientPortfolio(storedPnl, overrides);
+
+  /**
+   * Net P&L across ALL the client's accounts — the same figure the Portfolio
+   * page shows on "All accounts", through the same module (lib/pnl/net-pnl.ts),
+   * so Home and Portfolio cannot disagree about what the client has made.
+   *
+   * Whole-book on purpose, like the cost base beside it: `positions` above is
+   * the ACTIVE account only, and realised over the whole ledger added to
+   * holdings over one account would describe nothing.
+   */
+  const summary = clientSummary(storedPnl, overrides);
+  const netPnl = netPnlFigures({
+    trades: clientTrades,
+    offLedger: offLedgerBuyLines(storedPnl, clientTrades),
+    overrideDeltas: summary.overrideDeltas,
+    positions: clientPositions,
+    summaryRows: summary.rows,
+  });
 
   /**
    * Ticker → sector, for the sector chart that now lives on this page.
@@ -114,6 +141,7 @@ export default async function ClientDashboardPage() {
       unlisted={unlisted}
       filings={asxFeed.items.filter((a) => positions.some((p) => p.parent === a.code || p.code === a.code))}
       portfolio={portfolio}
+      netPnl={netPnl}
     />
   );
 }

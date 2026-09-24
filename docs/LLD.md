@@ -2489,3 +2489,43 @@ A row with no value is dropped rather than printed blank, and the deep link appe
 #### Why the token helper is imported on demand
 
 `lib/remote-sheets.ts` opens with `import "server-only"`, which throws the moment the module is loaded outside a Server Component — `node --test` included. Imported at the top, it would have taken the pure half of this file down with it: the config gate and the two message builders, which are exactly the half worth testing. It is pulled in inside the send instead, the same arrangement and the same reason as `lib/ingest/morning.ts` and `lib/commentary/run.ts` (§8.19).
+
+### 8.58 A total the client can reconstruct (`netPnl`, `allTimeRealized`, `PositionsClient.tsx`)
+
+The Portfolio page carried a **Profit & loss** card subtitled `realised + open`, and read it from the desk's stored grand total (`scoped.total.pnl`). The two tabs beneath it computed their own halves differently:
+
+| Figure | Source | Valued as at |
+|---|---|---|
+| Holdings tab footer (unrealised) | `positions` at last price, plus unlisted grants | now |
+| Historical P&L tab (realised) | `attributeSells` replay of the ledger + off-ledger buys, with desk corrections | the sale dates |
+| The old card | `pnl_summary` grand total | the last recompute |
+
+So a client who added the two tabs got a third number, on a card that said it was their sum. **A total the reader cannot reconstruct from the page it sits on is not a total they can trust**, and "realised + open" was an explicit claim that it could be.
+
+#### What the card is now
+
+**Net P&L = all-time realised + the Holdings footer.** Exactly the two figures the client can see on the two tabs, and the card prints both beneath the total — *Realised* and *Holdings*, named after the tabs they come from — so the check is one glance rather than an act of faith.
+
+- **Realised is always All time**, via `allTimeRealized`: the same `realizedBetween` replay the Historical tab runs, over `defaultRange` (first sale to last), with the same override deltas. It is kept separate from `window_` on purpose — the Historical picker answers *what did I make in this period*, and narrowing it to last month must not move a card that answers *what have I made in total*.
+- **Holdings is `holdingsTotal.pnl`**, the footer the Holdings tab already shows: listed positions at last price plus unlisted option grants at their modelled value.
+- Both follow the account filter, like every other figure on the page.
+
+It **replaced** the old card rather than joining it. Two "total P&L" figures on one screen that disagree is worse than either alone — the client cannot tell which is right, and neither can the adviser they ring about it.
+
+#### What it gives up
+
+The stored figure was chosen originally so this page and the adviser's screen could not report different returns (§8.33). The Net P&L card can now differ from the adviser's stored total by however far prices have moved since the last recompute. That is the honest direction to differ in: it is today's number, and every input to it is on the page.
+
+The same trade-off means **Net P&L is no longer Proceeds & value − Cost base**, since those two cards remain the stored Grand Total. The KPI grid's comment says so, so the next reader does not "fix" one to match the other.
+
+#### Home shows the same figure, from the same module
+
+Home's card is Net P&L too, across **all** the client's accounts — the same scope as the *Cost base* card beside it, and the same figure the Portfolio page shows on *All accounts*.
+
+Both screens compute it from `lib/pnl/net-pnl.ts`, and that module is the point. The Portfolio page computes in the browser, because its account filter re-scopes every figure; Home computes on the server in `page.tsx`, so the page does not ship the client's entire ledger to render one number. Left to compose the pieces each its own way, the two would drift, and the client would see two totals on two screens — the failure this card was introduced to end. So:
+
+- `allTimeRealised`, `unlistedGrantHoldings` and `holdingsTotals` are the pieces; the Portfolio page uses them for its tabs and adds them itself.
+- `netPnlFigures` is the one-call path Home uses, built from exactly those pieces.
+- `net-pnl.test.ts` asserts the one call equals the composed pieces, on inputs with a desk correction and an unlisted grant in them.
+
+Home had to fetch two things it did not before — `getClientTrades` and `getClientPositions` for the whole book — because its existing `positions` are the **active account's** only. Realised over the whole ledger added to holdings over one account would be a number describing nothing.

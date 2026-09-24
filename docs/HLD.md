@@ -341,6 +341,8 @@ There is now one module that answers it, and it answers on Sydney's clock:
 
 Clients were reading the **Unrealised P&L** column as a pending action and asking the desk to realise it. The column is now **Open P&L**, which pairs with the `realised + open` wording the headline figure already used; staff screens keep the industry term.
 
+**The Portfolio page's headline is now Net P&L, built from the page itself.** It is the Historical tab's all-time realised figure plus the Holdings tab's footer, with both halves printed beneath the total — replacing a stored-total card whose `realised + open` label claimed a sum the client could not reconstruct from the two tabs. It follows live prices, so it can differ from the adviser's stored figure by the move since the last recompute. Home shows the same Net P&L across all accounts, computed on the server through the same module (`lib/pnl/net-pnl.ts`) so the two screens cannot disagree. See LLD §8.58.
+
 Renaming one column does not fix the category — strike, spot, moneyness, scaleback, s708 and T+2 are all on client screens — so the definitions became a module:
 
 - **One source.** Definitions had been living as `title=` strings on individual `<th>` elements. In a financial product a wrong definition is a compliance problem, so there is exactly one place to correct one.
