@@ -2529,3 +2529,15 @@ Both screens compute it from `lib/pnl/net-pnl.ts`, and that module is the point.
 - `net-pnl.test.ts` asserts the one call equals the composed pieces, on inputs with a desk correction and an unlisted grant in them.
 
 Home had to fetch two things it did not before — `getClientTrades` and `getClientPositions` for the whole book — because its existing `positions` are the **active account's** only. Realised over the whole ledger added to holdings over one account would be a number describing nothing.
+
+### 8.59 The staff-provisioning fix that tested itself (`…_staff_provisioning_marker.sql`)
+
+New `@vitti.capital` addresses could not sign in from 5 Sep 2026: asking for a code returned *"We do not have an account for that address yet"*, because `provisionStaffAccount` was refused by `block_self_registered_staff` and no `auth.users` row existed to send to. Migration `20260918100000` "fixed" it, was applied, printed `[selftest] PASSED` — and staff still could not sign in.
+
+**The auth log settled it.** Provisioning `garg.d@vitti.capital` returned the usual empty 500; the auth log for that request carried the real error, and its wording (*"cannot be registered"*, not *"self-registered"*) was the **new** function's. So the fix was live and its own condition — `coalesce(encrypted_password, '') <> ''` — was true for a passwordless admin create. **GoTrue writes a non-empty `encrypted_password` even when no password is given.** `20260918100000` assumed the empty string, and its self-test inserted `''` by hand: it checked the assumption against itself, never against GoTrue, so it could only ever pass.
+
+**The password column cannot tell the two paths apart at all**, nor can the database role (both arrive as `supabase_auth_admin`). What differs is **app metadata**: it can be set only through the service-role admin API, never by a public signup. So staff provisioning now passes `app_metadata.provisioned_by = "vitti-portal"` (`provisionStaffAccount`, `scripts/seed-auth-users.mjs`), and the trigger refuses any staff-domain INSERT without it. The marker is not a secret; its worth is that setting it needs the service role.
+
+The "staff have no passwords" rule survives where it is actually enforced — `signInWithPassword` and `requestPasswordResetCode` refuse staff — since the hash GoTrue writes is random and known to nobody.
+
+The new self-test inserts rows **with** a non-empty hash, one with the marker (must pass) and one without (must be refused). It is still not GoTrue, so the real proof is a staff `createUser` through the admin API after deploying. **The lesson worth keeping: a self-test that constructs its input from the hypothesis it is testing proves nothing — build the fixture from observed behaviour, here the auth log.**

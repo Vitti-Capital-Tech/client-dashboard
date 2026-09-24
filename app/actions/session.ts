@@ -109,9 +109,10 @@ export async function requestLoginCode(
   // For a staff address this branch fires ONLY while provisioning is failing. In
   // a healthy system `provisionStaffAccount` a few lines up creates the row, so
   // `isRegistered` is true here and the code is sent — the seamless first
-  // sign-in staff are meant to get, with no account to set up. It is failing now
-  // because the trigger fix in 20260918100000 is unapplied; once it is, staff
-  // never see this message at all.
+  // sign-in staff are meant to get, with no account to set up. If staff DO see
+  // this message, provisioning is being refused: the server log line from
+  // `provisionStaffAccount` and the auth log carry the database error, and the
+  // usual cause is the `provisioned_by` marker missing (20260924090000).
   //
   // `null` (the domain rule could not be read) still falls through to the send,
   // because guessing "no account" for someone we could not classify is the one
@@ -272,6 +273,11 @@ async function provisionStaffAccount(address: string): Promise<void> {
     // the address is real and reachable. An unconfirmed row would need a second,
     // differently-typed token to clear and buys nothing.
     email_confirm: true,
+    // The ONLY thing that lets a staff-domain row past `block_self_registered_staff`.
+    // App metadata can be set only through the service-role admin API, so a
+    // public signup can never carry it. Without this every staff sign-in fails
+    // with an empty 500 — see 20260924090000_staff_provisioning_marker.sql.
+    app_metadata: { provisioned_by: "vitti-portal" },
   });
 
   if (!error) {

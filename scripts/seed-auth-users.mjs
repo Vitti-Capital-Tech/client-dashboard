@@ -120,6 +120,9 @@ async function main() {
       // already know whose they are, and an unconfirmed user cannot be sent a
       // login code.
       email_confirm: true,
+      // Required for a staff-domain address to pass `block_self_registered_staff`;
+      // see supabase/migrations/20260924090000_staff_provisioning_marker.sql.
+      app_metadata: { provisioned_by: "vitti-portal" },
     });
     if (error) throw error;
     console.log(
