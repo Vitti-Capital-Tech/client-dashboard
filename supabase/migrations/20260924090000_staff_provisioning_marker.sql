@@ -1,3 +1,9 @@
+-- ===========================================================================
+-- SUPERSEDED by 20260924100000_staff_role_requires_marker.sql — do not rely on
+-- this one. Its guard checks app metadata at INSERT, but GoTrue writes caller
+-- app metadata in a SECOND statement, so the guard refused every staff account.
+-- The later migration drops this trigger. Kept for the history it records.
+-- ===========================================================================
 -- ---------------------------------------------------------------------------
 -- New staff still cannot sign in. The previous fix was built on a wrong fact.
 --

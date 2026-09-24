@@ -111,8 +111,8 @@ export async function requestLoginCode(
   // `isRegistered` is true here and the code is sent — the seamless first
   // sign-in staff are meant to get, with no account to set up. If staff DO see
   // this message, provisioning is being refused: the server log line from
-  // `provisionStaffAccount` and the auth log carry the database error, and the
-  // usual cause is the `provisioned_by` marker missing (20260924090000).
+  // `provisionStaffAccount` and the auth log carry the database error — look
+  // for a trigger on auth.users raising (20260924100000 explains the history).
   //
   // `null` (the domain rule could not be read) still falls through to the send,
   // because guessing "no account" for someone we could not classify is the one
@@ -273,10 +273,11 @@ async function provisionStaffAccount(address: string): Promise<void> {
     // the address is real and reachable. An unconfirmed row would need a second,
     // differently-typed token to clear and buys nothing.
     email_confirm: true,
-    // The ONLY thing that lets a staff-domain row past `block_self_registered_staff`.
-    // App metadata can be set only through the service-role admin API, so a
-    // public signup can never carry it. Without this every staff sign-in fails
-    // with an empty 500 — see 20260924090000_staff_provisioning_marker.sql.
+    // What makes this account STAFF. `stamp_role_from_email` grants `admin` only
+    // to a vitti.capital address carrying this marker; without it the account is
+    // created as a client and lands in the wrong portal. App metadata can be set
+    // only through the service-role admin API, so a public signup can never carry
+    // it. See 20260924100000_staff_role_requires_marker.sql.
     app_metadata: { provisioned_by: "vitti-portal" },
   });
 

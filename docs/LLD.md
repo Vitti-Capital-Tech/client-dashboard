@@ -2540,4 +2540,17 @@ New `@vitti.capital` addresses could not sign in from 5 Sep 2026: asking for a c
 
 The "staff have no passwords" rule survives where it is actually enforced — `signInWithPassword` and `requestPasswordResetCode` refuse staff — since the hash GoTrue writes is random and known to nobody.
 
-The new self-test inserts rows **with** a non-empty hash, one with the marker (must pass) and one without (must be refused). It is still not GoTrue, so the real proof is a staff `createUser` through the admin API after deploying. **The lesson worth keeping: a self-test that constructs its input from the hypothesis it is testing proves nothing — build the fixture from observed behaviour, here the auth log.**
+#### …and the marker could not be checked at INSERT either (`…_staff_role_requires_marker.sql`)
+
+`20260924090000` refused a staff INSERT lacking the marker. It still failed, so this time GoTrue was **observed** before anything was written: two throwaway `@example.com` users created through the admin API and then **read back from the database** (the create response is GoTrue's in-memory copy and shows nothing triggers wrote).
+
+| createUser with | stored `app_metadata` |
+|---|---|
+| no app_metadata | `provider`, `providers`, **`role: client`** |
+| `app_metadata: { provisioned_by }` | `provider`, `providers`, `provisioned_by` — **no role** |
+
+GoTrue INSERTs with the provider keys only, then writes caller app metadata in a **second statement** that replaces the column from its own copy. So an INSERT trigger never sees the marker — the guard refused everyone — and that second statement wiped the role `stamp_role_from_email` had written, since the stamp fired only on INSERT or a change of email.
+
+Nothing on the INSERTed row distinguishes our provisioning from a public signup, so the defence moved from *may this row exist* to **may this row be admin**. `20260924100000` drops the INSERT guard and changes the stamp: **`admin` only for a vitti.capital address carrying the marker, `client` otherwise**, and it now also fires on `UPDATE OF raw_app_meta_data` — GoTrue's second statement — which is exactly when a provisioned account becomes admin. A self-registered `ceo@vitti.capital` becomes a client with no linked client: it sees nothing and cannot use its password (`signInWithPassword` refuses the staff domain). The existing staff are backfilled with the marker in the same migration so no later metadata rewrite can demote them. The self-test replays the observed two-statement sequence rather than a row shaped by hope.
+
+**The lesson, twice over: a self-test that constructs its input from the hypothesis it is testing proves nothing. Observe the real system first — the auth log, then a read-back of what was actually stored — and build the fixture from that.**
