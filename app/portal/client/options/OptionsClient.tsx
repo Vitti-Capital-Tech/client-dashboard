@@ -5,6 +5,14 @@ import type { OptionTableItem } from "@/lib/options/from-stored-pnl";
 import { MoneynessBadge, StrikeSpot } from "@/app/components/MoneynessBadge";
 import { TablePagination } from "@/app/components/TablePagination";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
+import {
+  EXPIRY_FILTERS,
+  EXPIRY_FILTER_LABELS,
+  formatExpiryDate,
+  matchesExpiryFilter,
+  timeToExpiryLabel,
+  type ExpiryFilter,
+} from "@/lib/options/time-to-expiry";
 
 /**
  * The client's options register — the same table the desk reads.
@@ -58,6 +66,7 @@ function matchesTab(o: OptionTableItem, tab: FilterTab): boolean {
 export function OptionsClient({ options }: { options: OptionTableItem[] }) {
   const [tab, setTab] = useState<FilterTab>("all");
   const [search, setSearch] = useState("");
+  const [expiry, setExpiry] = useState<ExpiryFilter>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
@@ -73,7 +82,8 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
     [options],
   );
 
-  const rows = useMemo(() => {
+  /** Tab + search, before the expiry filter — what the expiry counts are taken over. */
+  const tabbed = useMemo(() => {
     const q = search.trim().toLowerCase();
     return options.filter(
       (o) =>
@@ -84,6 +94,22 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
           (o.parentTicker ?? "").toLowerCase().includes(q)),
     );
   }, [options, tab, search]);
+
+  /**
+   * How many series each expiry choice would show, within the tab and search —
+   * so a count never promises rows the other filters have hidden. `dte` comes
+   * from `parseExpiry`, the same reader the alert scanner uses.
+   */
+  const expiryCounts = useMemo(() => {
+    const c = Object.fromEntries(EXPIRY_FILTERS.map((f) => [f, 0])) as Record<ExpiryFilter, number>;
+    for (const o of tabbed) for (const f of EXPIRY_FILTERS) if (matchesExpiryFilter(o.dte, f)) c[f]++;
+    return c;
+  }, [tabbed]);
+
+  const rows = useMemo(
+    () => tabbed.filter((o) => matchesExpiryFilter(o.dte, expiry)),
+    [tabbed, expiry],
+  );
 
   /** Totals are for what is ON SCREEN after filtering — the header says so. */
   const totals = useMemo(
@@ -189,6 +215,23 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
             ))}
           </div>
 
+          <div className="flex flex-wrap items-center gap-2">
+          {/* Expiry — a second axis to the tabs, so a dropdown rather than more pills. */}
+          <select
+            value={expiry}
+            onChange={(e) => {
+              setExpiry(e.target.value as ExpiryFilter);
+              setPage(1);
+            }}
+            aria-label="Filter by expiry"
+            className="border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs text-ink focus:border-green focus:outline-none transition-colors cursor-pointer"
+          >
+            {EXPIRY_FILTERS.map((f) => (
+              <option key={f} value={f}>
+                {EXPIRY_FILTER_LABELS[f]} ({expiryCounts[f]})
+              </option>
+            ))}
+          </select>
           <input
             type="search"
             value={search}
@@ -200,6 +243,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
             aria-label="Search options"
             className="w-52 border border-line-2 bg-white rounded-[9px] px-3 py-2 text-xs focus:border-green focus:outline-none transition-colors"
           />
+          </div>
         </div>
 
         {/* The desk's own columns, minus Account. */}
@@ -210,6 +254,12 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                 <th className="px-4 py-2.5 whitespace-nowrap">Series</th>
                 <th className="px-4 py-2.5">Company / Description</th>
                 <th className="px-4 py-2.5 whitespace-nowrap">Type</th>
+                <th
+                  className="px-4 py-2.5 whitespace-nowrap"
+                  title="Expiry date, and the time left until it. Unlisted options are not exercised automatically — an in-the-money grant left past this date is worth nothing."
+                >
+                  Expiry
+                </th>
                 <th
                   className="px-4 py-2.5 text-right whitespace-nowrap"
                   title="Options held — the count the exercise value is struck on"
@@ -236,8 +286,8 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
             <tbody className="divide-y divide-line/60">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="text-center text-mut py-12">
-                    {search.trim() || tab !== "all"
+                  <td colSpan={10} className="text-center text-mut py-12">
+                    {search.trim() || tab !== "all" || expiry !== "all"
                       ? "Nothing matches that filter."
                       : "There are no option series on your register yet."}
                   </td>
@@ -290,6 +340,29 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                               }
                             />
                           </div>
+                        </td>
+
+                        {/* Expiry — red inside 30 days, where the expiry alerts
+                            start escalating, so the page agrees with the bell. */}
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className={`font-mono ${o.dte !== null && o.dte < 0 ? "text-mut" : "text-ink"}`}>
+                            {formatExpiryDate(o.expiryDate)}
+                          </div>
+                          {o.expiryDate && (
+                            <div
+                              className={`text-[11px] mt-0.5 ${
+                                o.dte === null
+                                  ? "text-mut"
+                                  : o.dte < 0
+                                    ? "text-mut line-through"
+                                    : o.dte <= 30
+                                      ? "text-loss-d font-semibold"
+                                      : "text-mut"
+                              }`}
+                            >
+                              {timeToExpiryLabel(o.dte)}
+                            </div>
+                          )}
                         </td>
 
                         {/* Quantity */}
@@ -349,7 +422,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                       changed every time you paged would be a different number
                       each look. */}
                   <tr className="border-t-2 border-line bg-paper/60 font-semibold select-none">
-                    <td className="px-4 py-3" colSpan={3}>
+                    <td className="px-4 py-3" colSpan={4}>
                       Total ({rows.length})
                     </td>
                     <td className="px-4 py-3 text-right font-mono">{fmtQty(totals.qty)}</td>
