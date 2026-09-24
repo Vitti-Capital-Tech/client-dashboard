@@ -2554,3 +2554,14 @@ GoTrue INSERTs with the provider keys only, then writes caller app metadata in a
 Nothing on the INSERTed row distinguishes our provisioning from a public signup, so the defence moved from *may this row exist* to **may this row be admin**. `20260924100000` drops the INSERT guard and changes the stamp: **`admin` only for a vitti.capital address carrying the marker, `client` otherwise**, and it now also fires on `UPDATE OF raw_app_meta_data` — GoTrue's second statement — which is exactly when a provisioned account becomes admin. A self-registered `ceo@vitti.capital` becomes a client with no linked client: it sees nothing and cannot use its password (`signInWithPassword` refuses the staff domain). The existing staff are backfilled with the marker in the same migration so no later metadata rewrite can demote them. The self-test replays the observed two-statement sequence rather than a row shaped by hope.
 
 **The lesson, twice over: a self-test that constructs its input from the hypothesis it is testing proves nothing. Observe the real system first — the auth log, then a read-back of what was actually stored — and build the fixture from that.**
+
+### 8.60 Expiry on the client's Options tab, and names on staff alerts (`lib/options/time-to-expiry.ts`)
+
+**Expiry column and filter.** The client's Options tab showed strike, spot and value but not the one date that decides whether an unlisted grant is worth anything. It now has an **Expiry** column — the date, and under it the time left (`45 days`, `5 months`, `1 yr 3 mo`, `Expired 12 days ago`), red inside 30 days to match where the expiry alerts start escalating — and an expiry dropdown beside the search: within 30 days / 90 days / 12 months, more than 12 months, expired, and no expiry on record.
+
+- **The date comes from `parseExpiry`**, the reader the alert scanner already uses, so the tab and the bell cannot disagree: the row's stored `expiry` first (unlisted grants, from the Placement Tracker), then the series name (`… OPTION 30-JUN-27`, the only place a listed series carries it). Neither → "—", never a guess.
+- **"Within" filters are cumulative** — within 90 days includes within 30 — because the question is "what expires before…", and **expired options are in none of them**: a lapsed option is not one about to lapse.
+- **Counts in the dropdown respect the type tab and the search**, so a count never promises rows the other filters have hidden.
+- Days up to 60, because that is where a holder decides whether to act; months and years beyond, because "418 days" is not read as a time.
+
+**Full client names on staff alerts.** The alerts drawer showed the internal ref or initials (`C1`, `GD`) and the Alerts page an initials disc, so the desk had to decode each against the client list before acting. Both now show the client's full name — the broker's *Account Name* — truncated with the whole name on hover. The short forms remain only as a fallback for a client with no name.

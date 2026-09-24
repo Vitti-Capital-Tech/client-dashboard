@@ -55,6 +55,15 @@ import { TablePagination } from "@/app/components/TablePagination";
 import { RealisedRangePicker } from "@/app/components/RealisedRangePicker";
 import { realisedWindowRows } from "@/lib/pnl/realised-window";
 import { allTimeRealised, holdingsTotals, unlistedGrantHoldings } from "@/lib/pnl/net-pnl";
+import {
+  EXPIRY_FILTERS,
+  EXPIRY_FILTER_LABELS,
+  formatExpiryDate,
+  matchesExpiryFilter,
+  optionExpiry,
+  timeToExpiryLabel,
+  type ExpiryFilter,
+} from "@/lib/options/time-to-expiry";
 import { TransactionsTable } from "./TransactionsTable";
 import { priceText } from "@/lib/ui/price";
 import { GlossaryStrip } from "@/app/components/GlossaryStrip";
@@ -189,6 +198,7 @@ export function PositionsClient({
   const [pnlSize, setPnlSize] = useState(25);
   const [optionsSearch, setOptionsSearch] = useState("");
   const [optionsFilter, setOptionsFilter] = useState<OptionFilter>("all");
+  const [optionsExpiry, setOptionsExpiry] = useState<ExpiryFilter>("all");
   const [optionsPage, setOptionsPage] = useState(1);
   const [optionsSize, setOptionsSize] = useState(25);
 
@@ -546,9 +556,39 @@ export function PositionsClient({
     () => optionFilterCounts(allOptionRows),
     [allOptionRows],
   );
-  const filteredOptionRows = useMemo(
+  /**
+   * Each option's expiry, read once per row set rather than once per render of
+   * a cell. Keyed by row object, which is stable for as long as the rows are.
+   */
+  const expiryByRow = useMemo(
+    () => new Map(allOptionRows.map((o) => [o.row, optionExpiry(o.row)])),
+    [allOptionRows],
+  );
+
+  /**
+   * How many options each expiry choice would show, within the type filter and
+   * search already applied — so a count never promises rows the other filters
+   * have hidden.
+   */
+  const typedOptionRows = useMemo(
     () => filterOptionRows(allOptionRows, optionsFilter, optionsSearch),
     [allOptionRows, optionsFilter, optionsSearch],
+  );
+  const expiryCounts = useMemo(() => {
+    const counts = Object.fromEntries(EXPIRY_FILTERS.map((f) => [f, 0])) as Record<ExpiryFilter, number>;
+    for (const o of typedOptionRows) {
+      const dte = expiryByRow.get(o.row)?.dte ?? null;
+      for (const f of EXPIRY_FILTERS) if (matchesExpiryFilter(dte, f)) counts[f]++;
+    }
+    return counts;
+  }, [typedOptionRows, expiryByRow]);
+
+  const filteredOptionRows = useMemo(
+    () =>
+      typedOptionRows.filter((o) =>
+        matchesExpiryFilter(expiryByRow.get(o.row)?.dte ?? null, optionsExpiry),
+      ),
+    [typedOptionRows, expiryByRow, optionsExpiry],
   );
   const filteredOptionTotal = useMemo(
     () => optionTotals(filteredOptionRows),
@@ -1287,7 +1327,25 @@ export function PositionsClient({
               )}
             </div>
 
-            {(optionsFilter !== "all" || optionsSearch) && (
+            {/* Expiry — a second axis to the type tabs above, so it is a
+                dropdown rather than more tabs. Counts respect the tab and search. */}
+            <select
+              value={optionsExpiry}
+              onChange={(e) => {
+                setOptionsExpiry(e.target.value as ExpiryFilter);
+                setOptionsPage(1);
+              }}
+              aria-label="Filter by expiry"
+              className="bg-paper-2/60 hover:bg-paper-2 focus:bg-white border border-line rounded-[8px] px-2.5 py-1.5 text-xs text-ink font-medium focus:outline-none focus:border-navy transition-all cursor-pointer"
+            >
+              {EXPIRY_FILTERS.map((f) => (
+                <option key={f} value={f}>
+                  {EXPIRY_FILTER_LABELS[f]} ({expiryCounts[f]})
+                </option>
+              ))}
+            </select>
+
+            {(optionsFilter !== "all" || optionsSearch || optionsExpiry !== "all") && (
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-mut">
                   Showing{" "}
@@ -1299,6 +1357,7 @@ export function PositionsClient({
                   onClick={() => {
                     setOptionsFilter("all");
                     setOptionsSearch("");
+                    setOptionsExpiry("all");
                     setOptionsPage(1);
                   }}
                   className="inline-flex items-center gap-1 border border-line bg-white hover:bg-paper-2 rounded-[7px] px-2.5 py-1 text-[11px] font-semibold text-mut hover:text-ink transition-colors cursor-pointer"
@@ -1318,6 +1377,12 @@ export function PositionsClient({
                 <th className="px-4.5 py-2.5 whitespace-nowrap">Series</th>
                 <th className="px-4.5 py-2.5">Underlying</th>
                 <th className="px-4.5 py-2.5 whitespace-nowrap">Type</th>
+                <th
+                  className="px-4.5 py-2.5 whitespace-nowrap"
+                  title="Expiry date, and the time left until it. Unlisted options are not exercised automatically — an in-the-money grant left past this date is worth nothing."
+                >
+                  Expiry
+                </th>
                 <th
                   className="px-4.5 py-2.5 text-right whitespace-nowrap"
                   title="Options held — the count the exercise value is struck on"
@@ -1351,7 +1416,7 @@ export function PositionsClient({
             <tbody className="divide-y divide-[#f0ede5]">
               {filteredOptionRows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center text-mut py-8">
+                  <td colSpan={11} className="text-center text-mut py-8">
                     {allOptionRows.length === 0
                       ? "No option holdings or placement grants on record."
                       : "No options match the current filter or search."}
@@ -1405,6 +1470,31 @@ export function PositionsClient({
                             />
                           </div>
                         </td>
+                        {(() => {
+                          const exp = expiryByRow.get(o) ?? { date: null, dte: null };
+                          // Red inside 30 days: that is where the expiry alerts
+                          // start escalating, and the tab should agree with the bell.
+                          const tone =
+                            exp.dte === null
+                              ? "text-mut"
+                              : exp.dte < 0
+                                ? "text-mut line-through"
+                                : exp.dte <= 30
+                                  ? "text-loss-d font-semibold"
+                                  : "text-ink";
+                          return (
+                            <td className="px-4.5 py-3 whitespace-nowrap">
+                              <div className={`font-mono ${exp.dte !== null && exp.dte < 0 ? "text-mut" : "text-ink"}`}>
+                                {formatExpiryDate(exp.date)}
+                              </div>
+                              {exp.date && (
+                                <div className={`text-[11px] mt-0.5 ${tone}`}>
+                                  {timeToExpiryLabel(exp.dte)}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })()}
                         <td className="px-4.5 py-3 text-right font-mono text-ink whitespace-nowrap">
                           {qty > 0 ? qty.toLocaleString("en-AU") : "—"}
                         </td>
@@ -1455,7 +1545,7 @@ export function PositionsClient({
 
                   {/* Options Grand Total */}
                   <tr className="border-t-2 border-line-2 bg-paper-2 font-bold">
-                    <td className="px-4.5 py-3" colSpan={3}>
+                    <td className="px-4.5 py-3" colSpan={4}>
                       Grand Total ({filteredOptionRows.length}{" "}
                       {filteredOptionRows.length === 1 ? "option" : "options"})
                     </td>

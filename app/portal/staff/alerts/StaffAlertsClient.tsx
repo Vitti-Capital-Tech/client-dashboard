@@ -85,9 +85,18 @@ export function StaffAlertsClient({ alerts, clients }: { alerts: AlertRow[]; cli
     };
     const isNew = !a.read;
 
-    const clientBadge = a.clientId ? (
-      <span className="w-5.5 h-5.5 rounded-full bg-paper-2 border border-line flex items-center justify-center font-bold text-[9px] text-ink uppercase flex-none select-none">
-        {clientMap[a.clientId]?.initials || a.clientId}
+    // The client's full name — the broker's Account Name — rather than the
+    // initials disc it replaced, which made the desk decode "GD" against the
+    // client list before acting. Same treatment as the alerts drawer.
+    const clientName = a.clientId
+      ? clientMap[a.clientId]?.name || clientMap[a.clientId]?.initials || a.clientId
+      : null;
+    const clientBadge = clientName ? (
+      <span
+        className="bg-paper-2 border border-line text-ink text-[11px] font-semibold px-2 py-0.5 rounded-md max-w-[260px] truncate flex-none"
+        title={clientName}
+      >
+        {clientName}
       </span>
     ) : null;
 

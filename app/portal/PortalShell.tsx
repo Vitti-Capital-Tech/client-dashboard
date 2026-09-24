@@ -442,9 +442,16 @@ export function PortalShell({
         {alertIco(a)}
         <div className="flex-1 min-w-0">
           <div className="text-[13px] font-semibold text-ink leading-tight flex items-center gap-1.5 flex-wrap">
-            {role === "admin" && a.clientId && (
-              <span className="bg-paper-2 text-mut text-[10.5px] font-semibold px-2 py-0.5 rounded-sm uppercase">
-                {clientLabels[a.clientId] ?? ""}
+            {/* The client's full name. Not uppercased — a name is read, a code
+                was scanned — and capped in width so a long family-office name
+                truncates rather than pushing the alert title off the card; the
+                whole name is on hover. */}
+            {role === "admin" && a.clientId && clientLabels[a.clientId] && (
+              <span
+                className="bg-paper-2 text-ink text-[11px] font-semibold px-2 py-0.5 rounded-sm max-w-[220px] truncate"
+                title={clientLabels[a.clientId]}
+              >
+                {clientLabels[a.clientId]}
               </span>
             )}
             {a.title}

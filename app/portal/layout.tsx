@@ -72,8 +72,12 @@ export default async function PortalLayout({
       isAdmin ? Promise.resolve("") : getActiveAccountId(),
     ]);
 
+  // The client's FULL name — the broker's Account Name — on every staff alert.
+  // It used to be the internal ref or initials ("C1", "GD"), which the desk had
+  // to decode against the client list before they could act on the alert. The
+  // short forms remain only as a fallback for a client with no name on file.
   const clientLabels: Record<string, string> = Object.fromEntries(
-    clients.map((c) => [c.id, c.ref ?? c.initials ?? ""]),
+    clients.map((c) => [c.id, c.name || c.ref || c.initials || ""]),
   );
 
   const pendingAllocCount = placements.reduce(
