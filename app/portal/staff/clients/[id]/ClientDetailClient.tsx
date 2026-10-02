@@ -1603,13 +1603,12 @@ export function ClientDetailClient({
                   <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Cost ($)</th>
                   <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Current Value ($)</th>
                   <th className="px-4.5 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L ($)</th>
-                  <th className="px-4.5 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
                 {filteredOptionRows.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="text-center text-mut py-8">
+                    <td colSpan={9} className="text-center text-mut py-8">
                       {allOptionSummaryRows.length === 0
                         ? "No option holdings or placement grants on record for this account."
                         : "No options match the current filter or search."}
@@ -1691,9 +1690,6 @@ export function ClientDetailClient({
                           >
                             {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
                           </td>
-                          <td className="px-4.5 py-3 text-mut text-[11px] font-mono leading-relaxed max-w-sm truncate" title={o.note || o.type}>
-                            {o.note || o.type}
-                          </td>
                         </tr>
                       );
                     })}
@@ -1726,7 +1722,6 @@ export function ClientDetailClient({
                         {filteredOptionTotal.pnl < 0 ? "-" : "+"}$
                         {money2(Math.abs(filteredOptionTotal.pnl))}
                       </td>
-                      <td className="px-4.5 py-3" />
                     </tr>
                   </>
                 )}

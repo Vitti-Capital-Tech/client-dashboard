@@ -361,7 +361,6 @@ export function StaffOptionsClient({
       "Exercise Value ($)",
       "Current Value ($)",
       "Unrealized P&L ($)",
-      "Terms / Valuation Notes",
       "Account Name",
       "Client Name",
     ];
@@ -385,7 +384,6 @@ export function StaffOptionsClient({
         it.money.moneyness === "unknown" ? "" : it.money.intrinsicValue.toFixed(2),
         it.marketValue.toFixed(2),
         it.pnl.toFixed(2),
-        `"${(it.termsNote || "").replace(/"/g, '""')}"`,
         `"${acctName.replace(/"/g, '""')}"`,
         `"${client.replace(/"/g, '""')}"`,
       ].join(",");
@@ -637,7 +635,6 @@ export function StaffOptionsClient({
                 </th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Unreal. P&amp;L</th>
-                <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
                 <th
                   className="px-4 py-2.5 text-right whitespace-nowrap"
                   title="Unlisted grants only — a listed series is a fact about the broker feed, not a desk judgement"
@@ -649,7 +646,7 @@ export function StaffOptionsClient({
             <tbody className="divide-y divide-line/60">
               {filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={selectedAccount === "all" ? 11 : 10} className="text-center text-mut py-12">
+                  <td colSpan={selectedAccount === "all" ? 10 : 9} className="text-center text-mut py-12">
                     <p className="font-semibold text-ink">No options found</p>
                     <p className="text-xs text-mut mt-0.5">
                       {scopedAccountItems.length === 0
@@ -784,11 +781,6 @@ export function StaffOptionsClient({
                           {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
                         </td>
 
-                        {/* Terms & Valuation Notes */}
-                        <td className="px-4 py-3 text-mut text-[11px] font-mono max-w-sm truncate" title={o.termsNote || o.company}>
-                          {o.termsNote || o.pricingMethod || "—"}
-                        </td>
-
                         {/* Delete — unlisted grants only.
                             A listed series is quoted on its own market and sits
                             here because the broker feed says the client holds
@@ -838,7 +830,6 @@ export function StaffOptionsClient({
                     >
                       {filteredTotals.pnl < 0 ? "-" : "+"}${money2(Math.abs(filteredTotals.pnl))}
                     </td>
-                    <td className="px-4 py-3" />
                     <td className="px-4 py-3" />
                   </tr>
                 </>

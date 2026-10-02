@@ -280,13 +280,12 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                 </th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Current Value</th>
                 <th className="px-4 py-2.5 text-right whitespace-nowrap">Open P&amp;L</th>
-                <th className="px-4 py-2.5 whitespace-nowrap">Terms / Valuation Notes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line/60">
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center text-mut py-12">
+                  <td colSpan={9} className="text-center text-mut py-12">
                     {search.trim() || tab !== "all" || expiry !== "all"
                       ? "Nothing matches that filter."
                       : "There are no option series on your register yet."}
@@ -406,14 +405,6 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                         >
                           {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
                         </td>
-
-                        {/* Terms & Valuation Notes */}
-                        <td
-                          className="px-4 py-3 text-mut text-[11px] font-mono max-w-sm truncate"
-                          title={o.termsNote || o.company}
-                        >
-                          {o.termsNote || o.pricingMethod || "—"}
-                        </td>
                       </tr>
                     );
                   })}
@@ -440,7 +431,6 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
                     >
                       {totals.pnl < 0 ? "-" : "+"}${money2(Math.abs(totals.pnl))}
                     </td>
-                    <td className="px-4 py-3" />
                   </tr>
                 </>
               )}
@@ -464,8 +454,7 @@ export function OptionsClient({ options }: { options: OptionTableItem[] }) {
 
       <p className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-relaxed">
         Unlisted grants are valued by the desk — at exercise value where they are in
-        the money, and with a Black-Scholes model otherwise. The Terms column names
-        which applied. To lodge an exercise instruction, speak to your adviser.
+        the money, and with a Black-Scholes model otherwise. To lodge an exercise instruction, speak to your adviser.
       </p>
     </div>
   );

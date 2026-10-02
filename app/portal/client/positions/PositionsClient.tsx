@@ -1408,15 +1408,12 @@ export function PositionsClient({
                 <th className="px-4.5 py-2.5 text-right whitespace-nowrap">
                   Open P&amp;L ($)
                 </th>
-                <th className="px-4.5 py-2.5 whitespace-nowrap">
-                  Terms / Valuation Notes
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f0ede5]">
               {filteredOptionRows.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="text-center text-mut py-8">
+                  <td colSpan={10} className="text-center text-mut py-8">
                     {allOptionRows.length === 0
                       ? "No option holdings or placement grants on record."
                       : "No options match the current filter or search."}
@@ -1533,12 +1530,6 @@ export function PositionsClient({
                         >
                           {o.pnl < 0 ? "-" : "+"}${money2(Math.abs(o.pnl))}
                         </td>
-                        <td
-                          className="px-4.5 py-3 text-mut text-[11px] font-mono leading-relaxed max-w-sm truncate"
-                          title={o.type}
-                        >
-                          {o.type}
-                        </td>
                       </tr>
                     );
                   })}
@@ -1572,7 +1563,6 @@ export function PositionsClient({
                       {filteredOptionTotal.pnl < 0 ? "-" : "+"}$
                       {money2(Math.abs(filteredOptionTotal.pnl))}
                     </td>
-                    <td className="px-4.5 py-3" />
                   </tr>
                 </>
               )}
