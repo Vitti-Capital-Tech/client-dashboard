@@ -339,18 +339,21 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
  * Two of them are self-referential (`N` grosses `M` up by GST, `T` totals the
  * per-entity fees), so they need the row number they will live on.
  *
- * `F` — T2 Settlement — is deliberately left empty. Most rows have nothing in
+ * `E` — Settlement Type — is left empty; the desk fills it by hand (e.g.
+ * "Manual") on the deals that need it.
+ *
+ * `G` — T2 Settlement — is deliberately left empty. Most rows have nothing in
  * it, and the few that do point at `L4`, a cell Template does not fill; a
  * formula there would render every new deal as settling on 0 January 1900.
  *
- * `U` — Error Check — and `V` — Add-Ons — are the two columns past `T`, and both
+ * `V` — Error Check — and `W` — Add-Ons — are the two columns past `U`, and both
  * were being left for the desk to add by hand.
  *
- * `U` is `=T=M`: All Fees against Total Fee, the row's own arithmetic check. It
- * is self-referential like `N` and `T`, so it needs the row number too. Left
+ * `V` is `=U=N`: All Fees against Total Fee, the row's own arithmetic check. It
+ * is self-referential like `O` and `U`, so it needs the row number too. Left
  * empty it does not read as "no error", it reads as a row nobody checked.
  *
- * `V` holds the attaching options, and it is a link rather than a copy of what
+ * `W` holds the attaching options, and it is a link rather than a copy of what
  * `tabCellWrites` put in `B2` — the desk edits the tab when a grant is restated,
  * and a second copy here would go stale the moment they did. It matters more
  * than its position suggests: the P&L engine values unlisted placement options
@@ -367,35 +370,36 @@ export function overviewRowFormulas(
     counter, // B — the desk's own sequence number
     sheetLinkFormula(sheet, ticker.trim().toUpperCase()), // C — Counter, linked to the tab
     `=${s}!B3`, // D — Date Issued
-    `=${s}!L3`, // E — Settlement Date
-    "", // F — T2 Settlement, filled by hand when a deal has one
-    `=${s}!F3`, // G — Issue Price
-    `=${s}!E3`, // H — Lead Manager
-    `=${s}!O3`, // I — Trade Booked
-    `=${s}!C6`, // J — Bid
-    `=${s}!D6`, // K — Allocation
-    `=${s}!F4`, // L — Ratio
-    `=${s}!L30`, // M — Total Fee
-    `=M${row}*(1.1)`, // N — Total Fee inc GST
-    `=${s}!L25`, // O — VTC Fee
-    `=${s}!L26`, // P — IZR Fee
-    `=${s}!L27`, // Q — VIZ Fee
-    `=${s}!L28`, // R — XX3 Fee
-    `=${s}!L29`, // S — XX4 Fee
-    `=O${row}+P${row}+Q${row}+R${row}+S${row}`, // T — All Fees
-    `=T${row}=M${row}`, // U — Error Check: All Fees against Total Fee
-    `=${s}!B2`, // V — Add-Ons, the attaching options as the tab records them
+    "", // E — Settlement Type, filled by hand
+    `=${s}!L3`, // F — Settlement Date
+    "", // G — T2 Settlement, filled by hand when a deal has one
+    `=${s}!F3`, // H — Issue Price
+    `=${s}!E3`, // I — Lead Manager
+    `=${s}!O3`, // J — Trade Booked
+    `=${s}!C6`, // K — Bid
+    `=${s}!D6`, // L — Allocation
+    `=${s}!F4`, // M — Ratio
+    `=${s}!L30`, // N — Total Fee
+    `=N${row}*(1.1)`, // O — Total Fee inc GST
+    `=${s}!L25`, // P — VTC Fee
+    `=${s}!L26`, // Q — IZR Fee
+    `=${s}!L27`, // R — VIZ Fee
+    `=${s}!L28`, // S — XX3 Fee
+    `=${s}!L29`, // T — XX4 Fee
+    `=P${row}+Q${row}+R${row}+S${row}+T${row}`, // U — All Fees
+    `=U${row}=N${row}`, // V — Error Check: All Fees against Total Fee
+    `=${s}!B2`, // W — Add-Ons, the attaching options as the tab records them
   ];
 }
 
-/** The range one Overview row occupies. B through V, matching the header. */
+/** The range one Overview row occupies. B through W, matching the header. */
 export function overviewRowAddress(sheetName: string, row: number): string {
-  return `${formulaSheetRef(sheetName)}!B${row}:V${row}`;
+  return `${formulaSheetRef(sheetName)}!B${row}:W${row}`;
 }
 
 /** The columns `overviewRowFormulas` fills, as a range on a given row. */
 export function overviewRowColumns(row: number): string {
-  return `B${row}:V${row}`;
+  return `B${row}:W${row}`;
 }
 
 /**

@@ -902,7 +902,7 @@ test("tracker: a new deal lands on the first empty row, continuing the counter",
   assert.equal(res.overviewRow, 6);
   assert.equal(res.counter, 58);
 
-  const row = calls.find((c) => c.method === "PATCH" && c.path.includes("B6:V6"));
+  const row = calls.find((c) => c.method === "PATCH" && c.path.includes("B6:W6"));
   assert.ok(row, "the row is written as one range");
   const formulas = (row!.body as { formulas: string[][] }).formulas[0];
   assert.equal(formulas[0], 58, "counter");
@@ -912,9 +912,10 @@ test("tracker: a new deal lands on the first empty row, continuing the counter",
     "the Counter column links to the tab it was written for",
   );
   assert.equal(formulas[2], "='PGF'!B3", "Date Issued reads the tab");
-  assert.equal(formulas[4], "", "T2 Settlement is left for the desk");
-  assert.equal(formulas[12], "=M6*(1.1)", "GST grosses up this row, not row 5");
-  assert.equal(formulas[18], "=O6+P6+Q6+R6+S6", "All Fees totals this row");
+  assert.equal(formulas[3], "", "Settlement Type is left for the desk");
+  assert.equal(formulas[5], "", "T2 Settlement is left for the desk");
+  assert.equal(formulas[13], "=N6*(1.1)", "GST grosses up this row, not row 5");
+  assert.equal(formulas[19], "=P6+Q6+R6+S6+T6", "All Fees totals this row");
 });
 
 test("tracker: a deal already in the Overview is skipped, not written twice", async () => {
@@ -1095,18 +1096,18 @@ test("tracker: duplicate detection needs ticker AND date", () => {
   assert.equal(alreadyInOverview(rows, { ticker: "PGF" }), true);
 });
 
-test("tracker: the Overview row is 21 cells, B through V", () => {
+test("tracker: the Overview row is 22 cells, B through W", () => {
   const row = overviewRowFormulas("PGF", "PGF", 61, 58);
-  assert.equal(row.length, 21, "B..V inclusive — matches the header on row 3");
+  assert.equal(row.length, 22, "B..W inclusive — matches the header on row 3");
 
   // Add-Ons is a link like every other column: the grant lives on the tab, and
   // the P&L engine values unlisted placement options out of this cell, so a
   // blank here reports a client's grant as absent rather than as unknown.
-  assert.equal(row[20], "='PGF'!B2", "V reads the tab's Add-Ons cell");
+  assert.equal(row[21], "='PGF'!B2", "W reads the tab's Add-Ons cell");
 
   // Error Check is the row's own arithmetic against itself, so it carries the
-  // row number the way N and T do. Left empty it reads as an unchecked row.
-  assert.equal(row[19], "=T61=M61", "U checks All Fees against Total Fee");
+  // row number the way O and U do. Left empty it reads as an unchecked row.
+  assert.equal(row[20], "=U61=N61", "V checks All Fees against Total Fee");
 });
 
 test("tracker: the Counter cell is a link to the deal's own tab", () => {
