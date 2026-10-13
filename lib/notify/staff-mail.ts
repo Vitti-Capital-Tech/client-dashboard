@@ -65,16 +65,19 @@ export type StaffMailConfig = {
  * this tenant demonstrably owns and the app already reaches — one fewer thing
  * to get wrong, and a sender the desk will recognise.
  */
-export function staffMailConfig():
+export function staffMailConfig(
+  /** The env var holding the recipient list — another alert can mail its own people. */
+  toVar = "STAFF_NOTIFY_TO",
+):
   | { ok: true; config: StaffMailConfig }
   | { ok: false; reason: string } {
-  const to = (process.env.STAFF_NOTIFY_TO ?? "")
+  const to = (process.env[toVar] ?? "")
     .split(/[,;]/)
     .map((s) => s.trim())
     .filter(Boolean);
 
   if (to.length === 0) {
-    return { ok: false, reason: "STAFF_NOTIFY_TO is not set — desk alerts are off." };
+    return { ok: false, reason: `${toVar} is not set — this alert is off.` };
   }
 
   const from = (process.env.STAFF_NOTIFY_FROM || process.env.BROKER_MAILBOX || "").trim();
@@ -101,7 +104,7 @@ export type StaffMail = { subject: string; html: string };
  * staff mailbox — and the desk reading a request is exactly the audience worth
  * not handing crafted content to.
  */
-function esc(value: string | null | undefined): string {
+export function esc(value: string | null | undefined): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -209,8 +212,11 @@ export type SendResult =
  * person who actually uses it. The audit log already records that the request
  * happened; this mail is a nudge, not a record.
  */
-export async function sendStaffMail(mail: StaffMail): Promise<SendResult> {
-  const cfg = staffMailConfig();
+export async function sendStaffMail(
+  mail: StaffMail,
+  toVar = "STAFF_NOTIFY_TO",
+): Promise<SendResult> {
+  const cfg = staffMailConfig(toVar);
   if (!cfg.ok) return { sent: false, reason: cfg.reason };
 
   try {

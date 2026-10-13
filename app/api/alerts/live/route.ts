@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { runLiveTick } from "@/lib/alerts/live";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
+import { manualWatchDue } from "@/lib/placements/manual-settlement";
+import { runManualSettlementCheck } from "@/lib/placements/manual-settlement-run";
 
 /**
  * Cron entry point for the intraday tick: fresh prices, then the alerts that
@@ -24,6 +26,13 @@ import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
  * already written. A tick that dies after writing prices but before alerting
  * leaves the prices — which are an improvement on their own — and the next tick
  * ten minutes later finds the same crossing and reports it.
+ *
+ * ── The manual-settlement watch rides along ─────────────────────────────────
+ * On the first tick of each hour, 7am–7pm Sydney on weekdays, this route also
+ * runs the manual-settlement watch (`lib/placements/manual-settlement.ts`)
+ * rather than that watch having a cron of its own. It runs alongside the tick,
+ * not after it, so it does not eat the tick's 60 seconds, and its failure is
+ * reported in the response without failing the tick.
  */
 
 export const dynamic = "force-dynamic";
@@ -34,12 +43,23 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const manualSettlement = manualWatchDue()
+    ? runManualSettlementCheck().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[manual-settlement]", message);
+        return { ok: false, error: message };
+      })
+    : Promise.resolve(undefined);
+
   try {
     const report = await runLiveTick();
-    return NextResponse.json({ ok: true, ...report });
+    return NextResponse.json({ ok: true, ...report, manualSettlement: await manualSettlement });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: message, manualSettlement: await manualSettlement },
+      { status: 500 },
+    );
   }
 }
 

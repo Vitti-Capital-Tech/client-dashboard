@@ -369,6 +369,18 @@ Until that is granted, every send fails with `403` and the reason is written to 
 
 **A failed send never reaches the client.** The request is committed first and the mail is sent from `after()`, so a mailbox that is down cannot make a client's account request appear to fail, and nobody waits on a Graph round trip.
 
+#### Manual-settlement alert (optional — same Graph app and `Mail.Send`)
+
+Placement Tracker rows whose **Settlement Type** (Overview column E) reads exactly `Manual` are watched. If the ticker lodges a **Proposed issue of securities** announcement on or after the row's Settlement Date, the people below get one alert mail per announcement. `Manual & Private` and blank rows are not watched; settlement dates older than 14 days drop out.
+
+```bash
+MANUAL_SETTLEMENT_NOTIFY_TO=a@vitti.capital,b@vitti.capital   # comma or semicolon separated
+```
+
+Sent from `STAFF_NOTIFY_FROM` (or `BROKER_MAILBOX`), reading the tracker through `PLACEMENT_TRACKER_URL`. Unset `MANUAL_SETTLEMENT_NOTIFY_TO` and the watch is off.
+
+Setup: apply `supabase/migrations/20261013090000_manual_settlement_alerts.sql` (the once-only ledger). There is no cron of its own: the existing `alert-live-tick` job (`/api/alerts/live`) runs the watch on its first tick of each hour, 7am–7pm Sydney, Mon–Fri. Announcements are read from ASX's search page (`announcements.do?by=asxCode&period=M6`), which returns six months of history as plain HTML. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/manual-settlement`.
+
 #### Weekly position commentary (optional — Claude API)
 Each week after the Friday close, a short note is written against every security a client holds — what has been weighing on it, or where it stands if the holder is ahead. Without a key the feature is simply off: the job reports `not-configured` and returns success, and the portal renders exactly as before with no note on the holding.
 ```bash
