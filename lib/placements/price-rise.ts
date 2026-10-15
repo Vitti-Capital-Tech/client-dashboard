@@ -27,9 +27,11 @@ import type { GraphCall, TrackerTarget } from "./tracker-writer.ts";
  * noon on settlement day the market has been open two hours, so the day's open
  * exists. A row Yahoo cannot fill yet stays empty and is tried again next day.
  *
- * ── One write ───────────────────────────────────────────────────────────────
- * Column M is read as formulas and written back as one range, `M4:M<last>`,
- * with every cell this run did not fill written back exactly as it was.
+ * ── Only the cells it fills ─────────────────────────────────────────────────
+ * The run writes just the cells it filled, a contiguous block per PATCH, and
+ * never writes back anything it only read. It used to write the whole column
+ * back, which put back a value the desk had cleared while the run was between
+ * its read and its write (EIQ, 15 Oct 2026).
  *
  * Free of `server-only`, with Graph and the price history injected.
  */
@@ -153,14 +155,13 @@ export async function runPriceRise(deps: PriceRiseDeps, lastRow = 400): Promise<
   if (last === -1) return report;
   report.rows = last + 1;
 
-  const column = values.slice(0, last + 1).map((_, i) => [formulas[i]?.[10] ?? ""]);
 
   // Due: empty cell, listed code, an Issue Price, and a Settlement Date that has arrived.
   const due = values.slice(0, last + 1).flatMap((row, i) => {
     const code = asxCode(row?.[0]);
     const settlementDate = isoFromExcelSerial(row?.[3]);
     const issue = typeof row?.[5] === "number" ? row[5] : Number.NaN;
-    const empty = String(column[i][0] ?? "").trim() === "";
+    const empty = String(formulas[i]?.[10] ?? "").trim() === "";
     if (!empty || !code || !settlementDate || !(issue > 0) || settlementDate > deps.today) return [];
     return [{ i, code, settlementDate, issue }];
   });
@@ -170,25 +171,46 @@ export async function runPriceRise(deps: PriceRiseDeps, lastRow = 400): Promise<
     deps.openFrom(d.code, d.settlementDate).catch(() => null),
   );
 
+  type Fill = { i: number; entry: PriceRiseReport["updated"][number] };
+  const fills: Fill[] = [];
   due.forEach((d, n) => {
     const o = opens[n];
     if (!o) {
       report.pending.push({ ticker: d.code, settlementDate: d.settlementDate });
       return;
     }
-    const text = priceRiseText(d.issue, o.open);
-    column[d.i] = [text];
-    report.updated.push({ ticker: d.code, settlementDate: d.settlementDate, openOn: o.on, text });
+    fills.push({
+      i: d.i,
+      entry: {
+        ticker: d.code,
+        settlementDate: d.settlementDate,
+        openOn: o.on,
+        text: priceRiseText(d.issue, o.open),
+      },
+    });
   });
-  if (report.updated.length === 0) return report;
 
-  const write = await deps.graph(
-    `${sheet}/range(address='${PRICE_RISE_COLUMN}${first}:${PRICE_RISE_COLUMN}${first + last}')`,
-    { method: "PATCH", body: { formulas: column } },
-  );
-  if (!write.ok) {
-    report.error = `Could not write ${PRICE_RISE_COLUMN} on ${deps.target.overviewSheet} (${write.status}).`;
-    report.updated = [];
+  // Contiguous rows go in one PATCH; a gap starts the next block.
+  const blocks: Fill[][] = [];
+  for (const f of fills) {
+    const block = blocks[blocks.length - 1];
+    if (block && block[block.length - 1].i === f.i - 1) block.push(f);
+    else blocks.push([f]);
+  }
+
+  const failed: string[] = [];
+  for (const block of blocks) {
+    const top = first + block[0].i;
+    const bottom = first + block[block.length - 1].i;
+    const write = await deps.graph(
+      `${sheet}/range(address='${PRICE_RISE_COLUMN}${top}:${PRICE_RISE_COLUMN}${bottom}')`,
+      { method: "PATCH", body: { formulas: block.map((f) => [f.entry.text]) } },
+    );
+    if (write.ok) report.updated.push(...block.map((f) => f.entry));
+    else failed.push(`${PRICE_RISE_COLUMN}${top}:${PRICE_RISE_COLUMN}${bottom} (${write.status})`);
+  }
+  if (failed.length > 0) {
+    report.error = `Could not write ${failed.join(", ")} on ${deps.target.overviewSheet}.`;
   }
   return report;
 }

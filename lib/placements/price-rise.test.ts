@@ -83,11 +83,30 @@ test("price rise: settlement-day open, written once, everything else left as it 
   ]);
   assert.deepEqual(report.pending, [{ ticker: "TOR", settlementDate: "2026-10-15" }]);
 
+  // Only the cell it filled — nothing it merely read is written back.
   assert.equal(writes.length, 1);
-  assert.match(writes[0].path, /range\(address='M4:M9'\)/);
-  assert.deepEqual(writes[0].body, {
-    formulas: [["$0.0070 (0.00%)"], ["$0.0400 (-2.44%)"], [""], ["by hand"], [""], [""]],
+  assert.match(writes[0].path, /range\(address='M4:M4'\)/);
+  assert.deepEqual(writes[0].body, { formulas: [["$0.0070 (0.00%)"]] });
+});
+
+test("price rise: adjacent fills share a write, a gap starts another", async () => {
+  const { graph, writes } = fakeGraph([
+    overviewRow("AAU", "2026-10-08", 0.007),
+    overviewRow("P1E", "2026-10-08", 0.041),
+    overviewRow("GG1", "2026-10-07", 0.1, "$0.0990 (-1.00%)"),
+    overviewRow("TOR", "2026-10-15", 0.19),
+  ]);
+  const report = await runPriceRise({
+    today: "2026-10-15",
+    graph,
+    target,
+    openFrom: async (code, from) => ({ open: code === "P1E" ? 0.04 : 0.185, on: from }),
   });
+  assert.equal(report.updated.length, 3);
+  assert.deepEqual(
+    writes.map((w) => /address='([^']+)'/.exec(w.path)?.[1]),
+    ["M4:M5", "M7:M7"],
+  );
 });
 
 test("price rise: a lookup that throws leaves the row pending rather than failing the run", async () => {
