@@ -217,14 +217,11 @@ export function matchAlerts(
 }
 
 /** `2026-10-08` → `8 Oct 2026`, the desk's own date style. */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 function humanDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-AU", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  return `${d} ${MONTHS[m - 1]} ${y}`;
 }
 
 /** The alert itself: short, one deal, and the link to check it. */

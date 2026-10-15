@@ -381,6 +381,12 @@ Sent from `STAFF_NOTIFY_FROM` (or `BROKER_MAILBOX`), reading the tracker through
 
 Setup: apply `supabase/migrations/20261013090000_manual_settlement_alerts.sql` (the once-only ledger). There is no cron of its own: the existing `alert-live-tick` job (`/api/alerts/live`) runs the watch on its first tick of each hour, 7am–7pm Sydney, Mon–Fri. Announcements are read from ASX's search page (`announcements.do?by=asxCode&period=M6`), which returns six months of history as plain HTML. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/manual-settlement`.
 
+#### New-option alert (same recipients as the manual-settlement alert)
+
+When a listed or unlisted option appears on the options register for an account that did not hold it before — typically after the morning holdings ingest and P&L recompute — `MANUAL_SETTLEMENT_NOTIFY_TO` gets one mail listing each new option (ticker, company, listed/unlisted, client, account, quantity, expiry). Runs in the same hourly slot of `/api/alerts/live`.
+
+Setup: apply `supabase/migrations/20261015090000_option_register_seen.sql`. The first run records the current register as the baseline and mails nothing. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/alerts/new-options`.
+
 #### Weekly position commentary (optional — Claude API)
 Each week after the Friday close, a short note is written against every security a client holds — what has been weighing on it, or where it stands if the holder is ahead. Without a key the feature is simply off: the job reports `not-configured` and returns success, and the portal renders exactly as before with no note on the holding.
 ```bash
