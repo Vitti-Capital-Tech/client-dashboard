@@ -139,13 +139,13 @@ test("manual settlement: a fetch failure is null rather than a throw", async () 
   assert.equal(await fetchAnnouncements("AAU", down), null);
 });
 
-test("manual settlement: due on the first tick of each hour, 7am-7pm Sydney, weekdays", () => {
+test("manual settlement: due on the first tick of each hour, 7am-4pm Sydney, weekdays", () => {
   // Tue 13 Oct 2026, AEDT (UTC+11).
   assert.equal(manualWatchDue(new Date("2026-10-12T22:03:00Z")), true, "9:03am");
   assert.equal(manualWatchDue(new Date("2026-10-12T22:13:00Z")), false, "9:13am");
   assert.equal(manualWatchDue(new Date("2026-10-12T19:03:00Z")), false, "6:03am");
-  assert.equal(manualWatchDue(new Date("2026-10-13T07:05:00Z")), true, "6:05pm");
-  assert.equal(manualWatchDue(new Date("2026-10-13T08:05:00Z")), false, "7:05pm");
+  assert.equal(manualWatchDue(new Date("2026-10-13T05:05:00Z")), true, "4:05pm");
+  assert.equal(manualWatchDue(new Date("2026-10-13T06:05:00Z")), false, "5:05pm");
   // Sat 17 Oct 2026, 9:03am.
   assert.equal(manualWatchDue(new Date("2026-10-16T22:03:00Z")), false, "weekend");
 });

@@ -31,6 +31,13 @@ export type Quote = {
   last: number | null;
   /** The day's move as a percentage, or null when the feed does not say. */
   changePct: number | null;
+  /**
+   * The session's opening price. Yahoo keeps quoting the LAST session's open
+   * for a code that has not traded today, so read it with `tradedAt`.
+   */
+  open: number | null;
+  /** When the last trade printed, ISO — how a caller tells today's open from a stale one. */
+  tradedAt: string | null;
 };
 
 /**
@@ -88,10 +95,14 @@ export const getQuotes = cache(
 
           const price = Number(q?.regularMarketPrice);
           const change = Number(q?.regularMarketChangePercent);
+          const open = Number(q?.regularMarketOpen);
+          const time = q?.regularMarketTime ? new Date(q.regularMarketTime) : null;
           out.set(code, {
             code,
             last: Number.isFinite(price) && price > 0 ? price : null,
             changePct: Number.isFinite(change) ? change : null,
+            open: Number.isFinite(open) && open > 0 ? open : null,
+            tradedAt: time && !Number.isNaN(time.getTime()) ? time.toISOString() : null,
           });
         }
       } catch (err) {

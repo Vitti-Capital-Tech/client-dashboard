@@ -346,14 +346,17 @@ export function tabCellWrites(deal: TrackerDeal): CellWrite[] {
  * it, and the few that do point at `L4`, a cell Template does not fill; a
  * formula there would render every new deal as settling on 0 January 1900.
  *
- * `V` — Error Check — and `W` — Add-Ons — are the two columns past `U`, and both
+ * `M` — Price Rise — is left empty too; the daily price-rise job
+ * (`lib/placements/price-rise.ts`) writes the day's open against Issue Price.
+ *
+ * `W` — Error Check — and `X` — Add-Ons — are the two columns past `V`, and both
  * were being left for the desk to add by hand.
  *
- * `V` is `=U=N`: All Fees against Total Fee, the row's own arithmetic check. It
- * is self-referential like `O` and `U`, so it needs the row number too. Left
+ * `W` is `=V=O`: All Fees against Total Fee, the row's own arithmetic check. It
+ * is self-referential like `P` and `V`, so it needs the row number too. Left
  * empty it does not read as "no error", it reads as a row nobody checked.
  *
- * `W` holds the attaching options, and it is a link rather than a copy of what
+ * `X` holds the attaching options, and it is a link rather than a copy of what
  * `tabCellWrites` put in `B2` — the desk edits the tab when a grant is restated,
  * and a second copy here would go stale the moment they did. It matters more
  * than its position suggests: the P&L engine values unlisted placement options
@@ -378,28 +381,29 @@ export function overviewRowFormulas(
     `=${s}!O3`, // J — Trade Booked
     `=${s}!C6`, // K — Bid
     `=${s}!D6`, // L — Allocation
-    `=${s}!F4`, // M — Ratio
-    `=${s}!L30`, // N — Total Fee
-    `=N${row}*(1.1)`, // O — Total Fee inc GST
-    `=${s}!L25`, // P — VTC Fee
-    `=${s}!L26`, // Q — IZR Fee
-    `=${s}!L27`, // R — VIZ Fee
-    `=${s}!L28`, // S — XX3 Fee
-    `=${s}!L29`, // T — XX4 Fee
-    `=P${row}+Q${row}+R${row}+S${row}+T${row}`, // U — All Fees
-    `=U${row}=N${row}`, // V — Error Check: All Fees against Total Fee
-    `=${s}!B2`, // W — Add-Ons, the attaching options as the tab records them
+    "", // M — Price Rise, filled by the daily price-rise job
+    `=${s}!F4`, // N — Ratio
+    `=${s}!L30`, // O — Total Fee
+    `=O${row}*(1.1)`, // P — Total Fee inc GST
+    `=${s}!L25`, // Q — VTC Fee
+    `=${s}!L26`, // R — IZR Fee
+    `=${s}!L27`, // S — VIZ Fee
+    `=${s}!L28`, // T — XX3 Fee
+    `=${s}!L29`, // U — XX4 Fee
+    `=Q${row}+R${row}+S${row}+T${row}+U${row}`, // V — All Fees
+    `=V${row}=O${row}`, // W — Error Check: All Fees against Total Fee
+    `=${s}!B2`, // X — Add-Ons, the attaching options as the tab records them
   ];
 }
 
-/** The range one Overview row occupies. B through W, matching the header. */
+/** The range one Overview row occupies. B through X, matching the header. */
 export function overviewRowAddress(sheetName: string, row: number): string {
-  return `${formulaSheetRef(sheetName)}!B${row}:W${row}`;
+  return `${formulaSheetRef(sheetName)}!B${row}:X${row}`;
 }
 
 /** The columns `overviewRowFormulas` fills, as a range on a given row. */
 export function overviewRowColumns(row: number): string {
-  return `B${row}:W${row}`;
+  return `B${row}:X${row}`;
 }
 
 /**

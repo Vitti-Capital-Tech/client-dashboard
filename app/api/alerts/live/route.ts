@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import { runLiveTick } from "@/lib/alerts/live";
 import { runNewOptionsCheck } from "@/lib/alerts/new-options-run";
 import { authorisedCronRequest } from "@/lib/ingest/cron-auth";
+import { isTradingDay } from "@/lib/asx/session";
 import { manualWatchDue } from "@/lib/placements/manual-settlement";
+import { priceRiseDue } from "@/lib/placements/price-rise";
+import { runPriceRiseUpdate } from "@/lib/placements/price-rise-run";
 import { runManualSettlementCheck } from "@/lib/placements/manual-settlement-run";
 
 /**
@@ -29,7 +32,7 @@ import { runManualSettlementCheck } from "@/lib/placements/manual-settlement-run
  * ten minutes later finds the same crossing and reports it.
  *
  * ── The manual-settlement watch rides along ─────────────────────────────────
- * On the first tick of each hour, 7am–7pm Sydney on weekdays, this route also
+ * On the first tick of each hour, 7am–4pm Sydney on weekdays, this route also
  * runs the manual-settlement watch (`lib/placements/manual-settlement.ts`)
  * rather than that watch having a cron of its own. It runs alongside the tick,
  * not after it, so it does not eat the tick's 60 seconds, and its failure is
@@ -38,6 +41,10 @@ import { runManualSettlementCheck } from "@/lib/placements/manual-settlement-run
  * The new-option watch (`lib/alerts/new-options.ts`) rides along in the same
  * hourly slot, on the same terms: options that appeared on the register since
  * the last look, typically after the morning holdings ingest.
+ *
+ * And once a trading day, on the 12pm Sydney tick, the Placement Tracker's
+ * Price Rise column is refreshed (`lib/placements/price-rise.ts`): each deal's
+ * open today against its Issue Price.
  */
 
 export const dynamic = "force-dynamic";
@@ -48,8 +55,8 @@ async function handle(request: Request) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const due = manualWatchDue();
-  const sideJob = <T,>(tag: string, run: () => Promise<T>) =>
+  const now = new Date();
+  const sideJob = <T,>(tag: string, due: boolean, run: () => Promise<T>) =>
     due
       ? run().catch((error: unknown) => {
           const message = error instanceof Error ? error.message : String(error);
@@ -57,8 +64,10 @@ async function handle(request: Request) {
           return { ok: false, error: message };
         })
       : Promise.resolve(undefined);
-  const manualSettlement = sideJob("manual-settlement", runManualSettlementCheck);
-  const newOptions = sideJob("new-options", () => runNewOptionsCheck());
+  const hourly = manualWatchDue(now);
+  const manualSettlement = sideJob("manual-settlement", hourly, runManualSettlementCheck);
+  const newOptions = sideJob("new-options", hourly, () => runNewOptionsCheck());
+  const priceRise = sideJob("price-rise", priceRiseDue(now, isTradingDay), runPriceRiseUpdate);
 
   try {
     const report = await runLiveTick();
@@ -67,6 +76,7 @@ async function handle(request: Request) {
       ...report,
       manualSettlement: await manualSettlement,
       newOptions: await newOptions,
+      priceRise: await priceRise,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -76,6 +86,7 @@ async function handle(request: Request) {
         error: message,
         manualSettlement: await manualSettlement,
         newOptions: await newOptions,
+        priceRise: await priceRise,
       },
       { status: 500 },
     );

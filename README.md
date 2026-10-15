@@ -379,13 +379,19 @@ MANUAL_SETTLEMENT_NOTIFY_TO=a@vitti.capital,b@vitti.capital   # comma or semicol
 
 Sent from `STAFF_NOTIFY_FROM` (or `BROKER_MAILBOX`), reading the tracker through `PLACEMENT_TRACKER_URL`. Unset `MANUAL_SETTLEMENT_NOTIFY_TO` and the watch is off.
 
-Setup: apply `supabase/migrations/20261013090000_manual_settlement_alerts.sql` (the once-only ledger). There is no cron of its own: the existing `alert-live-tick` job (`/api/alerts/live`) runs the watch on its first tick of each hour, 7am–7pm Sydney, Mon–Fri. Announcements are read from ASX's search page (`announcements.do?by=asxCode&period=M6`), which returns six months of history as plain HTML. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/manual-settlement`.
+Setup: apply `supabase/migrations/20261013090000_manual_settlement_alerts.sql` (the once-only ledger). There is no cron of its own: the existing `alert-live-tick` job (`/api/alerts/live`) runs the watch on its first tick of each hour, 7am–4pm Sydney, Mon–Fri. Announcements are read from ASX's search page (`announcements.do?by=asxCode&period=M6`), which returns six months of history as plain HTML. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/manual-settlement`.
 
 #### New-option alert (same recipients as the manual-settlement alert)
 
 When a listed or unlisted option appears on the options register for an account that did not hold it before — typically after the morning holdings ingest and P&L recompute — `MANUAL_SETTLEMENT_NOTIFY_TO` gets one mail listing each new option (ticker, company, listed/unlisted, client, account, quantity, expiry). Runs in the same hourly slot of `/api/alerts/live`.
 
 Setup: apply `supabase/migrations/20261015090000_option_register_seen.sql`. The first run records the current register as the baseline and mails nothing. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/alerts/new-options`.
+
+#### Placement Tracker — Price Rise column (M)
+
+Once a trading day at 12pm Sydney, the Overview's **Price Rise** column is refreshed for every row with a listed ASX code and an Issue Price: the day's opening price from Yahoo against the Issue Price, written as `$0.0090 (+28.57%)`. A code that has not traded yet today keeps its previous value (Yahoo would otherwise report the last session's open); private deals and rows without an Issue Price are left alone. New placement rows are written with M blank, for this job to fill.
+
+No setup beyond `PLACEMENT_TRACKER_URL` and the Graph write permission the tracker writer already uses; it runs on the 12:00 tick of `/api/alerts/live`. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/price-rise`.
 
 #### Weekly position commentary (optional — Claude API)
 Each week after the Friday close, a short note is written against every security a client holds — what has been weighing on it, or where it stands if the holder is ahead. Without a key the feature is simply off: the job reports `not-configured` and returns success, and the portal renders exactly as before with no note on the holding.

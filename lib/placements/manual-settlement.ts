@@ -29,7 +29,7 @@ import type { GraphCall, TrackerTarget } from "./tracker-writer.ts";
  * ── Who runs it ─────────────────────────────────────────────────────────────
  * No cron of its own. The existing `alert-live-tick` job calls
  * `/api/alerts/live` every 10 minutes; that route runs this watch on the first
- * tick of each hour, 7am–7pm Sydney on weekdays (`manualWatchDue`).
+ * tick of each hour, 7am–4pm Sydney on weekdays (`manualWatchDue`).
  *
  * ── Once per announcement ───────────────────────────────────────────────────
  * Every alert is keyed on the ASX document key and claimed in the database
@@ -83,9 +83,13 @@ export function isManualSettlement(value: unknown): boolean {
   return String(value ?? "").trim().toLowerCase() === "manual";
 }
 
-/** A listed ASX code — the Overview also carries private deals named in full. */
+/**
+ * A listed ASX code — the Overview also carries private deals named in full.
+ * Matched as written, not uppercased: the tracker writes codes in capitals, and
+ * `Yatima` uppercased would pass for a six-letter code.
+ */
 function asxCode(value: unknown): string | null {
-  const code = String(value ?? "").trim().toUpperCase();
+  const code = String(value ?? "").trim();
   return /^[A-Z0-9]{3,6}$/.test(code) ? code : null;
 }
 
@@ -268,7 +272,7 @@ export function manualSettlementMail(alert: ManualSettlementAlert): StaffMail {
 
 /**
  * Whether this tick should run the watch: the first 10-minute tick of each hour,
- * 7am–7pm Sydney, Monday to Friday. The live tick fires every 10 minutes; with
+ * 7am–4pm Sydney, Monday to Friday. The live tick fires every 10 minutes; with
  * six months of history per fetch, hourly is plenty and keeps the Graph and
  * ASX reads to a dozen runs a day.
  */
@@ -286,7 +290,7 @@ export function manualWatchDue(at: Date = new Date()): boolean {
   );
   const hour = Number(parts.hour);
   const minute = Number(parts.minute);
-  return !["Sat", "Sun"].includes(parts.weekday) && hour >= 7 && hour <= 18 && minute < 10;
+  return !["Sat", "Sun"].includes(parts.weekday) && hour >= 7 && hour <= 16 && minute < 10;
 }
 
 /* ------------------------------------------------------------------ */

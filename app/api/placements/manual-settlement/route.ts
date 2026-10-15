@@ -5,7 +5,7 @@ import { runManualSettlementCheck } from "@/lib/placements/manual-settlement-run
 /**
  * Run the manual-settlement watch now, by hand.
  *
- * The scheduled run happens inside `/api/alerts/live` (hourly, 7am–7pm Sydney,
+ * The scheduled run happens inside `/api/alerts/live` (hourly, 7am–4pm Sydney,
  * weekdays); this route skips that clock so the watch can be tested or forced
  * with a curl. Each announcement is still mailed only once.
  *
