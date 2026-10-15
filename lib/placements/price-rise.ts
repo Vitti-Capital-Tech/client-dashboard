@@ -1,57 +1,63 @@
 import { deskDate } from "../asx/session.ts";
+import { isoFromExcelSerial } from "./manual-settlement.ts";
 import { OVERVIEW_FIRST_DATA_ROW } from "./tracker-format.ts";
 import type { GraphCall, TrackerTarget } from "./tracker-writer.ts";
 
 /**
- * Price Rise: each deal's opening price today against its Issue Price, written
- * into the Overview's Price Rise column (M) as `$0.0090 (+28.57%)`.
+ * Price Rise: each deal's opening price ON ITS SETTLEMENT DATE against its Issue
+ * Price, written once into the Overview's Price Rise column (M) as
+ * `$0.0090 (+28.57%)`.
+ *
+ * ── Which rows ──────────────────────────────────────────────────────────────
+ * Rows whose Price Rise cell is still EMPTY, whose Settlement Date (F) has
+ * arrived, with a listed ASX code and an Issue Price (H). A filled cell is never
+ * touched again — the figure is a fact about settlement day, not a running
+ * price. Private deals (named in full, like `Yatima`) and rows with no Issue
+ * Price or Settlement Date are left alone.
+ *
+ * ── Which open ──────────────────────────────────────────────────────────────
+ * The open of the first trading session on or after the Settlement Date — the
+ * settlement day itself unless the code did not trade that day (a halt, say),
+ * in which case the next day it did. Read from Yahoo's daily history, so a row
+ * written weeks after settlement still gets settlement day's open, not today's.
  *
  * ── When ────────────────────────────────────────────────────────────────────
  * Once a trading day at 12pm Sydney, from the existing `alert-live-tick` job
  * (`/api/alerts/live`) rather than a cron of its own — see `priceRiseDue`. By
- * noon the market has been open two hours, so every code that is going to
- * trade at all usually has.
- *
- * ── Which rows ──────────────────────────────────────────────────────────────
- * Every Overview row with a listed ASX code and an Issue Price. Private deals
- * (named in full, like `Yatima`) and rows whose Issue Price is blank or an
- * error are left alone.
- *
- * ── A code that has not traded today ────────────────────────────────────────
- * Yahoo keeps quoting the PREVIOUS session's open for a code with no trade
- * today, so an open is used only when the last trade printed today (Sydney).
- * Otherwise the cell keeps whatever it had — writing yesterday's open under
- * today's run would present a stale price as a fresh one.
+ * noon on settlement day the market has been open two hours, so the day's open
+ * exists. A row Yahoo cannot fill yet stays empty and is tried again next day.
  *
  * ── One write ───────────────────────────────────────────────────────────────
- * Column M is read as formulas and written back as one range, `M4:M<last>`.
- * Cells this run has nothing new for are written back exactly as they were, so
- * a value the desk typed by hand survives.
+ * Column M is read as formulas and written back as one range, `M4:M<last>`,
+ * with every cell this run did not fill written back exactly as it was.
  *
- * Free of `server-only`, with Graph and the quote feed injected.
+ * Free of `server-only`, with Graph and the price history injected.
  */
 
 /** The Overview's Price Rise column. */
 export const PRICE_RISE_COLUMN = "M";
 
-export type OpenQuote = { open: number | null; tradedAt: string | null };
+/** How many history lookups run at once — Yahoo is an unofficial endpoint. */
+const CONCURRENCY = 6;
+
+/** A session's open, and the Sydney date it was struck on. */
+export type SessionOpen = { open: number; on: string };
 
 export type PriceRiseDeps = {
   /** Today on the desk's clock, `YYYY-MM-DD`. */
   today: string;
   graph: GraphCall;
   target: TrackerTarget;
-  /** Quotes for ASX codes, keyed by code. */
-  quotes: (codes: string[]) => Promise<Map<string, OpenQuote>>;
+  /** The first traded session's open on or after `from`, or null when there is none yet. */
+  openFrom: (code: string, from: string) => Promise<SessionOpen | null>;
 };
 
 export type PriceRiseReport = {
   rows: number;
-  updated: number;
-  /** Codes with no trade yet today — their cells were left as they were. */
-  noTradeToday: string[];
-  /** Codes Yahoo returned nothing for. */
-  noQuote: string[];
+  /** Cells written this run. */
+  updated: { ticker: string; settlementDate: string; openOn: string; text: string }[];
+  /** Rows due but with no open yet — tried again next run. */
+  pending: { ticker: string; settlementDate: string }[];
   error?: string;
 };
 
@@ -76,11 +82,6 @@ export function priceRiseText(issuePrice: number, open: number): string {
   return `${price(open)} (${sign}${pct.toFixed(2)}%)`;
 }
 
-/** True when the trade behind a quote printed today on the Sydney clock. */
-export function tradedToday(tradedAt: string | null, today: string): boolean {
-  return tradedAt !== null && deskDate(new Date(tradedAt)) === today;
-}
-
 /**
  * When the run is due: the first 10-minute tick of 12pm Sydney, on an ASX
  * trading day. The caller passes `isTradingDay` so the exchange calendar stays
@@ -103,15 +104,29 @@ export function priceRiseDue(
   return Number(parts.hour) === 12 && Number(parts.minute) < 10 && isTradingDay(deskDate(at));
 }
 
+/** Run `fn` over `items`, at most `limit` at a time, keeping order. */
+async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 export async function runPriceRise(deps: PriceRiseDeps, lastRow = 400): Promise<PriceRiseReport> {
-  const report: PriceRiseReport = { rows: 0, updated: 0, noTradeToday: [], noQuote: [] };
+  const report: PriceRiseReport = { rows: 0, updated: [], pending: [] };
   const sheet = `/drives/${deps.target.driveId}/items/${deps.target.itemId}/workbook/worksheets('${encodeURIComponent(
     deps.target.overviewSheet,
   )}')`;
   const first = OVERVIEW_FIRST_DATA_ROW;
 
-  // C (ticker) through M (Price Rise): values for the ticker and Issue Price,
-  // formulas for M so whatever is there can be written back untouched.
+  // C (ticker) through M (Price Rise): values for ticker, Settlement Date and
+  // Issue Price, formulas for M so whatever is there is written back untouched.
   const read = await deps.graph(
     `${sheet}/range(address='C${first}:${PRICE_RISE_COLUMN}${lastRow}')?$select=values,formulas`,
   );
@@ -129,36 +144,36 @@ export async function runPriceRise(deps: PriceRiseDeps, lastRow = 400): Promise<
     if (String(row?.[0] ?? "").trim() !== "") last = i;
   });
   if (last === -1) return report;
+  report.rows = last + 1;
 
-  const rows = values.slice(0, last + 1).map((row, i) => ({
-    code: asxCode(row?.[0]),
-    issue: typeof row?.[5] === "number" ? row[5] : Number.NaN,
-    current: formulas[i]?.[10] ?? "",
-  }));
-  report.rows = rows.length;
+  const column = values.slice(0, last + 1).map((_, i) => [formulas[i]?.[10] ?? ""]);
 
-  const codes = [...new Set(rows.flatMap((r) => (r.code && r.issue > 0 ? [r.code] : [])))];
-  const quotes = await deps.quotes(codes);
-
-  const missing = new Set<string>();
-  const stale = new Set<string>();
-  const column = rows.map((r) => {
-    if (!r.code || !(r.issue > 0)) return [r.current];
-    const q = quotes.get(r.code);
-    if (!q || q.open === null) {
-      missing.add(r.code);
-      return [r.current];
-    }
-    if (!tradedToday(q.tradedAt, deps.today)) {
-      stale.add(r.code);
-      return [r.current];
-    }
-    report.updated++;
-    return [priceRiseText(r.issue, q.open)];
+  // Due: empty cell, listed code, an Issue Price, and a Settlement Date that has arrived.
+  const due = values.slice(0, last + 1).flatMap((row, i) => {
+    const code = asxCode(row?.[0]);
+    const settlementDate = isoFromExcelSerial(row?.[3]);
+    const issue = typeof row?.[5] === "number" ? row[5] : Number.NaN;
+    const empty = String(column[i][0] ?? "").trim() === "";
+    if (!empty || !code || !settlementDate || !(issue > 0) || settlementDate > deps.today) return [];
+    return [{ i, code, settlementDate, issue }];
   });
-  report.noQuote = [...missing];
-  report.noTradeToday = [...stale];
-  if (report.updated === 0) return report;
+  if (due.length === 0) return report;
+
+  const opens = await pool(due, CONCURRENCY, (d) =>
+    deps.openFrom(d.code, d.settlementDate).catch(() => null),
+  );
+
+  due.forEach((d, n) => {
+    const o = opens[n];
+    if (!o) {
+      report.pending.push({ ticker: d.code, settlementDate: d.settlementDate });
+      return;
+    }
+    const text = priceRiseText(d.issue, o.open);
+    column[d.i] = [text];
+    report.updated.push({ ticker: d.code, settlementDate: d.settlementDate, openOn: o.on, text });
+  });
+  if (report.updated.length === 0) return report;
 
   const write = await deps.graph(
     `${sheet}/range(address='${PRICE_RISE_COLUMN}${first}:${PRICE_RISE_COLUMN}${first + last}')`,
@@ -166,7 +181,7 @@ export async function runPriceRise(deps: PriceRiseDeps, lastRow = 400): Promise<
   );
   if (!write.ok) {
     report.error = `Could not write ${PRICE_RISE_COLUMN} on ${deps.target.overviewSheet} (${write.status}).`;
-    report.updated = 0;
+    report.updated = [];
   }
   return report;
 }

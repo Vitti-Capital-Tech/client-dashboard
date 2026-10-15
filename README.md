@@ -389,7 +389,7 @@ Setup: apply `supabase/migrations/20261015090000_option_register_seen.sql`. The 
 
 #### Placement Tracker — Price Rise column (M)
 
-Once a trading day at 12pm Sydney, the Overview's **Price Rise** column is refreshed for every row with a listed ASX code and an Issue Price: the day's opening price from Yahoo against the Issue Price, written as `$0.0090 (+28.57%)`. A code that has not traded yet today keeps its previous value (Yahoo would otherwise report the last session's open); private deals and rows without an Issue Price are left alone. New placement rows are written with M blank, for this job to fill.
+Each deal's **opening price on its Settlement Date** against its Issue Price, written once into the Overview's **Price Rise** column as `$0.0090 (+28.57%)`. If the code did not trade on settlement day, the next day it did is used. A filled cell is never rewritten; an empty one whose Settlement Date has arrived is filled by the 12pm Sydney run on a trading day — on settlement day itself, normally (from Yahoo's daily history, so late rows still get settlement day's open). Private deals and rows without an Issue Price or Settlement Date are left alone. New placement rows are written with M blank, for this job to fill.
 
 No setup beyond `PLACEMENT_TRACKER_URL` and the Graph write permission the tracker writer already uses; it runs on the 12:00 tick of `/api/alerts/live`. To run it by hand: `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/placements/price-rise`.
 

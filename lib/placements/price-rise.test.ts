@@ -1,27 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  priceRiseDue,
-  priceRiseText,
-  runPriceRise,
-  tradedToday,
-  type OpenQuote,
-} from "./price-rise.ts";
+import { priceRiseDue, priceRiseText, runPriceRise, type SessionOpen } from "./price-rise.ts";
+import { excelSerialDate } from "./tracker-format.ts";
 import type { GraphCall } from "./tracker-writer.ts";
+
+const serial = (iso: string) => excelSerialDate(iso)!;
 
 test("price rise: open against issue price, signed, to two places", () => {
   assert.equal(priceRiseText(0.007, 0.009), "$0.0090 (+28.57%)");
   assert.equal(priceRiseText(0.041, 0.033), "$0.0330 (-19.51%)");
   assert.equal(priceRiseText(0.1, 0.1), "$0.1000 (0.00%)");
   assert.equal(priceRiseText(1.2, 1.5), "$1.50 (+25.00%)");
-});
-
-test("price rise: an open counts only when the last trade printed today, Sydney", () => {
-  // 15 Oct 2026 12:24pm AEDT.
-  assert.equal(tradedToday("2026-10-15T01:24:26.000Z", "2026-10-15"), true);
-  // 14 Oct 2026 2:22pm AEDT — yesterday's open, still quoted by Yahoo.
-  assert.equal(tradedToday("2026-10-14T03:22:04.000Z", "2026-10-15"), false);
-  assert.equal(tradedToday(null, "2026-10-15"), false);
 });
 
 test("price rise: due on the 12pm Sydney tick of a trading day only", () => {
@@ -33,9 +22,9 @@ test("price rise: due on the 12pm Sydney tick of a trading day only", () => {
   assert.equal(priceRiseDue(new Date("2026-10-15T01:00:00Z"), () => false), false, "holiday");
 });
 
-/** Overview C..M as Graph returns it: ticker, …, Issue Price at H, Price Rise at M. */
-function overviewRow(ticker: string, issue: unknown, priceRise = ""): unknown[] {
-  return [ticker, "", "", "", "", issue, "", "", "", "", priceRise];
+/** Overview C..M as Graph returns it: ticker, …, Settlement Date at F, Issue Price at H, Price Rise at M. */
+function overviewRow(ticker: string, settlement: string | "", issue: unknown, priceRise = ""): unknown[] {
+  return [ticker, "", "", settlement ? serial(settlement) : "", "", issue, "", "", "", "", priceRise];
 }
 
 function fakeGraph(rows: unknown[][]) {
@@ -51,50 +40,55 @@ function fakeGraph(rows: unknown[][]) {
   return { graph, writes };
 }
 
-test("price rise: one write of column M, keeping cells it has nothing new for", async () => {
+const target = { driveId: "d", itemId: "i", overviewSheet: "2026 Overview" };
+
+test("price rise: settlement-day open, written once, everything else left as it was", async () => {
   const { graph, writes } = fakeGraph([
-    overviewRow("AAU", 0.007),
-    overviewRow("GG1", 0.1, "$0.0900 (-10.00%)"), // no trade today
-    overviewRow("Yatima", 0.05, "by hand"), // private deal
-    overviewRow("OD6", "#DIV/0!"), // no issue price
-    overviewRow("ZZZ", 0.2), // no quote
-    overviewRow("", ""),
-    overviewRow("", ""),
+    overviewRow("AAU", "2026-10-08", 0.007), // settled, empty → filled
+    overviewRow("P1E", "2026-10-08", 0.041, "$0.0400 (-2.44%)"), // already filled → untouched
+    overviewRow("CVB", "2026-10-26", 0.05), // settles later → not yet
+    overviewRow("Yatima", "2026-10-08", 0.05, "by hand"), // private deal
+    overviewRow("OD6", "2026-10-09", "#DIV/0!"), // no issue price
+    overviewRow("TOR", "2026-10-15", 0.19), // settles today, no bar yet → pending
+    overviewRow("", "", ""),
   ]);
-  const quotes = new Map<string, OpenQuote>([
-    ["AAU", { open: 0.009, tradedAt: "2026-10-15T01:24:26.000Z" }],
-    ["GG1", { open: 0.085, tradedAt: "2026-10-14T03:22:04.000Z" }],
-  ]);
+  const asked: string[] = [];
+  const opens = new Map<string, SessionOpen>([["AAU", { open: 0.007, on: "2026-10-08" }]]);
+
   const report = await runPriceRise({
     today: "2026-10-15",
     graph,
-    target: { driveId: "d", itemId: "i", overviewSheet: "2026 Overview" },
-    quotes: async (codes) => {
-      assert.deepEqual(codes, ["AAU", "GG1", "ZZZ"]);
-      return quotes;
+    target,
+    openFrom: async (code, from) => {
+      asked.push(`${code}@${from}`);
+      return opens.get(code) ?? null;
     },
   });
 
-  assert.equal(report.rows, 5);
-  assert.equal(report.updated, 1);
-  assert.deepEqual(report.noTradeToday, ["GG1"]);
-  assert.deepEqual(report.noQuote, ["ZZZ"]);
+  assert.deepEqual(asked.sort(), ["AAU@2026-10-08", "TOR@2026-10-15"]);
+  assert.equal(report.rows, 6);
+  assert.deepEqual(report.updated, [
+    { ticker: "AAU", settlementDate: "2026-10-08", openOn: "2026-10-08", text: "$0.0070 (0.00%)" },
+  ]);
+  assert.deepEqual(report.pending, [{ ticker: "TOR", settlementDate: "2026-10-15" }]);
 
   assert.equal(writes.length, 1);
-  assert.match(writes[0].path, /range\(address='M4:M8'\)/);
+  assert.match(writes[0].path, /range\(address='M4:M9'\)/);
   assert.deepEqual(writes[0].body, {
-    formulas: [["$0.0090 (+28.57%)"], ["$0.0900 (-10.00%)"], ["by hand"], [""], [""]],
+    formulas: [["$0.0070 (0.00%)"], ["$0.0400 (-2.44%)"], [""], ["by hand"], [""], [""]],
   });
 });
 
-test("price rise: nothing to update means nothing is written", async () => {
-  const { graph, writes } = fakeGraph([overviewRow("GG1", 0.1)]);
+test("price rise: a lookup that throws leaves the row pending rather than failing the run", async () => {
+  const { graph, writes } = fakeGraph([overviewRow("AAU", "2026-10-08", 0.007)]);
   const report = await runPriceRise({
     today: "2026-10-15",
     graph,
-    target: { driveId: "d", itemId: "i", overviewSheet: "2026 Overview" },
-    quotes: async () => new Map(),
+    target,
+    openFrom: async () => {
+      throw new Error("Yahoo 429");
+    },
   });
-  assert.equal(report.updated, 0);
+  assert.deepEqual(report.pending, [{ ticker: "AAU", settlementDate: "2026-10-08" }]);
   assert.equal(writes.length, 0);
 });
