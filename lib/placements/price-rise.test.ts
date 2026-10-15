@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { priceRiseDue, priceRiseText, runPriceRise, type SessionOpen } from "./price-rise.ts";
+import { asxCode, priceRiseDue, priceRiseText, runPriceRise, type SessionOpen } from "./price-rise.ts";
 import { excelSerialDate } from "./tracker-format.ts";
 import type { GraphCall } from "./tracker-writer.ts";
 
@@ -10,7 +10,18 @@ test("price rise: open against issue price, signed, to two places", () => {
   assert.equal(priceRiseText(0.007, 0.009), "$0.0090 (+28.57%)");
   assert.equal(priceRiseText(0.041, 0.033), "$0.0330 (-19.51%)");
   assert.equal(priceRiseText(0.1, 0.1), "$0.1000 (0.00%)");
-  assert.equal(priceRiseText(1.2, 1.5), "$1.50 (+25.00%)");
+  assert.equal(priceRiseText(1.2, 1.5), "$1.500 (+25.00%)");
+  // EIQ, 6 Jul 2026: a half-cent tick above a dollar must not print as $1.60.
+  assert.equal(priceRiseText(1.45, 1.605), "$1.605 (+10.69%)");
+});
+
+test("price rise: repeat raises are read by their code, private deals are not", () => {
+  assert.equal(asxCode("PV1 (a)"), "PV1");
+  assert.equal(asxCode("CC9 (b)"), "CC9");
+  assert.equal(asxCode("L1M(T2)"), "L1M");
+  assert.equal(asxCode("AAU"), "AAU");
+  assert.equal(asxCode("Yatima"), null);
+  assert.equal(asxCode(""), null);
 });
 
 test("price rise: due on the 12pm Sydney tick of a trading day only", () => {

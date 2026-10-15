@@ -64,15 +64,22 @@ export type PriceRiseReport = {
 /**
  * A listed ASX code — the Overview also carries private deals named in full.
  * Matched as written, not uppercased: the tracker writes codes in capitals, and
- * `Yatima` uppercased would pass for a six-letter code.
+ * `Yatima` uppercased would pass for a six-letter code. A repeat raise is
+ * labelled `PV1 (a)`, `CC9 (b)` or `L1M(T2)`; the code is the part before the
+ * bracket.
  */
-function asxCode(value: unknown): string | null {
-  const code = String(value ?? "").trim();
-  return /^[A-Z0-9]{3,6}$/.test(code) ? code : null;
+export function asxCode(value: unknown): string | null {
+  const m = /^([A-Z0-9]{3,6})\s*(?:\([^)]*\))?$/.exec(String(value ?? "").trim());
+  return m ? m[1] : null;
 }
 
+/**
+ * Four places under a dollar, three above. ASX ticks are half a cent between
+ * 10c and $2, so `$1.605` is a real open and two places would print it as
+ * `$1.60` beside a percentage worked from $1.605.
+ */
 function price(n: number): string {
-  return `$${n >= 1 ? n.toFixed(2) : n.toFixed(4)}`;
+  return `$${n >= 1 ? n.toFixed(3) : n.toFixed(4)}`;
 }
 
 /** `$0.0090 (+28.57%)` — the open, and how far it sits from the issue price. */
