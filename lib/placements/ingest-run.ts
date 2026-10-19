@@ -7,6 +7,7 @@ import { readStylePlan, stylePlanNotes } from "./tracker-style-store.ts";
 import { getMicrosoftAccessToken } from "../remote-sheets.ts";
 import {
   DEFAULT_TRACKER_BATCH,
+  claimTrackerCandidate,
   markTrackerFailed,
   markTrackerWritten,
   orderTrackerQueue,
@@ -146,6 +147,9 @@ export async function writeOwedDealsToTracker(
       // range already; these are the two the plan can answer on its own.
       return { plan: stored.plan, notes: stylePlanNotes(stored, "") };
     },
+    // One run per deal: the webhook can fire twice for one mail, and two runs
+    // writing one deal is how MCO got a phantom `MCO (b)` on 14 October 2026.
+    claim: (item) => claimTrackerCandidate(db, item.id),
     // Recorded per deal, as it settles. A run that dies on its second tab keeps
     // the first — which is the whole point of the queue.
     onSettled: async (item, outcome) => {

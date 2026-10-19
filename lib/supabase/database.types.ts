@@ -969,6 +969,7 @@ export type Database = {
           summary: string
           ticker: string
           tracker_attempts: number
+          tracker_claimed_at: string | null
           tracker_error: string | null
           tracker_sheet: string | null
           tracker_written_at: string | null
@@ -992,6 +993,7 @@ export type Database = {
           summary?: string
           ticker: string
           tracker_attempts?: number
+          tracker_claimed_at?: string | null
           tracker_error?: string | null
           tracker_sheet?: string | null
           tracker_written_at?: string | null
@@ -1015,6 +1017,7 @@ export type Database = {
           summary?: string
           ticker?: string
           tracker_attempts?: number
+          tracker_claimed_at?: string | null
           tracker_error?: string | null
           tracker_sheet?: string | null
           tracker_written_at?: string | null

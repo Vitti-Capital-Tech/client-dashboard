@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import { fakeDb } from "../test-support/fake-db.ts";
 import {
   DEFAULT_TRACKER_BATCH,
+  TRACKER_CLAIM_TTL_MS,
+  claimTrackerCandidate,
   markTrackerFailed,
   markTrackerWritten,
   orderTrackerQueue,
@@ -192,6 +194,40 @@ test("tracker queue: a failed write leaves the deal owed — this is the whole f
     [{ id: "c1", attempts: 2 }],
     "still owed, and the next run knows how many times it has tried",
   );
+});
+
+test("tracker claim: of two runs on one deal, only the first gets it", async () => {
+  // MCO, 14 October 2026: two webhook notifications for one mail, two runs, and
+  // a phantom `MCO (b)`. The claim is what makes the second run step aside.
+  const { db } = fakeDb({ placement_candidates: [row()] });
+  const now = new Date("2026-10-13T23:44:45Z");
+
+  assert.deepEqual(await claimTrackerCandidate(db, "c1", { now }), { claimed: true });
+  assert.deepEqual(await claimTrackerCandidate(db, "c1", { now }), { claimed: false });
+});
+
+test("tracker claim: a run killed holding the claim does not hold the deal forever", async () => {
+  const { db } = fakeDb({ placement_candidates: [row({ tracker_claimed_at: "2026-10-13T23:44:45.000Z" })] });
+
+  const soon = new Date(Date.parse("2026-10-13T23:44:45Z") + TRACKER_CLAIM_TTL_MS - 1000);
+  assert.equal((await claimTrackerCandidate(db, "c1", { now: soon })).claimed, false);
+
+  const later = new Date(Date.parse("2026-10-13T23:44:45Z") + TRACKER_CLAIM_TTL_MS + 1000);
+  assert.equal((await claimTrackerCandidate(db, "c1", { now: later })).claimed, true);
+});
+
+test("tracker claim: a written deal cannot be claimed, and settling releases the claim", async () => {
+  const { db, tables } = fakeDb({ placement_candidates: [row(), row({ id: "c2" })] });
+
+  await claimTrackerCandidate(db, "c1");
+  await markTrackerWritten(db, "c1", { sheet: "MCO" });
+  assert.equal(tables.placement_candidates[0].tracker_claimed_at, null);
+  assert.equal((await claimTrackerCandidate(db, "c1")).claimed, false, "already in the workbook");
+
+  await claimTrackerCandidate(db, "c2");
+  await markTrackerFailed(db, "c2", { attempts: 0, error: "423 resourceLocked" });
+  assert.equal(tables.placement_candidates[1].tracker_claimed_at, null);
+  assert.equal((await claimTrackerCandidate(db, "c2")).claimed, true, "a failure is retried at once");
 });
 
 test("tracker queue: a paragraph of Graph guidance is trimmed, not stored whole", async () => {

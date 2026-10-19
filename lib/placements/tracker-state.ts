@@ -135,6 +135,57 @@ export function orderTrackerQueue<T extends { attempts: number; received_at: str
 }
 
 /**
+ * How long a claim holds before another run may take the deal over.
+ *
+ * Both triggers are capped at 60 seconds, so a claim older than this belongs to
+ * an invocation that is gone — killed mid-write, which is exactly the run whose
+ * deal must be picked up again. Five minutes is that ceiling with room to spare,
+ * and still well inside the hourly sweep that does the picking up.
+ */
+export const TRACKER_CLAIM_TTL_MS = 5 * 60_000;
+
+export type ClaimResult = { claimed: boolean; error?: string };
+
+/**
+ * Take this deal for this run, or learn that another run has it.
+ *
+ * One conditional UPDATE: it matches only while the deal is still owed and
+ * unclaimed (or its claim is stale), and Postgres re-checks that condition after
+ * waiting out a concurrent update of the same row — so of two runs racing, one
+ * gets the row back and the other gets nothing. Without it, two webhook
+ * notifications for one mail meant two runs writing one deal, and on 14 October
+ * 2026 that produced `MCO` and `MCO (b)`.
+ */
+export async function claimTrackerCandidate(
+  db: AdminDb,
+  id: string,
+  opts: { now?: Date } = {},
+): Promise<ClaimResult> {
+  const now = opts.now ?? new Date();
+  const stale = new Date(now.getTime() - TRACKER_CLAIM_TTL_MS).toISOString();
+
+  const { data, error } = await db
+    .from("placement_candidates")
+    .update({ tracker_claimed_at: now.toISOString() })
+    .eq("id", id)
+    .is("tracker_written_at", null)
+    .or(`tracker_claimed_at.is.null,tracker_claimed_at.lt."${stale}"`)
+    .select("id");
+
+  if (error) {
+    const message = error.message ?? String(error);
+    return {
+      claimed: false,
+      error: /tracker_claimed_at|column/i.test(message)
+        ? `Could not claim a deal for the tracker (${message}). Apply ` +
+          `supabase/migrations/20261019090000_placement_tracker_claim.sql.`
+        : `Could not claim a deal for the tracker: ${message}`,
+    };
+  }
+  return { claimed: (data ?? []).length > 0 };
+}
+
+/**
  * This deal is in the workbook — stop owing it.
  *
  * `sheet` is null when the duplicate guard found it already on the Overview:
@@ -153,6 +204,7 @@ export async function markTrackerWritten(
       tracker_written_at: (opts.now ?? new Date()).toISOString(),
       tracker_sheet: opts.sheet ?? null,
       tracker_error: null,
+      tracker_claimed_at: null,
     })
     .eq("id", id);
 
@@ -167,9 +219,9 @@ export async function markTrackerWritten(
  * This deal is still owed, and here is why it was not written this time.
  *
  * The attempt count is incremented from the value the run read rather than in
- * the database, because two runs writing the same deal at once is not a thing
- * this schedule can do — and a read-modify-write that is wrong by one under a
- * race it cannot have is not worth an RPC to avoid.
+ * the database: the claim (`claimTrackerCandidate`) means only one run writes a
+ * deal at a time, so the read-modify-write has nothing to race with. Releasing
+ * the claim lets the next run retry straight away rather than after it expires.
  */
 export async function markTrackerFailed(
   db: AdminDb,
@@ -183,6 +235,7 @@ export async function markTrackerFailed(
       // Trimmed: a Graph error message can carry a paragraph of guidance, and
       // this column is read at a glance.
       tracker_error: opts.error.slice(0, 500),
+      tracker_claimed_at: null,
     })
     .eq("id", id);
 

@@ -101,6 +101,29 @@ class FakeBuilder {
   }
 
   /**
+   * `or("a.is.null,b.lt.\"x\"")` — PostgREST's flat OR, as the tracker claim
+   * uses it. Only `is.null`, `eq`, `lt` and `gt` terms, no nesting; a value may
+   * be double-quoted. Comparisons against a missing column fail, as in SQL.
+   */
+  or(expr: string) {
+    const terms = expr.split(",").map((t) => {
+      const [col, op, ...rest] = t.trim().split(".");
+      const val = rest.join(".").replace(/^"(.*)"$/, "$1");
+      return (r: Row) => {
+        const v = r[col] ?? null;
+        if (op === "is") return val === "null" ? v === null : String(v) === val;
+        if (v === null) return false;
+        if (op === "eq") return String(v) === val;
+        if (op === "lt") return v < val;
+        if (op === "gt") return v > val;
+        throw new Error(`fake db: unsupported or() operator "${op}"`);
+      };
+    });
+    this.filters.push((r) => terms.some((t) => t(r)));
+    return this;
+  }
+
+  /**
    * `maybeSingle()` — one row or null, never an error for "no rows".
    *
    * Distinct from `single()`, which the real client errors on when nothing
@@ -138,7 +161,7 @@ class FakeBuilder {
 
   /** `insert(...).select("id")` — the builder keeps going and returns rows. */
   select(cols?: string) {
-    if (this.op === "insert") {
+    if (this.op === "insert" || this.op === "update") {
       this.returning = true;
       return this;
     }
@@ -266,8 +289,9 @@ class FakeBuilder {
       }
 
       case "update": {
-        for (const r of this.matching()) Object.assign(r, this.payload);
-        return { error: null };
+        const hit = this.matching();
+        for (const r of hit) Object.assign(r, this.payload);
+        return { data: this.returning ? hit : null, error: null };
       }
 
       case "delete": {

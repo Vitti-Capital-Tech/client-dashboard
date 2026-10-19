@@ -77,6 +77,16 @@ export type TrackerSyncDeps<T extends CandidateFeedItem = CandidateFeedItem> = {
    */
   onSettled?: (item: T, outcome: TrackerOutcome) => Promise<void>;
   /**
+   * Take the deal for this run before the workbook is touched.
+   *
+   * `claimed: false` means another run is writing it right now, and this run
+   * leaves it alone — two runs on one deal is how `MCO` and `MCO (b)` both came
+   * to exist on 14 October 2026. An `error` means claiming itself is broken, and
+   * that blocks the run like a missing permission does: writing unclaimed would
+   * bring the race straight back. Absent, every deal is written unclaimed.
+   */
+  claim?: (item: T) => Promise<{ claimed: boolean; error?: string }>;
+  /**
    * Template's formatting for a workbook, resolved on demand and once per run.
    *
    * A function rather than a value because the workbook is only known after
@@ -263,6 +273,21 @@ export async function syncTrackerRows<T extends CandidateFeedItem>(
       report.failed.push({ ticker: deal.ticker, error: blocked });
       await settled(item, { state: "failed", error: blocked });
       continue;
+    }
+
+    if (deps.claim) {
+      const claim = await deps.claim(item);
+      if (claim.error) {
+        // Not settled: nothing is wrong with the deal, and it stays owed.
+        report.ok = false;
+        blocked = claim.error;
+        report.failed.push({ ticker: deal.ticker, error: blocked });
+        continue;
+      }
+      if (!claim.claimed) {
+        report.notes.push(`${deal.ticker}: another run is writing this deal right now — left to it.`);
+        continue;
+      }
     }
 
     const res = await writeDealToTracker(deal, {

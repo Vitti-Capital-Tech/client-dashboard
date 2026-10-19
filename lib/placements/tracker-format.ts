@@ -263,6 +263,35 @@ export function termsCell(values: unknown[][], address: string): unknown {
   return values?.[row]?.[col - 1] ?? "";
 }
 
+/**
+ * Is this leftover tab THIS deal's own half-finished write?
+ *
+ * `tabCellWrites` fills `D3` first, so a run killed anywhere after its first cell
+ * leaves a tab whose ASX code is already set. Reading any filled `D3` as "a
+ * person's work" therefore misread our own wreckage — MCO, 14 October 2026: two
+ * runs for one mail, the first killed after writing its terms, and the second
+ * filed `MCO (b)` beside it, a repeat placement that never happened.
+ *
+ * So a filled tab is ours when every term it holds is one this deal would have
+ * written: the same ticker in `D3`, and `B3` (issue date) and `F3` (price) each
+ * either blank — the kill came before them — or equal to ours. Any term that
+ * DIFFERS means another placement or a correction somebody typed, and that is
+ * still left alone.
+ */
+export function isOwnUnfinishedTab(values: unknown[][], deal: TrackerDeal): boolean {
+  const ticker = deal.ticker.trim().toUpperCase();
+  if (String(termsCell(values, "D3") ?? "").trim().toUpperCase() !== ticker) return false;
+
+  const agrees = (address: string, ours: number | null) => {
+    const raw = termsCell(values, address);
+    if (String(raw ?? "").trim() === "") return true;
+    return ours !== null && Number(raw) === ours;
+  };
+
+  const price = typeof deal.price === "number" && deal.price > 0 ? deal.price : null;
+  return agrees("B3", excelSerialDate(deal.issueDate)) && agrees("F3", price);
+}
+
 /** Is every cell of the terms block empty? Then nothing was ever written here. */
 export function isBareTab(values: unknown[][]): boolean {
   return (values ?? []).every((row) =>

@@ -7,6 +7,7 @@ import {
   dealSheetPlacement,
   isBareTab,
   isDealSheet,
+  isOwnUnfinishedTab,
   nextOverviewSlot,
   nextSheetName,
   overviewRowAddress,
@@ -501,14 +502,14 @@ async function replayTemplate(
  * taken, file the deal as `FBR (b)` — asserting a repeat placement that never
  * happened — and leave an unformatted `FBR` at the end of the workbook for good.
  *
- * ── Only a tab nobody has claimed ────────────────────────────────────────────
+ * ── Only a tab nobody else has claimed ───────────────────────────────────────
  * The caller has already established that no Overview row points here. This adds
- * the second condition: `D3`, the ASX code, must be EMPTY. That is the tightest
- * available signal that the tab is ours and unfinished — Template ships `D3`
- * blank, it is the first cell `tabCellWrites` fills, and it is the first thing a
- * person building a tab by hand types. A tab with an ASX code in it may be
- * somebody's work in progress, and adopting it would overwrite the terms they
- * typed, including a date they had corrected.
+ * the second condition: the terms must be blank, or be exactly what THIS deal
+ * would have written (`isOwnUnfinishedTab`). Blank `D3` alone used to be the test,
+ * but `D3` is the first cell `tabCellWrites` fills, so a run killed after it left
+ * a tab the retry refused — and filed as `MCO (b)` beside, on 14 October 2026.
+ * A tab whose terms DIFFER may be somebody's work in progress or another
+ * placement, and adopting it would overwrite what they typed.
  *
  * ── Bare versus seeded ───────────────────────────────────────────────────────
  * If the kill landed between `add` and the seed there are no formulas at all, and
@@ -521,8 +522,9 @@ async function adoptOrphanSheet(
   graph: GraphCall,
   item: string,
   sheet: string,
-  ticker: string,
+  deal: TrackerDeal,
 ): Promise<MadeSheet & { adoptable?: boolean }> {
+  const ticker = deal.ticker;
   const terms = await graph(
     `${sheetPath(item, sheet)}/range(address='${TERMS_RANGE}')?$select=values`,
   );
@@ -534,7 +536,8 @@ async function adoptOrphanSheet(
 
   const values = (terms.body as { values?: unknown[][] } | null)?.values ?? [];
   const claimedBy = String(termsCell(values, "D3") ?? "").trim();
-  if (claimedBy !== "") {
+  const ours = claimedBy !== "" && isOwnUnfinishedTab(values, deal);
+  if (claimedBy !== "" && !ours) {
     return {
       ok: false,
       adoptable: false,
@@ -566,7 +569,8 @@ async function adoptOrphanSheet(
 
   const notes = [
     `"${sheet}" was left behind by an earlier attempt and has been finished rather than ` +
-      `filed beside — no Overview row pointed at it and its terms were blank.`,
+      `filed beside — no Overview row pointed at it and its terms were ` +
+      `${ours ? "this deal's own, part-written" : "blank"}.`,
   ];
 
   if (isBareTab(values)) {
@@ -701,7 +705,7 @@ export async function writeDealToTracker(
     // that — fall through and name a new tab, carrying its note.
     const leftover = unreferencedTabFor(deal.ticker, deals, overviewSheetRefs(rows));
     const adoption = leftover
-      ? await adoptOrphanSheet(graph, item, leftover, deal.ticker)
+      ? await adoptOrphanSheet(graph, item, leftover, deal)
       : null;
 
     if (adoption && !adoption.ok && adoption.adoptable) {

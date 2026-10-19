@@ -8,6 +8,7 @@ import {
   formulaSheetRef,
   isBareTab,
   isDealSheet,
+  isOwnUnfinishedTab,
   nextOverviewSlot,
   nextSheetName,
   overviewRowFormulas,
@@ -1528,6 +1529,85 @@ test("tracker: a tab somebody has claimed is left alone, and SAID so", async () 
     "and the leftover is reported",
   );
   assert.ok(res.notes?.some((n) => /whether "PGF" should be deleted/.test(n)));
+});
+
+test("tracker: our OWN half-written tab is finished, not filed beside as (b)", async () => {
+  // MCO, 14 October 2026. The first run wrote D3, B3 and F3 and was killed before
+  // its Overview row; the retry saw a filled D3, called it somebody's work, and
+  // filed `MCO (b)` — a second placement that never happened. Terms that are
+  // exactly this deal's are this deal's wreckage.
+  const { graph, calls } = fakeGraph({
+    sheets: ["Template", "LGF", "PGF"],
+    overview: ONLY_LGF,
+    cells: { PGF: { A3: "Date", D3: "PGF", B3: serial(DEAL.issueDate), F3: DEAL.price } },
+  });
+
+  const res = await writeDealToTracker(DEAL, { graph, target });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.sheet, "PGF", "no phantom (b)");
+  assert.equal(res.via, "adopted");
+  assert.equal(calls.some((c) => c.path.includes("/worksheets/add")), false);
+  assert.ok(res.notes?.some((n) => /this deal's own, part-written/.test(n)));
+});
+
+test("tracker: a run killed right after D3 left a tab that is still ours", () => {
+  const deal = { ticker: "MCO", issueDate: "2026-10-14", price: 0.017 };
+  const rows = (b3: unknown, d3: unknown, f3: unknown) => [
+    ["Options", "", "", ""],
+    ["Date", b3, "", d3, "", f3],
+    ["2 Tranche", "", "", ""],
+  ];
+
+  assert.equal(isOwnUnfinishedTab(rows("", "MCO", ""), deal), true, "only D3 landed");
+  assert.equal(isOwnUnfinishedTab(rows(serial("2026-10-14"), "mco", 0.017), deal), true);
+  assert.equal(
+    isOwnUnfinishedTab(rows(serial("2026-07-01"), "MCO", ""), deal),
+    false,
+    "another issue date is another placement",
+  );
+  assert.equal(isOwnUnfinishedTab(rows("", "MCO", 0.02), deal), false, "a corrected price is a person's");
+  assert.equal(isOwnUnfinishedTab(rows("", "MCX", ""), deal), false, "another stock");
+  assert.equal(isOwnUnfinishedTab(rows("", "", ""), deal), false, "blank is the bare-tab case, not this");
+});
+
+test("tracker sync: a deal another run has claimed is left alone", async () => {
+  // Graph sends more than one notification for one mail, and each starts a run.
+  // The loser of the claim must not touch the workbook at all.
+  const graph: GraphCall = async () => {
+    throw new Error("the workbook must not be opened for a deal another run holds");
+  };
+  const settled: string[] = [];
+
+  const report = await syncTrackerRows([CANDIDATE], {
+    graph,
+    target: async () => target,
+    claim: async () => ({ claimed: false }),
+    onSettled: async (item) => {
+      settled.push(item.ticker);
+    },
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.written.length, 0);
+  assert.deepEqual(settled, [], "not settled — it is still owed, just not by this run");
+  assert.ok(report.notes.some((n) => /another run is writing this deal/.test(n)));
+});
+
+test("tracker sync: a claim that cannot be made blocks the run instead of racing", async () => {
+  const graph: GraphCall = async () => {
+    throw new Error("writing unclaimed would bring the race back");
+  };
+
+  const report = await syncTrackerRows([CANDIDATE, { ...CANDIDATE, ticker: "KNI" }], {
+    graph,
+    target: async () => target,
+    claim: async () => ({ claimed: false, error: "column tracker_claimed_at does not exist" }),
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.failed.length, 2);
+  assert.match(report.failed[1].error, /tracker_claimed_at/);
 });
 
 test("tracker: a tab the Overview DOES account for is never adopted", async () => {
