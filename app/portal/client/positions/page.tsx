@@ -2,10 +2,8 @@ import { getActiveAccountId, getActiveClientId } from "@/lib/session";
 import {
   getAccounts,
   getClientPositions,
-  getSignals,
   getClientTrades,
   getSecurityCommentary,
-  type SignalRow,
 } from "@/lib/data/queries";
 import { getClientStoredPnl } from "@/lib/data/pnl";
 import { getClientPnlOverrides } from "@/lib/data/holdings";
@@ -60,7 +58,6 @@ export default async function ClientPositionsPage() {
   const [
     accounts,
     positions,
-    signals,
     storedPnl,
     overrides,
     trades,
@@ -70,16 +67,11 @@ export default async function ClientPositionsPage() {
     // The client's WHOLE book, not one account's: the account filter lives in
     // the island now, so the page cannot know which account is being asked for.
     clientId ? getClientPositions(clientId) : Promise.resolve([]),
-    getSignals(),
     clientId ? getClientStoredPnl(clientId) : Promise.resolve([]),
     clientId ? getClientPnlOverrides(clientId) : Promise.resolve([]),
     clientId ? getClientTrades(clientId) : Promise.resolve([]),
     getSecurityCommentary(),
   ]);
-
-  const signalMap: Record<string, SignalRow> = Object.fromEntries(
-    signals.map((s) => [s.code, s]),
-  );
 
   /**
    * The summary rows the filter can select between.
@@ -128,7 +120,6 @@ export default async function ClientPositionsPage() {
       accounts={accounts}
       activeAccountId={activeAccountId}
       positions={positions}
-      signals={signalMap}
       summaryByScope={summaryByScope}
       offLedgerByScope={offLedgerByScope}
       trades={trades}

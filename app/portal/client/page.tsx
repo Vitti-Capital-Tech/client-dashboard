@@ -9,13 +9,10 @@ import {
   getAccount,
   getPositions,
   getOptions,
-  getMarketIndices,
   getPlacements,
   getAlerts,
-  getSignals,
   getClientPositions,
   getClientTrades,
-  type SignalRow,
 } from "@/lib/data/queries";
 import { getAsxMarketSensitive } from "@/lib/asx/news";
 import { getSecurityMap } from "@/lib/data/queries";
@@ -34,20 +31,16 @@ export default async function ClientDashboardPage() {
     account,
     positions,
     options,
-    indices,
     placements,
     alerts,
-    signals,
     asxFeed,
   ] = await Promise.all([
     getClient(clientId),
     getAccount(accountId),
     getPositions(accountId),
     getOptions(accountId),
-    getMarketIndices(),
     getPlacements(),
     getAlerts(clientId),
-    getSignals(),
     // Cached upstream for five minutes and shared with Market and Insights,
     // so this is a map lookup on most requests rather than a fetch.
     getAsxMarketSensitive(),
@@ -122,10 +115,6 @@ export default async function ClientDashboardPage() {
       .filter((r) => r.type.toLowerCase().includes("unlisted option"))
       .reduce((sum, r) => sum + r.sellOrCurrent, 0);
 
-  const signalMap: Record<string, SignalRow> = Object.fromEntries(
-    signals.map((s) => [s.code, s]),
-  );
-
   return (
     <DashboardClient
       clientId={clientId}
@@ -133,10 +122,8 @@ export default async function ClientDashboardPage() {
       cash={cash}
       positions={positions}
       options={options}
-      indices={indices}
       placements={placements}
       alerts={alerts}
-      signals={signalMap}
       sectorByTicker={sectorByTicker}
       unlisted={unlisted}
       filings={asxFeed.items.filter((a) => positions.some((p) => p.parent === a.code || p.code === a.code))}

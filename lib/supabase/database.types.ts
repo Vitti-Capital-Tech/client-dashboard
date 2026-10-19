@@ -754,122 +754,6 @@ export type Database = {
         }
         Relationships: []
       }
-      investment_ideas: {
-        Row: {
-          code: string
-          conviction: number
-          created_at: string
-          entry_hi: number | null
-          entry_lo: number | null
-          hook: string | null
-          horizon: string | null
-          id: string
-          name: string
-          placement_id: string | null
-          risk: Database["public"]["Enums"]["risk_level"]
-          target: number | null
-          theme: string
-          thesis: string | null
-        }
-        Insert: {
-          code: string
-          conviction: number
-          created_at?: string
-          entry_hi?: number | null
-          entry_lo?: number | null
-          hook?: string | null
-          horizon?: string | null
-          id?: string
-          name: string
-          placement_id?: string | null
-          risk: Database["public"]["Enums"]["risk_level"]
-          target?: number | null
-          theme: string
-          thesis?: string | null
-        }
-        Update: {
-          code?: string
-          conviction?: number
-          created_at?: string
-          entry_hi?: number | null
-          entry_lo?: number | null
-          hook?: string | null
-          horizon?: string | null
-          id?: string
-          name?: string
-          placement_id?: string | null
-          risk?: Database["public"]["Enums"]["risk_level"]
-          target?: number | null
-          theme?: string
-          thesis?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "investment_ideas_placement_id_fkey"
-            columns: ["placement_id"]
-            isOneToOne: false
-            referencedRelation: "placements"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      market_indices: {
-        Row: {
-          chg: number
-          code: string
-          decimal_places: number
-          last: number
-          name: string
-          updated_at: string
-        }
-        Insert: {
-          chg: number
-          code: string
-          decimal_places?: number
-          last: number
-          name: string
-          updated_at?: string
-        }
-        Update: {
-          chg?: number
-          code?: string
-          decimal_places?: number
-          last?: number
-          name?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
-      news: {
-        Row: {
-          direction: Database["public"]["Enums"]["news_direction"]
-          headline: string
-          id: string
-          impact: string | null
-          source: string
-          ts: string
-          use_note: string | null
-        }
-        Insert: {
-          direction: Database["public"]["Enums"]["news_direction"]
-          headline: string
-          id?: string
-          impact?: string | null
-          source: string
-          ts?: string
-          use_note?: string | null
-        }
-        Update: {
-          direction?: Database["public"]["Enums"]["news_direction"]
-          headline?: string
-          id?: string
-          impact?: string | null
-          source?: string
-          ts?: string
-          use_note?: string | null
-        }
-        Relationships: []
-      }
       option_holdings: {
         Row: {
           account_id: string | null
@@ -1554,107 +1438,6 @@ export type Database = {
           },
         ]
       }
-      recommendations: {
-        Row: {
-          move: string | null
-          rating: string
-          security_code: string
-          target_price: number | null
-          updated_at: string
-        }
-        Insert: {
-          move?: string | null
-          rating: string
-          security_code: string
-          target_price?: number | null
-          updated_at?: string
-        }
-        Update: {
-          move?: string | null
-          rating?: string
-          security_code?: string
-          target_price?: number | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "recommendations_security_code_fkey"
-            columns: ["security_code"]
-            isOneToOne: true
-            referencedRelation: "securities"
-            referencedColumns: ["code"]
-          },
-        ]
-      }
-      research_notes: {
-        Row: {
-          body: string
-          created_at: string
-          id: string
-          published: string
-          title: string
-        }
-        Insert: {
-          body: string
-          created_at?: string
-          id?: string
-          published?: string
-          title: string
-        }
-        Update: {
-          body?: string
-          created_at?: string
-          id?: string
-          published?: string
-          title?: string
-        }
-        Relationships: []
-      }
-      research_reports: {
-        Row: {
-          id: string
-          kind: string
-          pages: number | null
-          published: string
-          title: string
-        }
-        Insert: {
-          id?: string
-          kind: string
-          pages?: number | null
-          published: string
-          title: string
-        }
-        Update: {
-          id?: string
-          kind?: string
-          pages?: number | null
-          published?: string
-          title?: string
-        }
-        Relationships: []
-      }
-      sectors: {
-        Row: {
-          beneficiaries: string[]
-          drivers: string | null
-          momentum: number
-          name: string
-        }
-        Insert: {
-          beneficiaries?: string[]
-          drivers?: string | null
-          momentum: number
-          name: string
-        }
-        Update: {
-          beneficiaries?: string[]
-          drivers?: string | null
-          momentum?: number
-          name?: string
-        }
-        Relationships: []
-      }
       securities: {
         Row: {
           code: string
@@ -1741,41 +1524,6 @@ export type Database = {
             foreignKeyName: "security_commentary_security_code_fkey"
             columns: ["security_code"]
             isOneToOne: false
-            referencedRelation: "securities"
-            referencedColumns: ["code"]
-          },
-        ]
-      }
-      signals: {
-        Row: {
-          action: Database["public"]["Enums"]["signal_action"]
-          detail: string | null
-          headline: string
-          security_code: string
-          target: number | null
-          updated_at: string
-        }
-        Insert: {
-          action: Database["public"]["Enums"]["signal_action"]
-          detail?: string | null
-          headline: string
-          security_code: string
-          target?: number | null
-          updated_at?: string
-        }
-        Update: {
-          action?: Database["public"]["Enums"]["signal_action"]
-          detail?: string | null
-          headline?: string
-          security_code?: string
-          target?: number | null
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "signals_security_code_fkey"
-            columns: ["security_code"]
-            isOneToOne: true
             referencedRelation: "securities"
             referencedColumns: ["code"]
           },
@@ -1982,13 +1730,10 @@ export type Database = {
       claim_status: "pending" | "approved" | "rejected"
       commentary_run_status: "submitted" | "collected" | "failed"
       merge_status: "pending" | "approved" | "rejected"
-      news_direction: "up" | "dn"
       option_status: "open" | "pending" | "expired"
       option_type: "Call" | "Put"
       placement_stage: "upcoming" | "open" | "closed" | "settled"
       placement_type: "Placement" | "SPP" | "Pre-IPO" | "Rights"
-      risk_level: "Low" | "Medium" | "High"
-      signal_action: "Add" | "Hold" | "Trim" | "Take profit" | "Watch"
       trade_side: "BUY" | "SELL"
     }
     CompositeTypes: {
@@ -2126,13 +1871,10 @@ export const Constants = {
       claim_status: ["pending", "approved", "rejected"],
       commentary_run_status: ["submitted", "collected", "failed"],
       merge_status: ["pending", "approved", "rejected"],
-      news_direction: ["up", "dn"],
       option_status: ["open", "pending", "expired"],
       option_type: ["Call", "Put"],
       placement_stage: ["upcoming", "open", "closed", "settled"],
       placement_type: ["Placement", "SPP", "Pre-IPO", "Rights"],
-      risk_level: ["Low", "Medium", "High"],
-      signal_action: ["Add", "Hold", "Trim", "Take profit", "Watch"],
       trade_side: ["BUY", "SELL"],
     },
   },

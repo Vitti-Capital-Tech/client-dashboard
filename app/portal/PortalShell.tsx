@@ -320,7 +320,6 @@ export function PortalShell({
       { k: "market", label: "Market", path: "/portal/client/market", icon: CandlestickChart, tab: true },
       { k: "insights", label: "Insights", path: "/portal/client/insights", icon: Lightbulb, tab: true },
       { k: "askvitti", label: "Ask Vitti", path: "/portal/client/askvitti", icon: MessageSquareMore, tab: true, ai: true },
-      { k: "markets", label: "Markets", path: "/portal/client/markets", icon: TrendingUp, tab: false },
       { k: "options", label: "Options", path: "/portal/client/options", icon: Layers, tab: false },
       { k: "watchlist", label: "Watchlist", path: "/portal/client/watchlist", icon: Star, tab: false }
       // Accounts and Settings are not here: they are about the person

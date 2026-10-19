@@ -2,7 +2,6 @@ import { getActiveClientId } from "@/lib/session";
 import {
   getWatchlist,
   getPlacements,
-  getRecommendations,
 } from "@/lib/data/queries";
 import { getQuotes } from "@/lib/asx/quotes";
 import { WatchlistClient } from "./WatchlistClient";
@@ -12,10 +11,9 @@ import { WatchlistClient } from "./WatchlistClient";
 export default async function ClientWatchlistPage() {
   const clientId = await getActiveClientId();
 
-  const [watchlist, placements, recos] = await Promise.all([
+  const [watchlist, placements] = await Promise.all([
     getWatchlist(clientId),
     getPlacements(),
-    getRecommendations(),
   ]);
 
   /**
@@ -38,7 +36,6 @@ export default async function ClientWatchlistPage() {
     <WatchlistClient
       watchlist={priced}
       placements={placements}
-      recos={recos}
       clientId={clientId}
     />
   );

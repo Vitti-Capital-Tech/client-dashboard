@@ -5,7 +5,6 @@ import { Search, X } from "lucide-react";
 import type {
   AccountRow,
   Position,
-  SignalRow,
   TradeRow,
   SecurityCommentaryRow,
 } from "@/lib/data/queries";
@@ -115,7 +114,6 @@ export function PositionsClient({
   accounts,
   activeAccountId,
   positions,
-  signals,
   summaryByScope,
   offLedgerByScope,
   trades,
@@ -135,7 +133,6 @@ export function PositionsClient({
   activeAccountId: string;
   /** The client's whole book, at account grain. Filtered here, not fetched so. */
   positions: Position[];
-  signals: Record<string, SignalRow>;
   /**
    * The desk's own stored P&L rows, one set per account plus `all`.
    *
@@ -370,11 +367,6 @@ export function PositionsClient({
     setPnlFilter("all");
     setPnlPage(1);
   };
-
-  // Custom states for trade execution inside modal
-  const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
-  const [tradeAction, setTradeAction] = useState<"Buy" | "Sell">("Buy");
-  const [tradeAmount, setTradeAmount] = useState("10,000");
 
   // Cash and market value, following the account filter. The `active*` pair
   // beside these belonged to Analytics, which has moved to Home.
@@ -662,44 +654,6 @@ export function PositionsClient({
 
   const handleCloseHolding = () => {
     setSelectedHolding(null);
-  };
-
-  const getActionPill = (action: string) => {
-    const maps: Record<string, string> = {
-      Add: "bg-green-bg text-green-d",
-      Hold: "bg-paper-2 text-mut",
-      Trim: "bg-amber-bg text-amber-d",
-      "Take profit": "bg-amber-bg text-amber-d",
-      Watch: "bg-[#ece9f3] text-[#5c5775]"
-    };
-    return (
-      <span className={`pill px-2.5 py-0.5 rounded-full text-[11.5px] font-semibold tracking-wide ${maps[action] || "bg-paper-2 text-mut"}`}>
-        {action}
-      </span>
-    );
-  };
-
-  // Run calculation for trade amount
-  const tradeCalculatedShares = () => {
-    const raw = tradeAmount.replace(/[^0-9]/g, "");
-    const amt = raw ? parseInt(raw, 10) : 0;
-    const p = positions.find(pos => pos.code === selectedHolding);
-    if (!p || !p.last) return 0;
-    return Math.round(amt / p.last);
-  };
-
-  const executeTradeOrder = () => {
-    const p = positions.find(pos => pos.code === selectedHolding);
-    if (!p) return;
-    const raw = tradeAmount.replace(/[^0-9]/g, "");
-    const amt = raw ? parseInt(raw, 10) : 0;
-    if (!amt) return;
-
-    // Simulate ordering (in reality we would mutate the DB, but since we are doing standard controlled simulation we can alert and log)
-    alert(`Order placed: ${tradeAction === "Buy" ? "Buy" : "Sell"} ${tradeAction === "Buy" ? "$" : ""}${amt.toLocaleString("en-AU")} of ${selectedHolding} routed to the Vitti desk.`);
-
-    setIsTradeModalOpen(false);
-    handleCloseHolding();
   };
 
   // Render analytics view
@@ -1612,7 +1566,6 @@ export function PositionsClient({
   const netPnl = allTimeRealized + holdingsTotal.pnl;
 
   const selectedStock = positions.find(pos => pos.code === selectedHolding);
-  const advice = selectedHolding ? signals[selectedHolding] : null;
 
   return (
     <div className="space-y-4">
@@ -1933,13 +1886,12 @@ export function PositionsClient({
         </div>
       )}
 
-      {/* Holdings Detailed Advice Modal */}
+      {/* Holding detail modal */}
       {selectedStock && (
         <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
           <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto">
             <div className="flex items-center gap-2.5">
               <span className="code text-lg bg-paper-2 rounded-[5px] px-2 py-0.5">{selectedHolding}</span>
-              {advice && getActionPill(advice.action)}
             </div>
 
             <div>
@@ -1966,24 +1918,7 @@ export function PositionsClient({
                     : ""}
                 </b>
               </div>
-              {advice && (
-                <div className="flex justify-between py-2 text-xs">
-                  <span className="text-mut font-semibold">Vitti target</span>
-                  <b className="font-mono text-ink font-semibold">
-                    {advice.target && selectedStock.last
-                      ? `${priceText(advice.target)} · +${Math.round((advice.target / selectedStock.last - 1) * 100)}%`
-                      : "—"}
-                  </b>
-                </div>
-              )}
             </div>
-
-            {advice && (
-              <div className="space-y-1">
-                <div className="font-semibold text-[13.5px] leading-snug">{advice.headline}</div>
-                <p className="text-xs text-mut leading-relaxed">{advice.detail}</p>
-              </div>
-            )}
 
             {renderCommentary(selectedStock)}
 
@@ -1994,80 +1929,11 @@ export function PositionsClient({
               >
                 Close
               </button>
-
-              {advice?.action === "Add" && (
-                <button
-                  onClick={() => {
-                    setTradeAction("Buy");
-                    setIsTradeModalOpen(true);
-                  }}
-                  className="btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2 px-4 text-xs font-semibold cursor-pointer flex-1.5"
-                >
-                  Add to position &rarr;
-                </button>
-              )}
-
-              {(advice?.action === "Trim" || advice?.action === "Take profit") && (
-                <button
-                  onClick={() => {
-                    setTradeAction("Sell");
-                    setIsTradeModalOpen(true);
-                  }}
-                  className="btn bg-navy text-white hover:bg-slate-800 rounded-[10px] py-2 px-4 text-xs font-semibold cursor-pointer flex-1.5"
-                >
-                  Trim &rarr;
-                </button>
-              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Trade Execution Modal */}
-      {isTradeModalOpen && selectedStock && (
-        <div className="fixed inset-0 bg-navy/55 backdrop-blur-[2px] z-50 flex items-center justify-center p-4.5 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-110 w-full p-6 shadow-shadow-lg text-ink space-y-4 my-auto max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <h3 className="font-disp font-medium text-lg text-ink">
-              Route {tradeAction === "Buy" ? "Buy" : "Sell"} Order to Desk
-            </h3>
-            <p className="text-xs text-mut">
-              {selectedStock.name} &middot; last close {priceText(selectedStock.last)}
-            </p>
-
-            <div className="space-y-1">
-              <label className="block text-xs font-semibold text-ink">Amount to {tradeAction === "Buy" ? "invest" : "sell"} (AUD)</label>
-              <input
-                type="text"
-                value={tradeAmount}
-                onChange={e => setTradeAmount(e.target.value.replace(/[^0-9,]/g, ""))}
-                className="w-full border border-line-2 bg-white rounded-[9px] px-3.5 py-2.5 font-mono text-sm focus:border-green focus:outline-none"
-              />
-              <div className="text-[11px] text-mut mt-1">
-                &asymp; {tradeCalculatedShares().toLocaleString("en-AU")} shares at {priceText(selectedStock.last)}
-              </div>
-            </div>
-
-            <div className="text-xs text-mut bg-paper-2 rounded-[9px] p-3 leading-normal">
-              Your order will be routed directly to the Vitti trading desk. Execution prices will be matched as close to the current market price as possible. Brokerage charges apply.
-            </div>
-
-            <div className="flex gap-2.5 pt-2">
-              <button
-                onClick={() => setIsTradeModalOpen(false)}
-                className="btn border border-line rounded-[10px] py-2 px-4 hover:border-mut text-xs font-semibold cursor-pointer flex-1"
-              >
-                Back
-              </button>
-              <button
-                onClick={executeTradeOrder}
-                className="btn bg-green text-[#08130e] hover:shadow-lg rounded-[10px] py-2 px-4 text-xs font-semibold cursor-pointer flex-1.5"
-              >
-                Confirm with Desk
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

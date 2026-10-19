@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   DollarSign,
   AlertTriangle,
-  TrendingDown,
   TrendingUp,
   Zap,
   Clock,
@@ -15,10 +14,8 @@ import type { AsxAnnouncement } from "@/lib/asx/news";
 import type {
   Position,
   OptionRow,
-  IndexRow,
   PlacementRow,
   AlertRow,
-  SignalRow,
 } from "@/lib/data/queries";
 import type { ClientPortfolio } from "@/lib/pnl/client-portfolio";
 import type { NetPnl } from "@/lib/pnl/net-pnl";
@@ -67,10 +64,8 @@ export function DashboardClient({
   cash,
   positions,
   options,
-  indices,
   placements,
   alerts,
-  signals,
   portfolio,
   netPnl,
   filings,
@@ -82,10 +77,8 @@ export function DashboardClient({
   cash: number;
   positions: Position[];
   options: OptionRow[];
-  indices: IndexRow[];
   placements: PlacementRow[];
   alerts: AlertRow[];
-  signals: Record<string, SignalRow>;
   /** The desk's own stored figures — see lib/pnl/client-portfolio.ts. */
   portfolio: ClientPortfolio;
   /**
@@ -173,40 +166,6 @@ export function DashboardClient({
   // the one second in which a phase can flip between render and hydration.
   const todayStr = sessionStamp(session);
 
-  // Build marquee ticker content
-  const renderTicker = () => {
-    // `market_indices` is empty in this database, and a marquee with nothing in
-    // it still drew its full-width navy bar: a black band under the greeting
-    // that looked like a component that had failed to load. No indices, no
-    // ticker — the row is worth its space only when it is carrying prices.
-    if (indices.length === 0) return null;
-
-    const tickerItems = indices.map(x => {
-      const isUp = x.chg >= 0;
-      const valStr = x.last.toLocaleString("en-AU", {
-        minimumFractionDigits: x.dp !== undefined ? x.dp : 1,
-        maximumFractionDigits: x.dp !== undefined ? x.dp : 1
-      });
-      return (
-        <span key={x.code} className="inline-block mr-5.5">
-          {x.code} {valStr} {" "}
-          <span className={isUp ? "text-[#5cc79a]" : "text-[#e0795b]"}>
-            {isUp ? "▲" : "▼"} {Math.abs(x.chg).toFixed(2)}%
-          </span>
-        </span>
-      );
-    });
-
-    return (
-      <div className="tickwrap mb-4 select-none">
-        <div className="tickrun">
-          {tickerItems}
-          {tickerItems}
-        </div>
-      </div>
-    );
-  };
-
   // Build personalized suggestions based on portfolio state
   const getSuggestions = () => {
     const list: {
@@ -240,23 +199,7 @@ export function DashboardClient({
       });
     }
 
-    // 3. Trim / Take profit signals
-    const trimHolding = positions.find(p => {
-      const sig = signals[p.code];
-      return sig && (sig.action === "Take profit" || sig.action === "Trim");
-    });
-    if (trimHolding) {
-      const sig = signals[trimHolding.code];
-      list.push({
-        tone: "amber",
-        icon: TrendingDown,
-        title: `${sig.action} ${trimHolding.code}`,
-        sub: sig.headline,
-        path: "/portal/client/positions"
-      });
-    }
-
-    // 4. Default: Add to position in buy zone / See weekly idea
+    // 3. Default: Add to position in buy zone / See weekly idea
     if (list.length < 3) {
       list.push({
         tone: "green",
@@ -312,7 +255,6 @@ export function DashboardClient({
       <GlossaryStrip />
 
       {/* Marquee Ticker */}
-      {renderTicker()}
 
       {/* Dynamic Suggestions */}
       {suggestions.length > 0 && (
@@ -506,37 +448,6 @@ export function DashboardClient({
                 {myBid ? "View your bid" : "Review &amp; bid"}
               </button>
             </div>
-          )}
-
-          {/* Markets indices. Absent entirely when there are no indices: the
-              card is a 2×2 grid of numbers, and with none it drew a heading, a
-              link and a hole. The "Briefing" link is gone with the rest — it
-              pointed at Markets, which is still being built. */}
-          {indices.length > 0 && (
-          <div className="card bg-white border border-line rounded-[14px] p-4.5 shadow-shadow space-y-3">
-            <div className="flex justify-between items-center text-xs">
-              <b className="text-ink text-sm font-semibold">Markets</b>
-            </div>
-            <div className="grid grid-cols-2 gap-3.5">
-              {indices.slice(0, 4).map(x => {
-                const isUp = x.chg >= 0;
-                return (
-                  <div key={x.code} className="space-y-0.5">
-                    <div className="text-[10.5px] font-mono font-semibold text-mut uppercase tracking-wider">{x.code}</div>
-                    <div className="font-mono font-semibold text-[13px] text-ink">
-                      {x.last.toLocaleString("en-AU", {
-                        minimumFractionDigits: x.dp !== undefined ? x.dp : 1,
-                        maximumFractionDigits: x.dp !== undefined ? x.dp : 1
-                      })}
-                    </div>
-                    <div className={`text-[10.5px] font-semibold ${isUp ? "text-gain" : "text-loss-d"}`}>
-                      {isUp ? "+" : ""}{x.chg.toFixed(2)}%
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
           )}
 
           {/* ── Today's filings, from companies in this book ─────────────

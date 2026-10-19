@@ -5,7 +5,6 @@ import {
   getClientOptions,
   getPlacements,
   getAlerts,
-  getSignals,
   getClientTrades,
   type PlacementRow,
 } from "@/lib/data/queries";
@@ -37,7 +36,6 @@ export default async function Page({
     options,
     placements,
     alerts,
-    signals,
     trades,
     overrides,
     storedPnl,
@@ -49,7 +47,6 @@ export default async function Page({
     getClientOptions(id),
     getPlacements(),
     getAlerts(id, "staff"),
-    getSignals(),
     getClientTrades(id),
     getClientPnlOverrides(id),
     // The P&L table now renders what the recompute STORED, rather than deriving
@@ -67,7 +64,6 @@ export default async function Page({
     p.bids.some((b) => b.clientId === id),
   );
 
-  const signalsMap = Object.fromEntries(signals.map((s) => [s.code, s]));
 
   /**
    * The purchases the contract-note ledger never recorded, per account scope.
@@ -104,7 +100,6 @@ export default async function Page({
       options={options}
       clientBids={clientBids}
       alerts={alerts}
-      signalsMap={signalsMap}
       trades={trades}
       overrides={overrides}
       storedPnl={storedPnl}

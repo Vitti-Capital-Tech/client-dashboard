@@ -191,8 +191,8 @@ export function InvestClient({
 
   /**
    * Undefined when the adviser has published no ideas — which is the live state,
-   * not a hypothetical: `investment_ideas` was demo-seed data and nothing in the
-   * broker/tracker pipeline writes it. Every read of this below is guarded, and
+   * not a hypothetical: there is no ideas source (the demo `investment_ideas`
+   * table was dropped, nothing real ever wrote it). Every read below is guarded, and
    * the block it feeds is skipped entirely. Before that guard existed, the first
    * real client login took a TypeError on `ideaOfWeek.code` and the whole Invest
    * tab rendered as "this page could not load".

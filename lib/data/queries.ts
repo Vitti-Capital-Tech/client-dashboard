@@ -224,45 +224,13 @@ export type PlacementRow = {
   bids: BidRow[];
 };
 
-export type IndexRow = {
-  code: string;
-  name: string;
-  last: number;
-  chg: number;
-  dp: number;
-};
-
-export type SignalRow = {
-  code: string;
-  action: Enums<"signal_action">;
-  headline: string;
-  detail: string | null;
-  target: number | null;
-};
-
-export type SectorRow = {
-  name: string;
-  momentum: number;
-  drivers: string | null;
-  beneficiaries: string[];
-};
-
-export type NewsRow = {
-  id: string;
-  ts: string;
-  source: string;
-  headline: string;
-  impact: string | null;
-  direction: Enums<"news_direction">;
-  use: string | null;
-};
-
+/** An investment idea, as the Invest plan builder reads one. No source yet. */
 export type IdeaRow = {
   id: string;
   code: string;
   name: string;
   theme: string;
-  risk: Enums<"risk_level">;
+  risk: "Low" | "Medium" | "High";
   horizon: string | null;
   conviction: number;
   last: number | null; // current price (from securities)
@@ -283,30 +251,6 @@ export type WatchRow = {
   alert: number | null;
   dir: Enums<"alert_direction"> | null;
   unlisted: boolean;
-};
-
-export type RecoRow = {
-  code: string;
-  name: string;
-  sector: string | null;
-  rating: string;
-  target: number | null;
-  move: string | null;
-};
-
-export type ReportRow = {
-  id: string;
-  title: string;
-  kind: string;
-  published: string;
-  pages: number | null;
-};
-
-export type NoteRow = {
-  id: string;
-  title: string;
-  body: string;
-  published: string;
 };
 
 /**
@@ -416,19 +360,6 @@ export const getSecurityPrices = cache(async (): Promise<Map<string, number | nu
 export const getSecurityMap = cache(async (): Promise<Map<string, Security>> => {
   const securities = await getSecurities();
   return new Map(securities.map((s) => [s.code, s]));
-});
-
-export const getMarketIndices = cache(async (): Promise<IndexRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase.from("market_indices").select("*");
-  if (error) throw error;
-  return data.map((i) => ({
-    code: i.code,
-    name: i.name,
-    last: i.last,
-    chg: i.chg,
-    dp: i.decimal_places,
-  }));
 });
 
 // ---------------------------------------------------------------------------
@@ -1074,131 +1005,6 @@ export const getAlerts = cache(
     }));
   },
 );
-
-// ---------------------------------------------------------------------------
-// Research / content
-// ---------------------------------------------------------------------------
-export const getSignals = cache(async (): Promise<SignalRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase.from("signals").select("*");
-  if (error) throw error;
-  return data.map((s) => ({
-    code: s.security_code,
-    action: s.action,
-    headline: s.headline,
-    detail: s.detail,
-    target: s.target,
-  }));
-});
-
-export const getSectors = cache(async (): Promise<SectorRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("sectors")
-    .select("*")
-    .order("momentum", { ascending: false });
-  if (error) throw error;
-  return data.map((s) => ({
-    name: s.name,
-    momentum: s.momentum,
-    drivers: s.drivers,
-    beneficiaries: s.beneficiaries ?? [],
-  }));
-});
-
-export const getNews = cache(async (): Promise<NewsRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("news")
-    .select("*")
-    .order("ts", { ascending: false });
-  if (error) throw error;
-  return data.map((n) => ({
-    id: n.id,
-    ts: n.ts,
-    source: n.source,
-    headline: n.headline,
-    impact: n.impact,
-    direction: n.direction,
-    use: n.use_note,
-  }));
-});
-
-export const getInvestmentIdeas = cache(async (): Promise<IdeaRow[]> => {
-  const supabase = await createClient();
-  const [{ data, error }, securityMap] = await Promise.all([
-    supabase.from("investment_ideas").select("*"),
-    getSecurityMap(),
-  ]);
-  if (error) throw error;
-  return data.map((i) => ({
-    id: i.id,
-    code: i.code,
-    name: i.name,
-    theme: i.theme,
-    risk: i.risk,
-    horizon: i.horizon,
-    conviction: i.conviction,
-    last: securityMap.get(i.code)?.last ?? null,
-    entryLo: i.entry_lo,
-    entryHi: i.entry_hi,
-    target: i.target,
-    hook: i.hook,
-    thesis: i.thesis,
-    placementId: i.placement_id,
-  }));
-});
-
-export const getRecommendations = cache(async (): Promise<RecoRow[]> => {
-  const supabase = await createClient();
-  const [{ data, error }, securityMap] = await Promise.all([
-    supabase.from("recommendations").select("*"),
-    getSecurityMap(),
-  ]);
-  if (error) throw error;
-  return data.map((r) => {
-    const sec = securityMap.get(r.security_code);
-    return {
-      code: r.security_code,
-      name: sec?.name ?? r.security_code,
-      sector: sec?.sector ?? null,
-      rating: r.rating,
-      target: r.target_price,
-      move: r.move,
-    };
-  });
-});
-
-export const getResearchReports = cache(async (): Promise<ReportRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("research_reports")
-    .select("*")
-    .order("published", { ascending: false });
-  if (error) throw error;
-  return data.map((r) => ({
-    id: r.id,
-    title: r.title,
-    kind: r.kind,
-    published: r.published,
-    pages: r.pages,
-  }));
-});
-
-export const getResearchNotes = cache(async (): Promise<NoteRow[]> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("research_notes")
-    .select("*")
-    .order("published", { ascending: false });
-  if (error) throw error;
-  return data.map((n) => ({
-    id: n.id,
-    title: n.title,
-    body: n.body,
-    published: n.published,
-  }));
-});
 
 // ---------------------------------------------------------------------------
 // Audit log

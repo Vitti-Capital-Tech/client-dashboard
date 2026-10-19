@@ -11,7 +11,6 @@ import type {
   OptionRow,
   PlacementRow,
   AlertRow,
-  SignalRow,
   TradeRow,
 } from "@/lib/data/queries";
 import type { PnlOverrideRow } from "@/lib/data/holdings";
@@ -175,7 +174,6 @@ export function ClientDetailClient({
   options,
   clientBids,
   alerts,
-  signalsMap,
   trades,
   overrides,
   storedPnl,
@@ -189,7 +187,6 @@ export function ClientDetailClient({
   options: OptionRow[];
   clientBids: PlacementRow[];
   alerts: AlertRow[];
-  signalsMap: Record<string, SignalRow>;
   trades: TradeRow[];
   overrides: PnlOverrideRow[];
   storedPnl: StoredPnlRow[];
@@ -803,21 +800,6 @@ export function ClientDetailClient({
   const tplp = tc > 0 ? (tpl / tc) * 100 : 0;
   const totalAssets = tv + cash + unlisted;
 
-  const getActionPill = (action: string) => {
-    const maps: Record<string, string> = {
-      Add: "bg-green-bg text-green-d",
-      Hold: "bg-paper-2 text-mut",
-      Trim: "bg-amber-bg text-amber-d",
-      "Take profit": "bg-amber-bg text-amber-d",
-      Watch: "bg-[#ece9f3] text-[#5c5775]"
-    };
-    return (
-      <span className={`pill px-2 py-0.5 rounded-full text-[10.5px] font-semibold ${maps[action] || "bg-paper-2 text-mut"}`}>
-        {action}
-      </span>
-    );
-  };
-
   return (
     <div className="space-y-4 text-ink font-body">
       {/* Back to registry */}
@@ -973,13 +955,12 @@ export function ClientDetailClient({
                   <th className="px-4.5 py-2.5 text-right">Last close</th>
                   <th className="px-4.5 py-2.5 text-right">Market value</th>
                   <th className="px-4.5 py-2.5 text-right">Unreal. P&amp;L</th>
-                  <th className="px-4.5 py-2.5 text-center">Desk view</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0ede5]">
                 {paginatedHoldings.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center text-mut py-8">
+                    <td colSpan={7} className="text-center text-mut py-8">
                       {holdSearch.trim()
                         ? "Nothing matches that search."
                         : "No positions on record for this account."}
@@ -1032,8 +1013,6 @@ export function ClientDetailClient({
                               </div>
                             )}
                           </td>
-                          {/* No signal on a grant the desk does not trade. */}
-                          <td className="px-4.5 py-3 text-center text-mut-d">&mdash;</td>
                         </tr>
                       );
                     }
@@ -1045,7 +1024,6 @@ export function ClientDetailClient({
                     // base, so a percentage return is undefined — not infinite.
                     const plp = cost === 0 ? null : (pl / cost) * 100;
                     const isUp = pl >= 0;
-                    const sg = signalsMap[p.code];
                     return (
                       <tr key={rowKey(p.code)} className="hover:bg-paper-2/60 transition-colors">
                         <td className="px-4.5 py-3"><span className="code font-mono px-1.5 py-0.5 rounded-[5px] bg-paper-2">{p.code}</span></td>
@@ -1062,9 +1040,6 @@ export function ClientDetailClient({
                           {plp !== null && (
                             <div className="text-[10px]">{isUp ? "+" : ""}{plp.toFixed(1)}%</div>
                           )}
-                        </td>
-                        <td className="px-4.5 py-3 text-center">
-                          {getActionPill(sg ? sg.action : "Hold")}
                         </td>
                       </tr>
                     );
@@ -1104,7 +1079,6 @@ export function ClientDetailClient({
                         {tplp.toFixed(1)}%
                       </div>
                     </td>
-                    <td className="px-4.5 py-3" />
                   </tr>
                 </tfoot>
               )}

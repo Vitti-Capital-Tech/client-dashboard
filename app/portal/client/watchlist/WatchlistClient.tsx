@@ -5,7 +5,6 @@ import { X } from "lucide-react";
 import type {
   WatchRow,
   PlacementRow,
-  RecoRow,
 } from "@/lib/data/queries";
 import { addCustomAlert } from "@/app/actions/alerts";
 import { addToWatchlist, removeFromWatchlist } from "@/app/actions/watchlist";
@@ -28,12 +27,10 @@ type WatchItem = {
 export function WatchlistClient({
   watchlist: initialWatchlist,
   placements,
-  recos,
   clientId,
 }: {
   watchlist: (WatchRow & { changePct: number | null })[];
   placements: PlacementRow[];
-  recos: RecoRow[];
   clientId: string;
 }) {
   // Local list state since watchlist can be mutated locally or from DB.
@@ -93,11 +90,10 @@ export function WatchlistClient({
       return;
     }
 
-    const reco = recos.find((r) => r.code === code);
     const item: WatchItem = {
       code,
       name: newName.trim() || code,
-      last: reco && reco.target ? reco.target * 0.9 : null,
+      last: null,
       changePct: null,
       alert: null,
       dir: null,
