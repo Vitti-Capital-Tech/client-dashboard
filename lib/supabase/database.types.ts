@@ -1938,7 +1938,20 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      pnl_runs_latest: {
+        Row: {
+          account_id: string | null
+          client_id: string | null
+          computed_at: string | null
+          engine_version: string | null
+          id: string | null
+          row_count: number | null
+          total_pnl: number | null
+          trigger: string | null
+          warnings: string[] | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       approve_account_claim: {

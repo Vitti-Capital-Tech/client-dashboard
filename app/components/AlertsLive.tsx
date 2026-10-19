@@ -46,6 +46,9 @@ import { playAlertChime } from "./alertSound";
  *
  * Renders nothing.
  */
+/** How long the inserts must go quiet before the page refreshes. */
+const ALERT_BURST_MS = 1500;
+
 export function AlertsLive() {
   const router = useRouter();
 
@@ -53,6 +56,24 @@ export function AlertsLive() {
     const supabase = createClient();
     let channel: RealtimeChannel | null = null;
     let cancelled = false;
+    let burst: ReturnType<typeof setTimeout> | null = null;
+
+    /**
+     * One chime and one refresh per BURST of inserts, not per row.
+     *
+     * A scan writes its alerts together, and a staff socket sees every client's,
+     * so ten rows used to mean ten chimes and ten full re-renders — each one
+     * re-running every query on the page. The first row of a burst chimes at
+     * once; the refresh waits for the burst to go quiet and then runs once.
+     */
+    const onInsert = () => {
+      if (burst === null) void playAlertChime();
+      else clearTimeout(burst);
+      burst = setTimeout(() => {
+        burst = null;
+        router.refresh();
+      }, ALERT_BURST_MS);
+    };
 
     /**
      * Kept out of the subscribe callback so a token refresh cannot resubscribe:
@@ -82,12 +103,7 @@ export function AlertsLive() {
           // one, and refreshing in response to your own click would fight the
           // optimistic update already on screen.
           { event: "INSERT", schema: "public", table: "alerts" },
-          () => {
-            // Before the refresh, not after: the chime should land with the
-            // badge rather than a server round trip later.
-            void playAlertChime();
-            router.refresh();
-          },
+          onInsert,
         )
         .subscribe((status) => {
           // A channel that cannot subscribe is the failure that looks exactly
@@ -101,6 +117,7 @@ export function AlertsLive() {
 
     return () => {
       cancelled = true;
+      if (burst !== null) clearTimeout(burst);
       authSub.subscription.unsubscribe();
       if (channel) void supabase.removeChannel(channel);
     };

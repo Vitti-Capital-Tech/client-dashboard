@@ -266,34 +266,31 @@ export const getClientStoredPnl = cache(
 /**
  * The most recent run per account.
  *
- * Fetched newest-first and reduced client-side rather than with a per-account
- * `LIMIT 1`: a client has a handful of accounts, and one round trip beats N.
+ * Read from `pnl_runs_latest`, which picks one row per account in the database.
+ * This used to fetch the client's whole run history — a row per recompute, every
+ * morning, `sources` jsonb included — and keep one per account here, so the page
+ * got heavier every day for the same answer.
  */
 export const getClientLatestPnlRuns = cache(
   async (clientId: string): Promise<PnlRunRow[]> => {
     const supabase = await createClient();
     const { data, error } = await supabase
-      .from("pnl_runs")
-      .select("*")
-      .eq("client_id", clientId)
-      .order("computed_at", { ascending: false });
+      .from("pnl_runs_latest")
+      .select("id, account_id, computed_at, total_pnl, row_count, trigger, warnings, engine_version")
+      .eq("client_id", clientId);
     if (error) throw error;
 
-    const latestByAccount = new Map<string, PnlRunRow>();
-    for (const r of data ?? []) {
-      if (latestByAccount.has(r.account_id)) continue;
-      latestByAccount.set(r.account_id, {
-        id: r.id,
-        accountId: r.account_id,
-        computedAt: r.computed_at,
-        totalPnl: num(r.total_pnl),
-        rowCount: num(r.row_count),
-        trigger: r.trigger,
-        warnings: r.warnings ?? [],
-        engineVersion: r.engine_version,
-      });
-    }
-    return [...latestByAccount.values()];
+    // A view's columns come back typed nullable; these are NOT NULL on pnl_runs.
+    return (data ?? []).map((r) => ({
+      id: r.id!,
+      accountId: r.account_id!,
+      computedAt: r.computed_at!,
+      totalPnl: num(r.total_pnl),
+      rowCount: num(r.row_count),
+      trigger: r.trigger ?? "",
+      warnings: r.warnings ?? [],
+      engineVersion: r.engine_version ?? "",
+    }));
   },
 );
 
